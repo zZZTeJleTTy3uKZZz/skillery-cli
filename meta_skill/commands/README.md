@@ -1,0 +1,35 @@
+# Slash-commands skills-hub (для Claude Code)
+
+Этот каталог содержит markdown-обёртки для slash-commands. Если у тебя
+Claude Code новее `2025-03` — положи эти файлы в
+`~/.claude/commands/` (для глобальных) или
+`<project>/.claude/commands/` (для проектных), и они станут доступны
+как `/skills-hub-rate`, `/skills-hub-ticket`, `/skills-hub-issue` и т.д.
+
+Под капотом каждая обёртка просто вызывает `skills-hub <subcommand>` с
+правильно проброшенными аргументами и форматирует вывод для агента.
+
+## Список
+
+| Команда                        | Что делает                                       |
+| ------------------------------ | ------------------------------------------------ |
+| `/skills-hub-status`           | `skills-hub status` — что установлено + login    |
+| `/skills-hub-install <slug>`   | `skills-hub install <slug>`                      |
+| `/skills-hub-update`           | `skills-hub update --all`                        |
+| `/skills-hub-rate <slug> <N>`  | `skills-hub rate <slug> <N>` (1..5)              |
+| `/skills-hub-comment <slug>`   | `skills-hub comment <slug>` (тело берётся из ввода) |
+| `/skills-hub-ticket <subj>`    | Создать тикет тех-поддержки                      |
+| `/skills-hub-issue <descr>`    | Legacy alias: `report --kind bug`                |
+| `/skills-hub-collections`      | `skills-hub collections` — список                |
+| `/skills-hub-self-update`      | Перепоставить CLI: `pip install -U skills-hub-cli` |
+
+## Установка
+
+```bash
+# Скопировать обёртки в Claude Code global commands
+mkdir -p ~/.claude/commands
+cp ~/.claude/skills/skills-hub/commands/*.md ~/.claude/commands/
+# или вручную выбрать те, что нужны
+```
+
+В Codex путь — `~/.codex/commands/`.
