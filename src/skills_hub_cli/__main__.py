@@ -475,7 +475,13 @@ def cmd_web(
         False, "--no-browser", help="Не открывать браузер, только напечатать URL"
     ),
 ) -> None:
-    """Открыть Web UI в браузере с автоматической авторизацией (handoff из CLI)."""
+    """Открыть Web UI в браузере с автоматической авторизацией (handoff из CLI).
+
+    В режиме `--json` браузер НЕ открывается автоматически — JSON режим
+    считается scripting-режимом (subagent / CI), вывод используется
+    программно. Чтобы всё-таки открыть из JSON-режима — пользуйся
+    `opened_browser` полем в payload и обработай его на стороне caller'а.
+    """
     cfg = ClientConfig.load()
     if not cfg.is_logged_in():
         emit_error(
@@ -502,19 +508,26 @@ def cmd_web(
     result = asyncio.run(_do())
     code = result["code"]
     expires_at = result["expires_at"]
-    target_url = f"{cfg.effective_web_ui_url().rstrip('/')}/login?code={code}"
+    web_base = cfg.effective_web_ui_url().rstrip("/")
+    target_url = f"{web_base}/login?code={code}"
+
+    # Auto-suppress browser в JSON-режиме (scripting / subagent context).
+    effective_no_browser = no_browser or is_json()
 
     emit_data(
         {
             "url": target_url,
             "code": code,
             "expires_at": expires_at,
-            "opened_browser": not no_browser,
+            "web_base_url": web_base,
+            "opened_browser": not effective_no_browser,
         },
-        text_renderer=lambda _: _render_web_text(target_url, expires_at, no_browser),
+        text_renderer=lambda _: _render_web_text(
+            target_url, expires_at, effective_no_browser
+        ),
     )
 
-    if not no_browser:
+    if not effective_no_browser:
         import webbrowser
 
         webbrowser.open(target_url)
