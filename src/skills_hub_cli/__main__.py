@@ -833,6 +833,15 @@ def cmd_install(
                     "scope": result.scope,
                 }
             )
+            # E23: telemetry — silent track install/update event.
+            from skills_hub_cli.daemon.instrumentation import track_skill_event
+
+            track_skill_event(
+                "skill.update" if result.is_update else "skill.install",
+                slug=dep_slug,
+                version=dep_version,
+                scope=result.scope,
+            )
 
         def _render(items: list) -> None:
             for item in items:
@@ -935,6 +944,17 @@ def cmd_update(
                         "to": bundle["version"],
                         "updated": True,
                     }
+                )
+                # E23: track skill.update event.
+                from skills_hub_cli.daemon.instrumentation import (
+                    track_skill_event,
+                )
+
+                track_skill_event(
+                    "skill.update",
+                    slug=s,
+                    version=bundle["version"],
+                    scope=scope_label,
                 )
         finally:
             await client.close()
@@ -1292,11 +1312,47 @@ def build_app() -> typer.Typer:
     if cfg.has_permission("skill.read"):
         app.command(name="list")(cmd_list)
         app.command(name="show")(cmd_show)
+        # E23 — read-only collections (видимо для skill.read).
+        from skills_hub_cli.commands import collection as _coll_mod
+
+        _coll_mod.register(app)
+        # E23 — contributors (public-аналог skill.read).
+        from skills_hub_cli.commands import contrib as _contrib_mod
+
+        _contrib_mod.register(app)
+        # E23 — comments list (public via skill.read).
+        from skills_hub_cli.commands import comment as _comment_mod
+
+        # post-команду регистрируем отдельно ниже (нужен comment.post).
+        app.command(name="comments")(_comment_mod.cmd_comments_list)
     if cfg.has_permission("skill.install"):
         app.command(name="install")(cmd_install)
         app.command(name="update")(cmd_update)
     if cfg.has_permission("skill.report_issue"):
         app.command(name="report")(cmd_report)
+
+    # === E23 — Skill review: ratings + comments post ===
+    if cfg.has_permission("skill.rate"):
+        from skills_hub_cli.commands import rate as _rate_mod
+
+        _rate_mod.register(app)
+    if cfg.has_permission("comment.post"):
+        from skills_hub_cli.commands import comment as _comment_mod
+
+        app.command(name="comment")(_comment_mod.cmd_comment_post)
+
+    # === E23 — Support tickets ===
+    if cfg.has_permission("ticket.create") or cfg.has_permission("ticket.read"):
+        from skills_hub_cli.commands import ticket as _ticket_mod
+
+        _ticket_mod.register_ticket(app)
+
+    # === E23 — Event tracking + daemon (always-on для залогиненного user'а) ===
+    from skills_hub_cli.commands import daemon as _daemon_mod
+    from skills_hub_cli.commands import event as _event_mod
+
+    _event_mod.register(app)
+    _daemon_mod.register(app)
 
     # === Creator ===
     if cfg.has_permission("skill.publish"):
