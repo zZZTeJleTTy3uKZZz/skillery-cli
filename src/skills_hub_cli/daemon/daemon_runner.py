@@ -1,0 +1,248 @@
+"""Long-running daemon process: периодически зовёт ``EventSender.send_once``.
+
+CLI поднимает daemon как detached background process:
+- POSIX — ``os.fork`` + ``setsid`` + redirect stdio to /dev/null.
+- Windows — ``subprocess.Popen`` с ``DETACHED_PROCESS`` flag.
+
+PID + state файлы:
+- ``~/.skills-hub/daemon.pid`` — PID запущенного процесса.
+- ``~/.skills-hub/daemon.state.json`` — last_cycle_at, last_send_result.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import signal
+import sys
+from contextlib import suppress
+from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+from skills_hub_cli.daemon.event_collector import EventCollector
+from skills_hub_cli.daemon.event_sender import EventSender
+
+
+@dataclass
+class DaemonState:
+    started_at: str | None = None
+    last_cycle_at: str | None = None
+    cycles: int = 0
+    total_sent: int = 0
+    total_accepted: int = 0
+    last_error: str | None = None
+    last_send: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def _default_skills_hub_dir() -> Path:
+    return Path(
+        os.environ.get("SKILLS_HUB_CONFIG_DIR", "~/.skills-hub")
+    ).expanduser()
+
+
+def default_queue_path() -> Path:
+    return _default_skills_hub_dir() / "events.queue.json"
+
+
+def default_pid_path() -> Path:
+    return _default_skills_hub_dir() / "daemon.pid"
+
+
+def default_state_path() -> Path:
+    return _default_skills_hub_dir() / "daemon.state.json"
+
+
+def is_process_alive(pid: int) -> bool:
+    """Кросс-платформенная проверка alive по PID."""
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        # На Windows используем OpenProcess через ctypes; если процесс жив —
+        # handle ≠ 0, иначе 0. Без cleanup — handle leak'нем, но это short-lived.
+        try:
+            import ctypes
+
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            STILL_ACTIVE = 259
+            kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+            h = kernel32.OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION, False, pid
+            )
+            if not h:
+                return False
+            try:
+                exit_code = ctypes.c_ulong()
+                ok = kernel32.GetExitCodeProcess(h, ctypes.byref(exit_code))
+                if not ok:
+                    return False
+                return exit_code.value == STILL_ACTIVE
+            finally:
+                kernel32.CloseHandle(h)
+        except Exception:
+            return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def kill_process(pid: int) -> bool:
+    """Послать SIGTERM (POSIX) / TerminateProcess (Windows).
+
+    Returns True если сигнал отправился (не гарантирует graceful shutdown).
+    """
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            PROCESS_TERMINATE = 0x0001
+            kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+            h = kernel32.OpenProcess(PROCESS_TERMINATE, False, pid)
+            if not h:
+                return False
+            try:
+                ok = kernel32.TerminateProcess(h, 1)
+                return bool(ok)
+            finally:
+                kernel32.CloseHandle(h)
+        except Exception:
+            return False
+    try:
+        os.kill(pid, signal.SIGTERM)
+        return True
+    except ProcessLookupError:
+        return False
+
+
+class DaemonRunner:
+    """Orchestrator: цикл send_once → sleep(interval) → repeat.
+
+    Управляет state-файлами; не делает fork (это задача
+    ``daemon_start_detached``). Для тестов — можно вызвать ``cycle_once``
+    напрямую.
+    """
+
+    def __init__(
+        self,
+        sender: EventSender,
+        *,
+        interval_seconds: float = 60.0,
+        pid_path: Path | None = None,
+        state_path: Path | None = None,
+    ) -> None:
+        self._sender = sender
+        self._interval = max(interval_seconds, 1.0)
+        self._pid_path = pid_path or default_pid_path()
+        self._state_path = state_path or default_state_path()
+        self._stop = asyncio.Event()
+        self._state = DaemonState()
+
+    @property
+    def state(self) -> DaemonState:
+        return self._state
+
+    @property
+    def pid_path(self) -> Path:
+        return self._pid_path
+
+    @property
+    def state_path(self) -> Path:
+        return self._state_path
+
+    def _ensure_dir(self) -> None:
+        self._pid_path.parent.mkdir(parents=True, exist_ok=True)
+        self._state_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _write_pid(self) -> None:
+        self._ensure_dir()
+        self._pid_path.write_text(str(os.getpid()), encoding="utf-8")
+
+    def _clear_pid(self) -> None:
+        with suppress(OSError):
+            self._pid_path.unlink()
+
+    def _write_state(self) -> None:
+        self._ensure_dir()
+        self._state_path.write_text(
+            json.dumps(self._state.to_dict(), ensure_ascii=False, default=str),
+            encoding="utf-8",
+        )
+
+    async def cycle_once(self) -> dict[str, Any]:
+        """Один такт: send_once + обновление state."""
+        result = await self._sender.send_once()
+        self._state.cycles += 1
+        self._state.last_cycle_at = datetime.now(UTC).isoformat()
+        self._state.total_sent += result.sent
+        self._state.total_accepted += result.accepted
+        self._state.last_error = result.last_error
+        self._state.last_send = {
+            "sent": result.sent,
+            "accepted": result.accepted,
+            "skipped": result.skipped,
+            "requeued": result.requeued,
+            "last_error": result.last_error,
+        }
+        self._write_state()
+        return self._state.last_send
+
+    async def run_forever(self) -> None:
+        """Старт цикла. Останавливается по SIGTERM / stop()."""
+        self._state.started_at = datetime.now(UTC).isoformat()
+        self._write_pid()
+        self._write_state()
+        if sys.platform != "win32":
+            loop = asyncio.get_running_loop()
+            for sig_name in ("SIGTERM", "SIGINT"):
+                sig = getattr(signal, sig_name, None)
+                if sig is not None:
+                    with suppress(NotImplementedError, RuntimeError):
+                        loop.add_signal_handler(sig, self._stop.set)
+        try:
+            while not self._stop.is_set():
+                with suppress(Exception):
+                    await self.cycle_once()
+                try:
+                    await asyncio.wait_for(
+                        self._stop.wait(), timeout=self._interval
+                    )
+                except asyncio.TimeoutError:
+                    continue
+        finally:
+            self._clear_pid()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+
+def read_running_pid(pid_path: Path | None = None) -> int | None:
+    """Прочитать PID-файл; вернуть int или None если файла нет."""
+    p = pid_path or default_pid_path()
+    if not p.exists():
+        return None
+    try:
+        raw = p.read_text(encoding="utf-8").strip()
+        return int(raw)
+    except (OSError, ValueError):
+        return None
+
+
+def read_state(state_path: Path | None = None) -> dict[str, Any]:
+    """Прочитать state-файл daemon'а."""
+    p = state_path or default_state_path()
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}

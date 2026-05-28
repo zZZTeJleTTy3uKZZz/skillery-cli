@@ -45,6 +45,65 @@ skills-hub daemon start            # background process
 skills-hub daemon install          # autostart (launchd / systemd user / Task Scheduler)
 ```
 
+## E23 — Ratings / комменты / тикеты / коллекции
+
+После login дополнительно доступны (по permissions):
+
+```bash
+# Оценить скилл (1..5) — требует skill.rate
+skills-hub rate bitrix24 5
+skills-hub rating-summary bitrix24
+
+# Прокомментировать (требует comment.post) — multipart upload скриншотов
+skills-hub comment bitrix24 "крутой скилл" --screenshot ~/Pictures/proof.png
+skills-hub comments bitrix24 --limit 25
+
+# Контрибьюторы из git history
+skills-hub contributors bitrix24 --refresh
+
+# Тикеты в техподдержку (требует ticket.create / ticket.read)
+skills-hub ticket create "OAuth flow ломается" --skill bitrix24 --kind bug
+skills-hub tickets list --status open
+skills-hub ticket show tkt_abc
+
+# Коллекции (read-only из CLI; CRUD в Web UI)
+skills-hub collections list --type dynamic
+skills-hub collection show popular
+```
+
+## E23 — Event tracking + daemon
+
+CLI пишет события (`skill.install` / `skill.update` / `skill.run` /
+произвольные через `event track`) в локальную очередь
+`~/.skills-hub/events.queue.json`. Отдельный daemon раз в минуту берёт
+batch и POST'ит на `/events` бэкенда (E6).
+
+```bash
+# Ручное добавление event'а
+skills-hub event track skill.run --resource-type skill \
+  --resource-id my-skill --payload '{"duration_ms": 1234}'
+
+# Inspect очереди
+skills-hub event queue --show
+
+# Синхронная отправка (один цикл sender'а — для отладки)
+skills-hub event flush
+
+# Daemon — long-running batch sender
+skills-hub daemon start          # detached background
+skills-hub daemon status         # alive + last_cycle + queue size
+skills-hub daemon stop           # SIGTERM по PID-файлу
+
+# Autostart unit-file (генерация без sudo; user сам активирует)
+skills-hub daemon install        # автодетект macos / linux / windows
+skills-hub daemon install --platform linux
+```
+
+`skills-hub daemon install` НЕ модифицирует system-wide settings — он
+только пишет unit-файл в user-scope и печатает инструкцию (`launchctl
+load`, `systemctl --user enable`, `schtasks /Create /XML`). Это
+безопасно для CI / shared dev-окружений.
+
 ## Cross-agent
 
 CLI автодетектит установленного агента (Claude Code / Codex) по наличию
