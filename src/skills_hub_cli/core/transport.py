@@ -60,16 +60,21 @@ class HubClient:
         await self._client.aclose()
 
     async def _request(self, method: str, url: str, **kwargs: Any) -> Any:
-        resp = await self._client.request(
-            method, url, headers=self._auth_headers(), **kwargs
-        )
+        extra_headers = kwargs.pop("headers", None) or {}
+
+        def _merged_headers() -> dict[str, str]:
+            h = self._auth_headers()
+            h.update(extra_headers)
+            return h
+
+        resp = await self._client.request(method, url, headers=_merged_headers(), **kwargs)
         if resp.status_code == 401 and self._on_refresh is not None:
             # Auto-refresh: попробуем обменять refresh → повторить запрос
             new_tokens = await self._on_refresh()
             if new_tokens is not None:
                 self._access_token = new_tokens[0]
                 resp = await self._client.request(
-                    method, url, headers=self._auth_headers(), **kwargs
+                    method, url, headers=_merged_headers(), **kwargs
                 )
             # Если refresh не сработал — оставим 401, ниже выбросим понятный ApiError.
         if resp.status_code == 401:
@@ -201,4 +206,184 @@ class HubClient:
                 "description": description,
                 "payload": payload,
             },
+        )
+
+    # === E7 — Skill review (ratings / comments / contributors) ===
+    async def rate_skill(self, skill_id: str, score: int) -> dict[str, Any]:
+        """POST /skills/{skill_id}/ratings — upsert (skill_id, user_id) → score."""
+        return await self._request(
+            "POST",
+            f"/skills/{skill_id}/ratings",
+            json={"score": score},
+        )
+
+    async def get_rating_summary(self, skill_id: str) -> dict[str, Any]:
+        """GET /skills/{skill_id}/ratings/summary — avg / count / distribution."""
+        return await self._request(
+            "GET", f"/skills/{skill_id}/ratings/summary"
+        )
+
+    async def post_comment(
+        self,
+        skill_id: str,
+        *,
+        body: str,
+        parent_id: str | None = None,
+    ) -> dict[str, Any]:
+        """POST /skills/{skill_id}/comments — JSON-вариант (без screenshots)."""
+        return await self._request(
+            "POST",
+            f"/skills/{skill_id}/comments",
+            json={"body": body, "parent_id": parent_id},
+        )
+
+    async def post_comment_multipart(
+        self,
+        skill_id: str,
+        *,
+        body: str,
+        screenshots: list[tuple[str, bytes]],
+        parent_id: str | None = None,
+    ) -> dict[str, Any]:
+        """POST /skills/{skill_id}/comments/multipart — body + 0..N файлов.
+
+        screenshots: список `(filename, content)`.
+        """
+        data: dict[str, str] = {"body": body}
+        if parent_id:
+            data["parent_id"] = parent_id
+        files: list[tuple[str, tuple[str, bytes, str]]] = [
+            ("screenshots", (name, content, "application/octet-stream"))
+            for name, content in screenshots
+        ]
+        resp = await self._client.request(
+            "POST",
+            f"/skills/{skill_id}/comments/multipart",
+            data=data,
+            files=files,
+            headers=self._auth_headers(),
+        )
+        if resp.status_code >= 400:
+            try:
+                d = resp.json()
+            except Exception:
+                d = {"code": "UNKNOWN", "message": resp.text, "details": {}}
+            raise ApiError(
+                status_code=resp.status_code,
+                code=d.get("code", "UNKNOWN"),
+                message=d.get("message", resp.text),
+                details=d.get("details", {}),
+            )
+        return resp.json()
+
+    async def list_comments(
+        self,
+        skill_id: str,
+        *,
+        limit: int = 50,
+        starting_after: str | None = None,
+    ) -> dict[str, Any]:
+        """GET /skills/{skill_id}/comments — Stripe cursor page (public)."""
+        params: dict[str, Any] = {"limit": limit}
+        if starting_after:
+            params["starting_after"] = starting_after
+        return await self._request(
+            "GET", f"/skills/{skill_id}/comments", params=params
+        )
+
+    async def list_contributors(
+        self, skill_id: str, *, refresh: bool = False
+    ) -> dict[str, Any]:
+        """GET /skills/{skill_id}/contributors."""
+        return await self._request(
+            "GET",
+            f"/skills/{skill_id}/contributors",
+            params={"refresh": str(refresh).lower()},
+        )
+
+    # === E8 — Support tickets ===
+    async def create_ticket(
+        self,
+        *,
+        subject: str,
+        body: str,
+        kind: str = "other",
+        priority: str = "normal",
+        skill_id: str | None = None,
+    ) -> dict[str, Any]:
+        """POST /support/tickets — создание тикета."""
+        return await self._request(
+            "POST",
+            "/support/tickets",
+            json={
+                "subject": subject,
+                "body": body,
+                "kind": kind,
+                "priority": priority,
+                "skill_id": skill_id,
+            },
+        )
+
+    async def list_tickets(
+        self,
+        *,
+        status: str | None = None,
+        kind: str | None = None,
+        priority: str | None = None,
+        skill_id: str | None = None,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> dict[str, Any]:
+        """GET /support/tickets — list (scope-aware filter)."""
+        params: dict[str, Any] = {"page": page, "page_size": page_size}
+        if status:
+            params["status"] = status
+        if kind:
+            params["kind"] = kind
+        if priority:
+            params["priority"] = priority
+        if skill_id:
+            params["skill_id"] = skill_id
+        return await self._request("GET", "/support/tickets", params=params)
+
+    async def get_ticket(self, ticket_id: str) -> dict[str, Any]:
+        """GET /support/tickets/{id} — detail."""
+        return await self._request("GET", f"/support/tickets/{ticket_id}")
+
+    # === E10 — Collections ===
+    async def list_collections(
+        self,
+        *,
+        company_id: str | None = None,
+        type: str | None = None,
+        owner_id: str | None = None,
+        include_global: bool = True,
+    ) -> dict[str, Any]:
+        """GET /collections — список коллекций."""
+        params: dict[str, Any] = {"include_global": str(include_global).lower()}
+        if company_id:
+            params["company_id"] = company_id
+        if type:
+            params["type"] = type
+        if owner_id:
+            params["owner_id"] = owner_id
+        return await self._request("GET", "/collections", params=params)
+
+    async def get_collection(self, slug: str) -> dict[str, Any]:
+        """GET /collections/{slug} — детали + skills."""
+        return await self._request("GET", f"/collections/{slug}")
+
+    # === E6 — Events ingestion ===
+    async def ingest_events(
+        self,
+        events: list[dict[str, Any]],
+        *,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        """POST /events — batch ingestion (требует Idempotency-Key header)."""
+        return await self._request(
+            "POST",
+            "/events",
+            json={"events": events},
+            headers={"Idempotency-Key": idempotency_key},
         )
