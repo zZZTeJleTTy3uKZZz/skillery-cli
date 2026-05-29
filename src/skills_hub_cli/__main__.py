@@ -35,6 +35,7 @@ from skills_hub_cli.config import (
 from skills_hub_cli.core.agents import detect_agent, get_target
 from skills_hub_cli.core.installer import SkillInstaller, read_meta
 from skills_hub_cli.core.manifest_builder import build_manifest, git_commit_sha
+from skills_hub_cli.daemon.instrumentation import track_skill_event
 from skills_hub_cli.core.transport import ApiError, HubClient
 from skills_hub_cli.output import (
     emit_data,
@@ -847,8 +848,6 @@ def cmd_install(
                 }
             )
             # E23: telemetry — silent track install/update event.
-            from skills_hub_cli.daemon.instrumentation import track_skill_event
-
             track_skill_event(
                 "skill.update" if result.is_update else "skill.install",
                 slug=dep_slug,
@@ -940,7 +939,7 @@ def cmd_update(
                         }
                     )
                     continue
-                installer.install(
+                up = installer.install(
                     slug=s,
                     version=bundle["version"],
                     commit_sha=bundle["commit_sha"],
@@ -956,13 +955,10 @@ def cmd_update(
                         "from": current_version,
                         "to": bundle["version"],
                         "updated": True,
+                        "diff": up.update_diff,
                     }
                 )
                 # E23: track skill.update event.
-                from skills_hub_cli.daemon.instrumentation import (
-                    track_skill_event,
-                )
-
                 track_skill_event(
                     "skill.update",
                     slug=s,
@@ -977,9 +973,15 @@ def cmd_update(
         def _render(rows: list) -> None:
             for r in rows:
                 if r["updated"]:
+                    d = r.get("diff")
+                    diff_suffix = ""
+                    if d:
+                        diff_suffix = (
+                            f" [dim](+{d['added']} ~{d['changed']} -{d['removed']})[/]"
+                        )
                     console.print(
                         f"[green]↑[/] {r['slug']} ({r['scope']}): "
-                        f"{r['from']} → {r['to']}"
+                        f"{r['from']} → {r['to']}{diff_suffix}"
                     )
                 else:
                     console.print(
@@ -989,6 +991,78 @@ def cmd_update(
         emit_data(results, text_renderer=_render)
 
     _run(_do())
+
+
+def cmd_remove(
+    slug: str,
+    scope: Optional[str] = typer.Option(
+        None, "--scope", help="global | project (default из config.default_install_scope)"
+    ),
+    project: Optional[Path] = typer.Option(
+        None, "--project", help="Если scope=project — путь к корню проекта (default: cwd)"
+    ),
+    keep_local: bool = typer.Option(
+        False, "--keep-local",
+        help="Сохранить _local/ и прочие preserved_paths (пользовательский state).",
+    ),
+    agent: Optional[str] = typer.Option(None),
+) -> None:
+    """Удалить установленный skill (global или project scope).
+
+    По умолчанию удаляет всю slug-папку. `--keep-local` сохраняет
+    preserved-пути (`_local/`, `browser_profiles/`, ...) — например, чтобы не
+    потерять накопленный state при переустановке.
+    """
+    cfg = ClientConfig.load()
+    actual_scope, project_path = _resolve_install_scope(cfg, scope, project)
+    _ = actual_scope  # передаётся через project_path
+    target = get_target(agent or cfg.agent)
+    installer = SkillInstaller(target)
+    result = installer.remove(slug=slug, project=project_path, keep_local=keep_local)
+
+    if not result.removed:
+        emit_data(
+            {
+                "slug": slug,
+                "scope": result.scope,
+                "removed": False,
+                "kept_local": False,
+                "path": str(result.target_dir),
+            },
+            text_renderer=lambda _: console.print(
+                f"[yellow]Не установлен[/] ({result.scope}): {slug} "
+                f"(нет папки {result.target_dir})"
+            ),
+        )
+        return
+
+    # E23/E46: telemetry — silent track skill.uninstall event.
+    track_skill_event(
+        "skill.uninstall",
+        slug=slug,
+        scope=result.scope,
+        extra={"kept_local": result.kept_local},
+    )
+
+    def _render(_: dict) -> None:
+        if result.kept_local:
+            console.print(
+                f"[green]✓[/] Удалён ({result.scope}): {slug} "
+                f"[dim](preserved_paths сохранены в {result.target_dir})[/]"
+            )
+        else:
+            console.print(f"[green]✓[/] Удалён ({result.scope}): {slug}")
+
+    emit_data(
+        {
+            "slug": slug,
+            "scope": result.scope,
+            "removed": True,
+            "kept_local": result.kept_local,
+            "path": str(result.target_dir),
+        },
+        text_renderer=_render,
+    )
 
 
 def cmd_report(
@@ -1341,6 +1415,7 @@ def build_app() -> typer.Typer:
     if cfg.has_permission("skill.install"):
         app.command(name="install")(cmd_install)
         app.command(name="update")(cmd_update)
+        app.command(name="remove")(cmd_remove)
     if cfg.has_permission("skill.report_issue"):
         app.command(name="report")(cmd_report)
 
