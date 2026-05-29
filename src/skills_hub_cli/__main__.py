@@ -35,6 +35,7 @@ from skills_hub_cli.config import (
 from skills_hub_cli.core.agents import detect_agent, get_target
 from skills_hub_cli.core.installer import SkillInstaller, read_meta
 from skills_hub_cli.core.manifest_builder import build_manifest, git_commit_sha
+from skills_hub_cli.core.secret_scan import scan_dir as secret_scan_dir
 from skills_hub_cli.daemon.instrumentation import track_skill_event
 from skills_hub_cli.core.transport import ApiError, HubClient
 from skills_hub_cli.output import (
@@ -1098,6 +1099,82 @@ def cmd_report(
     _run(_do())
 
 
+def _run_publish_secret_scan(
+    skill_dir: Path, *, force: bool, strict: bool
+) -> None:
+    """ТЗ §10: скан секретов перед publish.
+
+    - находки → печать (file:line + rule, маскированный snippet) + abort,
+      кроме `--force` (тогда warning + продолжаем);
+    - gitleaks нет → warning «regex fallback», в `--strict` — fatal.
+    Печатает в text-режиме через rich, в json-режиме — structured в stderr.
+    """
+    result = secret_scan_dir(skill_dir)
+
+    # gitleaks отсутствует → деградация на regex.
+    if not result.gitleaks_available:
+        if strict:
+            emit_error(
+                "secret_scan_strict",
+                "gitleaks не установлен, а указан --strict — abort.",
+                backend=result.backend,
+            )
+            raise typer.Exit(1)
+        emit_message(
+            "secret-scan via regex fallback (gitleaks not installed)",
+            level="warn",
+            backend=result.backend,
+        )
+
+    if not result.findings:
+        emit_message(
+            f"secret-scan: чисто ({result.backend}, 0 находок)",
+            level="info",
+            backend=result.backend,
+            findings=0,
+        )
+        return
+
+    # Есть находки — печатаем (маскированно) и решаем abort/override.
+    findings_payload = [
+        {"file": f.file, "line": f.line, "rule": f.rule, "snippet": f.snippet}
+        for f in result.findings
+    ]
+    if is_json():
+        emit_error(
+            "secret_scan_failed" if not force else "secret_scan_override",
+            f"Обнаружено секретов: {len(result.findings)}",
+            backend=result.backend,
+            forced=force,
+            findings=findings_payload,
+        )
+    else:
+        console.print(
+            f"[red]✗ secret-scan ({result.backend}): "
+            f"найдено {len(result.findings)} потенциальных секрет(ов)[/]"
+        )
+        for f in result.findings:
+            console.print(
+                f"  [yellow]{f.file}:{f.line}[/] "
+                f"[dim]({f.rule})[/] {f.snippet}"
+            )
+
+    if force:
+        emit_message(
+            "publish продолжен несмотря на находки (--force)",
+            level="warn",
+            forced=True,
+        )
+        return
+
+    if not is_json():
+        console.print(
+            "[red]Publish прерван.[/] Удалите секреты или используйте "
+            "[bold]--force[/] для override."
+        )
+    raise typer.Exit(1)
+
+
 def cmd_publish(
     slug: str,
     tag: str = typer.Option(..., "--tag"),
@@ -1110,8 +1187,25 @@ def cmd_publish(
     is_super: bool = typer.Option(False),
     commit_sha: Optional[str] = typer.Option(None, "--commit-sha"),
     dry_run: bool = typer.Option(False, "--dry-run"),
+    force: bool = typer.Option(
+        False, "--force",
+        help="Опубликовать несмотря на найденные секреты (с warning).",
+    ),
+    strict: bool = typer.Option(
+        False, "--strict",
+        help="Считать отсутствие gitleaks fatal (а не warning).",
+    ),
+    skip_secret_scan: bool = typer.Option(
+        False, "--skip-secret-scan",
+        help="Полностью пропустить скан секретов (не рекомендуется).",
+    ),
 ) -> None:
-    """Опубликовать новую версию skill'а (skill.publish required)."""
+    """Опубликовать новую версию skill'а (skill.publish required).
+
+    ТЗ §10: перед сборкой manifest скан секретов (gitleaks --no-git +
+    regex-fallback). Находки → abort (exit 1), `--force` для override.
+    gitleaks нет → warning; `--strict` делает это fatal.
+    """
     cfg = ClientConfig.load()
     access = _get_access_token()
     target = get_target(cfg.agent)
@@ -1119,6 +1213,11 @@ def cmd_publish(
     if not skill_dir.exists():
         console.print(f"[red]Папка skill не найдена:[/] {skill_dir}")
         raise typer.Exit(1)
+
+    # ТЗ §10: secret-scan ПЕРЕД сборкой/отправкой.
+    if not skip_secret_scan:
+        _run_publish_secret_scan(skill_dir, force=force, strict=strict)
+
     version = tag.lstrip("v")
     manifest = build_manifest(skill_dir, version=version)
     actual_commit = commit_sha or git_commit_sha(skill_dir) or ("0" * 7)
