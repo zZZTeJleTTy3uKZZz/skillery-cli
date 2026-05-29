@@ -2,20 +2,37 @@
 
 Поддерживает global и per-project scope (через IAgentTarget.slug_dir(project=...)).
 Перепринимает все основные методы с project: Path | None.
+
+Флоу:
+- install (fresh): git clone версии → temp → safe_copy_tree в slug_dir →
+  apply_skill_filter → write meta.
+- update (incremental, ТЗ §8.2): читаем старый manifest → git clone новой
+  версии → temp → diff по sha256 → копируем added+changed → удаляем orphan
+  (кроме preserved_paths) → apply_skill_filter → write meta.
+- remove (ТЗ §8): удаляем slug_dir; --keep-local сохраняет preserved_paths.
+
+Все копирования из cloned-репо проходят через `safe_copy_tree`, который
+отвергает path-traversal (`..`, абсолютные пути, symlink наружу) — ТЗ §10.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
 import stat
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from skills_hub_cli.core.agents.base import IAgentTarget
 from skills_hub_cli.core.skill_filter import apply_skill_filter
+
+
+class PathTraversalError(RuntimeError):
+    """Cloned-репо пытается записать файл наружу slug_dir (symlink / `..` / abs)."""
 
 
 def _on_rm_error(func, path, exc_info):  # noqa: ANN001
@@ -31,7 +48,84 @@ def _force_rmtree(path: Path) -> None:
     if path.exists():
         shutil.rmtree(path, onerror=_on_rm_error)
 
+
 _SKILL_META_FILE = "_skill_meta.json"
+
+# Внутри source-репо НЕ копируем в slug_dir (state репозитория, не skill).
+_COPY_SKIP_ROOT = frozenset({".git"})
+
+
+def _assert_within(base: Path, candidate: Path) -> Path:
+    """Проверяет что candidate лежит ВНУТРИ base (после нормализации `..`).
+
+    Не требует существования candidate (используем os.path.normpath, не resolve).
+    Возвращает нормализованный путь или бросает PathTraversalError.
+    """
+    base_abs = os.path.abspath(base)
+    cand_abs = os.path.abspath(candidate)
+    # commonpath бросает ValueError на разных дисках (Windows) → traversal.
+    try:
+        common = os.path.commonpath([base_abs, cand_abs])
+    except ValueError as e:
+        raise PathTraversalError(f"Путь вне slug_dir: {candidate}") from e
+    if common != base_abs:
+        raise PathTraversalError(f"Путь вне slug_dir: {candidate}")
+    return Path(cand_abs)
+
+
+def safe_copy_tree(src: Path, dst: Path) -> None:
+    """Копирует содержимое src → dst, отвергая path-traversal (ТЗ §10).
+
+    Правила безопасности:
+    - `.git/` source-репо пропускается (это state репо, не содержимое skill).
+    - Симлинки НЕ следуются; если symlink-цель резолвится наружу dst →
+      PathTraversalError. Симлинк внутрь dst копируется как обычный файл/папка
+      (через материализацию содержимого).
+    - Любой относительный путь с `..`, который вырвался бы за dst → отвергается.
+
+    dst создаётся при необходимости. Существующие файлы перезаписываются.
+    """
+    src = Path(src)
+    dst = Path(dst)
+    dst.mkdir(parents=True, exist_ok=True)
+    dst_abs = Path(os.path.abspath(dst))
+    # Реальный корень источника: symlink безопасен только если его цель
+    # резолвится ВНУТРЬ src (clone). Escape наружу = host-FS / секрет → reject.
+    src_root = Path(os.path.realpath(src))
+
+    for root, dirnames, filenames in os.walk(src, followlinks=False):
+        root_path = Path(root)
+        rel_root = root_path.relative_to(src)
+        # Пропускаем .git/ и не спускаемся внутрь.
+        if rel_root.parts and rel_root.parts[0] in _COPY_SKIP_ROOT:
+            dirnames[:] = []
+            continue
+        dirnames[:] = [d for d in dirnames if d not in _COPY_SKIP_ROOT]
+
+        for name in list(dirnames):
+            child = root_path / name
+            target = _assert_within(dst_abs, dst / rel_root / name)
+            if child.is_symlink():
+                # Симлинк-директория: цель обязана быть внутри src, иначе reject.
+                real = Path(os.path.realpath(child))
+                _assert_within(src_root, real)  # бросит, если наружу clone
+                # Внутрь — материализуем рекурсивно как обычную папку,
+                # os.walk сам по symlink-папке не пойдёт (followlinks=False).
+                target.mkdir(parents=True, exist_ok=True)
+                safe_copy_tree(child, target)
+            else:
+                target.mkdir(parents=True, exist_ok=True)
+
+        for name in filenames:
+            child = root_path / name
+            target = _assert_within(dst_abs, dst / rel_root / name)
+            if child.is_symlink():
+                real = Path(os.path.realpath(child))
+                _assert_within(src_root, real)  # бросит, если symlink наружу clone
+            target.parent.mkdir(parents=True, exist_ok=True)
+            # copy2 следует по симлинку и копирует РЕАЛЬНОЕ содержимое (цель
+            # уже проверена что внутри src).
+            shutil.copy2(child, target)
 
 
 def _authenticated_url(url: str) -> str:
@@ -51,6 +145,16 @@ class InstallResult:
     is_update: bool
     scope: str  # "global" | "project"
     filter_result: dict[str, int] | None = None  # {"removed": N, "kept": M} после filter
+    update_diff: dict[str, int] | None = None  # {"added": A, "changed": C, "removed": R} при update
+
+
+@dataclass
+class RemoveResult:
+    slug: str
+    target_dir: Path
+    scope: str
+    removed: bool  # удалили ли что-то
+    kept_local: bool  # сохранили ли preserved_paths (--keep-local)
 
 
 def write_meta(slug_dir: Path, meta: dict[str, Any]) -> None:
@@ -65,6 +169,109 @@ def read_meta(slug_dir: Path) -> dict[str, Any] | None:
     if not p.exists():
         return None
     return json.loads(p.read_text(encoding="utf-8"))
+
+
+# Дефолтные preserved-пути, если их нет ни в manifest, ни у target.
+_DEFAULT_PRESERVED: tuple[str, ...] = ("_local/", "browser_profiles/")
+
+
+def _file_index(manifest: dict[str, Any]) -> dict[str, str]:
+    """{rel_path: sha256} из manifest['files']."""
+    idx: dict[str, str] = {}
+    for f in manifest.get("files") or []:
+        path = f.get("path")
+        sha = f.get("sha256")
+        if path:
+            idx[path] = sha or ""
+    return idx
+
+
+def _manifest_diff(
+    old: dict[str, Any], new: dict[str, Any]
+) -> tuple[list[str], list[str], list[str]]:
+    """Возвращает (added, changed, removed) rel-пути для перехода old → new.
+
+    Зеркалит domain SkillManifest.diff: removed исключает preserved_paths новой
+    версии (фактическое удаление с диска делается с учётом target.preserved тоже).
+    """
+    old_idx = _file_index(old)
+    new_idx = _file_index(new)
+    preserved = tuple(new.get("preserved_paths") or ())
+
+    added = [p for p in new_idx if p not in old_idx]
+    changed = [p for p in new_idx if p in old_idx and old_idx[p] != new_idx[p]]
+    removed = [
+        p
+        for p in old_idx
+        if p not in new_idx and not any(p.startswith(pp) for pp in preserved)
+    ]
+    return sorted(added), sorted(changed), sorted(removed)
+
+
+def _preserved_for(manifest: dict[str, Any], target: IAgentTarget) -> tuple[str, ...]:
+    """Объединяет preserved_paths из manifest + target + дефолты."""
+    out: list[str] = list(_DEFAULT_PRESERVED)
+    out.extend(manifest.get("preserved_paths") or [])
+    with contextlib.suppress(Exception):
+        out.extend(target.preserved_paths())
+    # Нормализуем и дедуплицируем.
+    seen: set[str] = set()
+    result: list[str] = []
+    for p in out:
+        norm = p.strip()
+        if norm and norm not in seen:
+            seen.add(norm)
+            result.append(norm)
+    return tuple(result)
+
+
+def _is_preserved_rel(rel: str, preserved: tuple[str, ...]) -> bool:
+    """True если rel-путь попадает под один из preserved-префиксов.
+
+    preserved элементы могут быть с trailing slash (`_local/`) или без (`.env`).
+    """
+    rel_norm = rel.replace("\\", "/")
+    for p in preserved:
+        p_norm = p.replace("\\", "/")
+        if p_norm.endswith("/"):
+            prefix = p_norm
+            if rel_norm == prefix.rstrip("/") or rel_norm.startswith(prefix):
+                return True
+        else:
+            if rel_norm == p_norm or rel_norm.startswith(p_norm + "/"):
+                return True
+    return False
+
+
+def _safe_copy_file(src: Path, dst: Path, slug_dir: Path, src_root: Path) -> None:
+    """Копирует один файл src → dst.
+
+    Гарантии: dst внутри slug_dir; если src — symlink, его цель резолвится
+    внутрь src_root (clone), а не на хост-ФС (защита от malicious repo).
+    """
+    _assert_within(slug_dir, dst)
+    if src.is_symlink():
+        real = Path(os.path.realpath(src))
+        try:
+            _assert_within(Path(os.path.realpath(src_root)), real)
+        except PathTraversalError:
+            raise PathTraversalError(f"Symlink наружу репо: {src}") from None
+    shutil.copy2(src, dst)
+
+
+def _prune_empty_parents(start: Path, stop: Path) -> None:
+    """Удаляет пустые директории вверх от start до (не включая) stop."""
+    cur = start
+    stop_abs = os.path.abspath(stop)
+    while os.path.abspath(cur) != stop_abs:
+        try:
+            if cur.is_dir() and not any(cur.iterdir()):
+                cur.rmdir()
+            else:
+                break
+        except OSError:
+            break
+        cur = cur.parent
 
 
 class SkillInstaller:
@@ -96,18 +303,17 @@ class SkillInstaller:
                 "(удалит содержимое!) или удалить вручную."
             )
 
-        is_update = has_our_meta
-        if is_update:
-            write_meta(
-                slug_dir,
-                self._build_meta(slug, version, commit_sha, manifest, scope, project),
-            )
-            return InstallResult(
+        # Уже установлен нами → incremental update (ТЗ §8.2).
+        if has_our_meta:
+            return self._do_update(
                 slug=slug,
                 version=version,
-                target_dir=slug_dir,
-                is_update=True,
+                commit_sha=commit_sha,
+                repo_url=repo_url,
+                manifest=manifest,
                 scope=scope,
+                project=project,
+                slug_dir=slug_dir,
             )
 
         # Чистая установка (или force перезатирает foreign-папку)
@@ -117,21 +323,10 @@ class SkillInstaller:
         slug_dir.parent.mkdir(parents=True, exist_ok=True)
         filter_result: dict[str, int] | None = None
         if repo_url:
-            ref = f"v{version}"
-            url = _authenticated_url(repo_url)
-            try:
-                subprocess.run(
-                    ["git", "clone", "--depth", "1", "--branch", ref, url, str(slug_dir)],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
-            except subprocess.CalledProcessError as e:
-                stderr = (e.stderr or e.stdout or "").replace(
-                    os.environ.get("SKILLS_HUB_GIT_TOKEN", "***"), "***"
-                ).replace(os.environ.get("GITLAB_TOKEN", "***"), "***")
-                raise RuntimeError(f"git clone failed: {stderr}") from e
-            # Применяем dev/release фильтр после clone:
+            with self._clone_version(repo_url, version) as cloned:
+                # Копируем cloned-содержимое в slug_dir через traversal-guard.
+                safe_copy_tree(cloned, slug_dir)
+            # Применяем dev/release фильтр после копирования:
             #   .skillignore — удаляет matched (dev-файлы);
             #   SKILL.md `files:` allowlist — оставляет только matched.
             filter_result = apply_skill_filter(slug_dir)
@@ -154,6 +349,182 @@ class SkillInstaller:
             scope=scope,
             filter_result=filter_result,
         )
+
+    # ------------------------------------------------------------------
+    #  incremental update (ТЗ §8.2)
+    # ------------------------------------------------------------------
+    def _do_update(
+        self,
+        *,
+        slug: str,
+        version: str,
+        commit_sha: str,
+        repo_url: str | None,
+        manifest: dict[str, Any],
+        scope: str,
+        project: Path | None,
+        slug_dir: Path,
+    ) -> InstallResult:
+        """Докачивает diff между установленной и новой версией.
+
+        Алгоритм:
+        1. читаем старый manifest из _skill_meta.json,
+        2. git clone новой версии → temp (если есть repo_url),
+        3. diff(old, new) по sha256 → (added, changed, removed),
+        4. копируем added+changed из temp в slug_dir (через traversal-guard),
+        5. удаляем removed, КРОМЕ preserved_paths,
+        6. apply_skill_filter,
+        7. write meta.
+
+        Без repo_url (stub-режим) — diff пропускаем, только обновляем meta.
+        """
+        old_meta = read_meta(slug_dir) or {}
+        old_manifest = old_meta.get("manifest") or {}
+
+        if not repo_url:
+            # Stub-режим: нечего докачивать, только meta.
+            write_meta(
+                slug_dir,
+                self._build_meta(slug, version, commit_sha, manifest, scope, project),
+            )
+            return InstallResult(
+                slug=slug, version=version, target_dir=slug_dir,
+                is_update=True, scope=scope,
+            )
+
+        added, changed, removed = _manifest_diff(old_manifest, manifest)
+        preserved = _preserved_for(manifest, self._target)
+
+        filter_result: dict[str, int] | None = None
+        with self._clone_version(repo_url, version) as cloned:
+            # 4. Копируем added + changed.
+            for rel in [*added, *changed]:
+                src_file = cloned / rel
+                if not src_file.exists():
+                    continue  # manifest упоминает файл, но в репо его нет — пропуск
+                dst_file = _assert_within(slug_dir, slug_dir / rel)
+                dst_file.parent.mkdir(parents=True, exist_ok=True)
+                _safe_copy_file(src_file, dst_file, slug_dir, cloned)
+        # 5. Удаляем orphan (нет в new manifest) кроме preserved.
+        for rel in removed:
+            if _is_preserved_rel(rel, preserved):
+                continue
+            victim = slug_dir / rel
+            if victim.is_symlink() or victim.is_file():
+                victim.unlink(missing_ok=True)
+            elif victim.is_dir():
+                _force_rmtree(victim)
+            # Подчищаем опустевшие родительские директории.
+            _prune_empty_parents(victim.parent, slug_dir)
+
+        # 6. Фильтр (.skillignore / files allowlist новой версии). Передаём
+        #    preserved-пути, чтобы allowlist НЕ стёр пользовательский _local/.
+        filter_result = apply_skill_filter(slug_dir, extra_preserved=preserved)
+
+        # 7. meta.
+        write_meta(
+            slug_dir,
+            self._build_meta(slug, version, commit_sha, manifest, scope, project),
+        )
+        return InstallResult(
+            slug=slug,
+            version=version,
+            target_dir=slug_dir,
+            is_update=True,
+            scope=scope,
+            filter_result=filter_result,
+            update_diff={
+                "added": len(added),
+                "changed": len(changed),
+                "removed": len(removed),
+            },
+        )
+
+    # ------------------------------------------------------------------
+    #  remove / uninstall (ТЗ §8)
+    # ------------------------------------------------------------------
+    def remove(
+        self,
+        *,
+        slug: str,
+        project: Path | None = None,
+        keep_local: bool = False,
+    ) -> RemoveResult:
+        """Удаляет skill. `keep_local` сохраняет preserved_paths (_local/, ...).
+
+        - keep_local=False → удаляет всю slug-папку.
+        - keep_local=True  → удаляет всё КРОМЕ preserved_paths; если после
+          этого preserved-контента не осталось — папка удаляется целиком.
+        """
+        scope = "project" if project is not None else "global"
+        slug_dir = self._target.slug_dir(slug, project=project)
+        if not slug_dir.exists():
+            return RemoveResult(
+                slug=slug, target_dir=slug_dir, scope=scope,
+                removed=False, kept_local=False,
+            )
+
+        if not keep_local:
+            _force_rmtree(slug_dir)
+            return RemoveResult(
+                slug=slug, target_dir=slug_dir, scope=scope,
+                removed=True, kept_local=False,
+            )
+
+        # keep_local: удаляем всё кроме preserved.
+        meta = read_meta(slug_dir) or {}
+        preserved = _preserved_for(meta.get("manifest") or {}, self._target)
+        for child in list(slug_dir.iterdir()):
+            rel = child.name
+            if _is_preserved_rel(rel, preserved) or _is_preserved_rel(rel + "/", preserved):
+                continue
+            if child.is_symlink() or child.is_file():
+                child.unlink(missing_ok=True)
+            elif child.is_dir():
+                _force_rmtree(child)
+
+        # Что-то из preserved осталось?
+        remaining = list(slug_dir.iterdir())
+        if not remaining:
+            _force_rmtree(slug_dir)
+            return RemoveResult(
+                slug=slug, target_dir=slug_dir, scope=scope,
+                removed=True, kept_local=False,
+            )
+        return RemoveResult(
+            slug=slug, target_dir=slug_dir, scope=scope,
+            removed=True, kept_local=True,
+        )
+
+    # ------------------------------------------------------------------
+    #  helpers
+    # ------------------------------------------------------------------
+    @contextlib.contextmanager
+    def _clone_version(self, repo_url: str, version: str):
+        """git clone версии v<version> во временную папку (yield Path).
+
+        Папка удаляется при выходе из контекста.
+        """
+        ref = f"v{version}"
+        url = _authenticated_url(repo_url)
+        tmp = Path(tempfile.mkdtemp(prefix="skills-hub-clone-"))
+        clone_dir = tmp / "repo"
+        try:
+            try:
+                subprocess.run(
+                    ["git", "clone", "--depth", "1", "--branch", ref, url, str(clone_dir)],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            except subprocess.CalledProcessError as e:
+                stderr = (e.stderr or e.stdout or "").replace(
+                    os.environ.get("SKILLS_HUB_GIT_TOKEN", "***"), "***"
+                ).replace(os.environ.get("GITLAB_TOKEN", "***"), "***")
+                raise RuntimeError(f"git clone failed: {stderr}") from e
+            yield clone_dir
+        finally:
+            _force_rmtree(tmp)
 
     def _build_meta(
         self,

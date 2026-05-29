@@ -96,7 +96,9 @@ def _extract_yaml_list(frontmatter: str, key: str) -> list[str] | None:
     return items or None
 
 
-def apply_skill_filter(slug_dir: Path) -> dict[str, int]:
+def apply_skill_filter(
+    slug_dir: Path, *, extra_preserved: tuple[str, ...] = ()
+) -> dict[str, int]:
     """Применяет .skillignore И/ИЛИ manifest.files allowlist в slug_dir.
 
     Логика:
@@ -105,6 +107,10 @@ def apply_skill_filter(slug_dir: Path) -> dict[str, int]:
     - Иначе если .skillignore есть → IGNORE mode (удаляет matched).
     - Иначе ничего не делает.
 
+    `extra_preserved` — дополнительные корневые пути (напр. `_local/`,
+    `browser_profiles/`), которые НИКОГДА не удаляются. Нужно при update,
+    чтобы allowlist новой версии не стёр пользовательский runtime-state.
+
     Возвращает {"removed": N, "kept": M}.
     `kept` НЕ учитывает файлы внутри .git/.
     """
@@ -112,7 +118,7 @@ def apply_skill_filter(slug_dir: Path) -> dict[str, int]:
     allowlist_patterns = parse_skill_md_files_allowlist(skill_md)
 
     if allowlist_patterns is not None:
-        return _apply_allowlist(slug_dir, allowlist_patterns)
+        return _apply_allowlist(slug_dir, allowlist_patterns, extra_preserved)
 
     skillignore = slug_dir / SKILLIGNORE_FILENAME
     if skillignore.exists():
@@ -122,18 +128,33 @@ def apply_skill_filter(slug_dir: Path) -> dict[str, int]:
             if line.strip() and not line.lstrip().startswith("#")
         ]
         if patterns:
-            return _apply_ignore(slug_dir, patterns)
+            return _apply_ignore(slug_dir, patterns, extra_preserved)
 
     return {"removed": 0, "kept": _count_files(slug_dir)}
 
 
-def _is_preserved(slug_dir: Path, path: Path, rel: Path) -> bool:
+def _normalize_preserved_roots(extra_preserved: tuple[str, ...]) -> frozenset[str]:
+    """Корневые имена из extra_preserved (`_local/` → `_local`, `.env` → `.env`)."""
+    roots: set[str] = set()
+    for p in extra_preserved:
+        norm = p.replace("\\", "/").strip().strip("/")
+        if not norm:
+            continue
+        roots.add(norm.split("/")[0])
+    return frozenset(roots)
+
+
+def _is_preserved(
+    slug_dir: Path, path: Path, rel: Path, extra_roots: frozenset[str] = frozenset()
+) -> bool:
     """True если path внутри slug_dir НЕЛЬЗЯ удалять (preserved root или внутри .git)."""
     # Файл/папка прямо в корне с защищённым именем.
     if path.parent == slug_dir and path.name in _PRESERVED_ROOT_NAMES:
         return True
-    # Что угодно внутри .git/.
-    return bool(rel.parts and rel.parts[0] == ".git")
+    if not rel.parts:
+        return False
+    # Что угодно внутри .git/ или внутри extra-preserved root (_local/, ...).
+    return rel.parts[0] == ".git" or rel.parts[0] in extra_roots
 
 
 def _remove(path: Path) -> bool:
@@ -150,8 +171,11 @@ def _remove(path: Path) -> bool:
     return False
 
 
-def _apply_ignore(slug_dir: Path, patterns: list[str]) -> dict[str, int]:
+def _apply_ignore(
+    slug_dir: Path, patterns: list[str], extra_preserved: tuple[str, ...] = ()
+) -> dict[str, int]:
     spec = pathspec.PathSpec.from_lines("gitignore", patterns)
+    extra_roots = _normalize_preserved_roots(extra_preserved)
     removed = 0
 
     # Сортировка по убыванию глубины — сначала листья, потом директории.
@@ -163,7 +187,7 @@ def _apply_ignore(slug_dir: Path, patterns: list[str]) -> dict[str, int]:
             rel = path.relative_to(slug_dir)
         except ValueError:
             continue
-        if _is_preserved(slug_dir, path, rel):
+        if _is_preserved(slug_dir, path, rel, extra_roots):
             continue
 
         rel_str = str(rel).replace("\\", "/")
@@ -176,8 +200,11 @@ def _apply_ignore(slug_dir: Path, patterns: list[str]) -> dict[str, int]:
     return {"removed": removed, "kept": _count_files(slug_dir)}
 
 
-def _apply_allowlist(slug_dir: Path, patterns: list[str]) -> dict[str, int]:
+def _apply_allowlist(
+    slug_dir: Path, patterns: list[str], extra_preserved: tuple[str, ...] = ()
+) -> dict[str, int]:
     spec = pathspec.PathSpec.from_lines("gitignore", patterns)
+    extra_roots = _normalize_preserved_roots(extra_preserved)
     removed = 0
 
     # Pass 1: удалить файлы НЕ в allowlist.
@@ -188,7 +215,7 @@ def _apply_allowlist(slug_dir: Path, patterns: list[str]) -> dict[str, int]:
             rel = path.relative_to(slug_dir)
         except ValueError:
             continue
-        if _is_preserved(slug_dir, path, rel):
+        if _is_preserved(slug_dir, path, rel, extra_roots):
             continue
         if not path.is_file() and not path.is_symlink():
             continue
@@ -207,7 +234,7 @@ def _apply_allowlist(slug_dir: Path, patterns: list[str]) -> dict[str, int]:
             rel = path.relative_to(slug_dir)
         except ValueError:
             continue
-        if _is_preserved(slug_dir, path, rel):
+        if _is_preserved(slug_dir, path, rel, extra_roots):
             continue
         if not any(path.iterdir()):
             try:
