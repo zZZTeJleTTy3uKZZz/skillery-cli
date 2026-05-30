@@ -20,6 +20,7 @@ def track_skill_event(
     event_type: str,
     *,
     slug: str,
+    resource_id: str | None = None,
     version: str | None = None,
     scope: str | None = None,
     extra: dict[str, Any] | None = None,
@@ -29,7 +30,15 @@ def track_skill_event(
     Параметры:
         event_type: ``skill.install`` / ``skill.update`` / ``skill.uninstall``
             / ``skill.run``.
-        slug: slug скилла.
+        slug: slug скилла (идёт в payload как человекочитаемая метка).
+        resource_id: идентификатор скилла-ресурса для аналитики — **строка**
+            (``str(id)``), согласованная с backend/web (web ``track.ts`` шлёт
+            ``resource_id: str(skill.id)``). PK миграция: id у сущностей —
+            auto-increment int, на проводе сериализуется строкой; префиксов
+            (``slk_``) больше нет. Если CLI не знает числовой id (типовой
+            случай install/update/uninstall — на руках только slug), передаётся
+            ``None`` и в качестве ссылки уходит ``slug``: backend-резолвер
+            принимает id-или-slug, поэтому ссылка остаётся валидной.
         version: версия (если применимо).
         scope: ``global`` / ``project``.
         extra: дополнительные поля в payload.
@@ -42,11 +51,14 @@ def track_skill_event(
             payload["scope"] = scope
         if extra:
             payload.update(extra)
+        # resource_id — всегда строка (str(id) если известен, иначе slug).
+        # Никаких prefixed-id (`slk_…`) — форма унифицирована с backend/web.
+        ref = str(resource_id) if resource_id is not None else slug
         collector = EventCollector(default_queue_path())
         collector.append(
             event_type,
             resource_type="skill",
-            resource_id=slug,
+            resource_id=ref,
             payload=payload,
             metadata={"source": "cli"},
         )

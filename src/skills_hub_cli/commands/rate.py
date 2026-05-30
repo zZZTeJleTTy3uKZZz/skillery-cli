@@ -1,4 +1,4 @@
-"""``skills-hub rate <slug> <score>`` — оценить скилл (E7).
+"""``skills-hub rate <id-или-slug> <score>`` — оценить скилл (E7).
 
 Permission: ``skill.rate``. Backend upsert'ит rating (одна оценка на
 user+skill пара).
@@ -18,7 +18,9 @@ console = Console()
 
 
 def cmd_rate(
-    slug: str = typer.Argument(..., help="Slug или id скилла"),
+    slug: str = typer.Argument(
+        ..., metavar="ID_ИЛИ_SLUG", help="id-или-slug скилла (backend принимает оба)"
+    ),
     score: int = typer.Argument(..., min=1, max=5, help="Оценка 1..5"),
 ) -> None:
     """Поставить оценку 1..5 (upsert).

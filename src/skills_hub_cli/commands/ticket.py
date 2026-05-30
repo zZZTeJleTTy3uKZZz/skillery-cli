@@ -36,7 +36,7 @@ def cmd_ticket_create(
     skill: str | None = typer.Option(
         None,
         "--skill",
-        help="Slug скилла (если тикет про конкретный skill)",
+        help="id-или-slug скилла (если тикет про конкретный skill)",
     ),
     kind: str = typer.Option(
         "other", "--kind", help=f"Тип: {', '.join(_KIND_CHOICES)}"

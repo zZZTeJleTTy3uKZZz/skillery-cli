@@ -1,7 +1,8 @@
 """AntigravityTarget — stub-таргет для агента Antigravity (ТЗ §8.1).
 
-Layout: `~/.antigravity/skills/<slug>/` (global) или
-`<project>/.antigravity/skills/<slug>/` (project), по аналогии с Claude/Codex.
+Layout: `~/.antigravity/skills/<id-или-slug>/` (global) или
+`<project>/.antigravity/skills/<id-или-slug>/` (project), по аналогии с
+Claude/Codex. Имя папки — slug, либо числовой id для slug-less skill.
 
 Базовая install_layout (копирование cloned-содержимого) работает; любые
 agent-специфичные adapter-патчи пока не реализованы (NotImplementedError, если

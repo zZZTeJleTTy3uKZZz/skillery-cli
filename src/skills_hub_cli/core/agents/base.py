@@ -1,8 +1,10 @@
 """IAgentTarget — куда CLI ставит skill для конкретного агента.
 
 Поддерживает два scope:
-- global: `~/.claude/skills/<slug>/`  (видно во всех сессиях агента)
-- project: `<project>/.claude/skills/<slug>/`  (видно только в project)
+- global: `~/.claude/skills/<id-или-slug>/`  (видно во всех сессиях агента)
+- project: `<project>/.claude/skills/<id-или-slug>/`  (видно только в project)
+
+Имя папки — slug, либо числовой id для slug-less skill (PK-миграция §3.E).
 
 Project-scope skills имеют ПРИОРИТЕТ над global при одинаковом slug
 (стандартное поведение Claude Code / Codex).

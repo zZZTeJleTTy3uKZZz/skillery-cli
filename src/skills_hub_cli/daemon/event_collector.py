@@ -11,7 +11,7 @@
 
 Использование:
     collector = EventCollector(queue_path=Path("~/.skills-hub/events.queue.json").expanduser())
-    collector.append("skill.install", resource_type="skill", resource_id="slk_xyz", payload={"slug": "foo"})
+    collector.append("skill.install", resource_type="skill", resource_id="42", payload={"slug": "foo"})
     pending = collector.drain(limit=100)  # выньет до 100, оставшиеся в файле
 """
 from __future__ import annotations

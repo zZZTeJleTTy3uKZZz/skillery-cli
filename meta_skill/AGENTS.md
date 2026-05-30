@@ -8,8 +8,9 @@
 
 - **CLI** — команда `skills-hub`, ставится один раз через `scripts/install.py`.
 - **Skill** — отдельный навык (например, `bitrix24`), живёт в собственном
-  GitLab-репо, ставится в `~/.claude/skills/<slug>/` или
-  `<project>/.claude/skills/<slug>/`.
+  GitLab-репо, ставится в `~/.claude/skills/<id-или-slug>/` или
+  `<project>/.claude/skills/<id-или-slug>/` (имя папки — slug, либо числовой
+  id для slug-less skill, PK-миграция §3.E).
 - **Hub** — backend (FastAPI), хранит metadata + RBAC + ratings/comments/
   tickets/collections/events.
 - **Agent** — AI-coding-agent клиента (Claude Code, Codex). CLI авто-
@@ -82,14 +83,14 @@ skills-hub login --email <user@x.io>
 
 ```bash
 skills-hub --json list                          # доступные
-skills-hub --json install <slug>                # global по дефолту
-skills-hub --json install <slug> --scope project --project /path/to/proj
+skills-hub --json install <id-или-slug>         # global по дефолту
+skills-hub --json install <id-или-slug> --scope project --project /path/to/proj
 ```
 
 Дефолтный scope берётся из `cfg.default_install_scope` (по дефолту `global`).
 
-После install в папке `<slug_dir>/_skill_meta.json` лежит полный manifest +
-commit_sha + scope.
+После install в папке `<id-или-slug>/_skill_meta.json` лежит полный manifest +
+commit_sha + scope + `skill_id` (identity для slug-less skill).
 
 ## Шаг 3 — обновления
 

@@ -1,4 +1,4 @@
-"""``skills-hub contributors <slug>`` — список контрибьюторов скилла (E7).
+"""``skills-hub contributors <id-или-slug>`` — список контрибьюторов скилла (E7).
 
 GET /skills/{id}/contributors. Refresh-on-stale: если cache пустой —
 backend сам резолвит из git.
@@ -19,7 +19,9 @@ console = Console()
 
 
 def cmd_contributors(
-    slug: str = typer.Argument(..., help="Slug или id скилла"),
+    slug: str = typer.Argument(
+        ..., metavar="ID_ИЛИ_SLUG", help="id-или-slug скилла (backend принимает оба)"
+    ),
     refresh: bool = typer.Option(
         False, "--refresh", help="Принудительно перечитать git"
     ),

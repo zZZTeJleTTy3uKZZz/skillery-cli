@@ -77,9 +77,13 @@ def cmd_collections_list(
 
 
 def cmd_collection_show(
-    slug: str = typer.Argument(..., help="Slug коллекции"),
+    slug: str = typer.Argument(
+        ...,
+        metavar="ID_ИЛИ_SLUG",
+        help="id-или-slug коллекции (backend принимает оба)",
+    ),
 ) -> None:
-    """Detail + effective skills."""
+    """Detail + effective skills (по id-или-slug)."""
     cfg = ClientConfig.load()
     access = _common.get_access_token()
 

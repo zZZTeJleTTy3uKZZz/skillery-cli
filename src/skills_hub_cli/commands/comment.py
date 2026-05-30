@@ -1,8 +1,8 @@
 """``skills-hub comment`` + ``skills-hub comments`` (E7).
 
-- ``skills-hub comment <slug> "body" [--screenshot path] [--parent id]``
+- ``skills-hub comment <id-или-slug> "body" [--screenshot path] [--parent id]``
   — добавить comment. Если есть screenshot — multipart upload.
-- ``skills-hub comments <slug> [--limit N] [--cursor X]`` — list (public).
+- ``skills-hub comments <id-или-slug> [--limit N] [--cursor X]`` — list (public).
 
 Permission: ``comment.post`` для post.
 """
@@ -23,7 +23,9 @@ console = Console()
 
 
 def cmd_comment_post(
-    slug: str = typer.Argument(..., help="Slug или id скилла"),
+    slug: str = typer.Argument(
+        ..., metavar="ID_ИЛИ_SLUG", help="id-или-slug скилла (backend принимает оба)"
+    ),
     body: str = typer.Argument(..., help="Текст комментария"),
     parent_id: str | None = typer.Option(
         None, "--parent", help="ID родительского comment'а для thread'а"
@@ -89,7 +91,9 @@ def cmd_comment_post(
 
 
 def cmd_comments_list(
-    slug: str = typer.Argument(..., help="Slug или id скилла"),
+    slug: str = typer.Argument(
+        ..., metavar="ID_ИЛИ_SLUG", help="id-или-slug скилла (backend принимает оба)"
+    ),
     limit: int = typer.Option(50, "--limit", min=1, max=200),
     starting_after: str | None = typer.Option(
         None, "--cursor", help="ID последнего comment'а с предыдущей страницы"

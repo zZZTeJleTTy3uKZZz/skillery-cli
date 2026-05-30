@@ -78,8 +78,8 @@ class ClientConfig:
     Для AI агентов рекомендуется json."""
     default_install_scope: str = "global"
     """global | project — куда install ставит skill по умолчанию (без --scope).
-    global → ~/.claude/skills/<slug>/  (видны во всех проектах)
-    project → <project>/.claude/skills/<slug>/  (только в указанном проекте)
+    global → ~/.claude/skills/<id-или-slug>/  (видны во всех проектах)
+    project → <project>/.claude/skills/<id-или-slug>/  (только в указанном проекте)
     """
     default_project_dir: str | None = None
     """Дефолтный project root для scope=project. Если null — текущий cwd."""
