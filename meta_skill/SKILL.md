@@ -82,27 +82,27 @@ skills-hub update --all                          # global + project одной �
 | ------------------------------------------------------ | ----------------------------------------- |
 | `skills-hub list`                                      | Доступные скилы (RBAC)                    |
 | `skills-hub list --installed [--scope all\|global\|project]` | Что уже стоит                       |
-| `skills-hub show <slug>`                               | Детали (включая versions / tags / repo)   |
-| `skills-hub install <slug> [--scope ...] [--force]`    | Поставить (global или project)            |
-| `skills-hub update [<slug>] [--all] [--scope ...]`     | Обновить установленные                    |
+| `skills-hub show <id-или-slug>`                        | Детали (включая versions / tags / repo)   |
+| `skills-hub install <id-или-slug> [--scope ...] [--force]` | Поставить (global или project)        |
+| `skills-hub update [<id-или-slug>] [--all] [--scope ...]` | Обновить установленные                 |
 
 ### Оценки и комментарии — E7 (`skill.rate`, `skill.comment`)
 
 | Команда                                                | Назначение                                |
 | ------------------------------------------------------ | ----------------------------------------- |
-| `skills-hub rate <slug> <1-5>`                         | Поставить / обновить свою оценку 1..5     |
-| `skills-hub ratings <slug>`                            | Средний балл + распределение (если есть право `skill.read`) |
-| `skills-hub comment <slug> "<body>" [--screenshot path] [--parent <cmt_id>]` | Запостить коммент / ответ |
-| `skills-hub comments <slug>`                           | Дерево комментариев skill'а               |
+| `skills-hub rate <id-или-slug> <1-5>`                  | Поставить / обновить свою оценку 1..5     |
+| `skills-hub ratings <id-или-slug>`                     | Средний балл + распределение (если есть право `skill.read`) |
+| `skills-hub comment <id-или-slug> "<body>" [--screenshot path] [--parent <cmt_id>]` | Запостить коммент / ответ |
+| `skills-hub comments <id-или-slug>`                    | Дерево комментариев skill'а               |
 | `skills-hub comment-edit <cmt_id> "<new body>"`        | Редактировать свой коммент                |
 | `skills-hub comment-delete <cmt_id>`                   | Soft-delete (автор или hub-admin)         |
-| `skills-hub contributors <slug>`                       | Авторы и количество коммитов (из git)     |
+| `skills-hub contributors <id-или-slug>`                | Авторы и количество коммитов (из git)     |
 
 ### Тикеты тех-поддержки — E8 (`support.create`, `support.read`)
 
 | Команда                                                | Назначение                                |
 | ------------------------------------------------------ | ----------------------------------------- |
-| `skills-hub ticket create "<subject>" [--skill slug] [--kind bug\|feature\|question\|other] [--priority low\|normal\|high\|urgent] [--body "..."] [--screenshot path]` | Завести тикет; assignee выбирается авто (creator skill'а → company-admin → none) |
+| `skills-hub ticket create "<subject>" [--skill <id-или-slug>] [--kind bug\|feature\|question\|other] [--priority low\|normal\|high\|urgent] [--body "..."] [--screenshot path]` | Завести тикет; assignee выбирается авто (creator skill'а → company-admin → none) |
 | `skills-hub tickets [--status ...] [--mine] [--assigned-to-me]` | Список тикетов в твоём scope (RBAC: hub-admin → все; company-admin → company; skill-creator → свои назначения; user → свои создания) |
 | `skills-hub ticket show <tkt_id>`                      | Тикет + thread сообщений                  |
 | `skills-hub ticket reply <tkt_id> "<body>" [--screenshot path]` | Добавить ответ в thread             |
@@ -110,15 +110,15 @@ skills-hub update --all                          # global + project одной �
 | `skills-hub ticket assign <tkt_id> <user_id>`          | Назначить ответственного (admin only)     |
 
 `skills-hub report` (legacy) → внутри транслируется в `ticket create
---skill <slug> --kind bug`.
+--skill <id-или-slug> --kind bug`.
 
 ### Коллекции — E10 (`collection.read`)
 
 | Команда                                                | Назначение                                |
 | ------------------------------------------------------ | ----------------------------------------- |
 | `skills-hub collections [--mine] [--global]`           | Список коллекций (static + dynamic)       |
-| `skills-hub collection show <slug-or-id>`              | Детали + развёрнутый список skills        |
-| `skills-hub collection install <slug>`                 | Поставить все skills из коллекции одной командой |
+| `skills-hub collection show <id-или-slug>`             | Детали + развёрнутый список skills        |
+| `skills-hub collection install <id-или-slug>`          | Поставить все skills из коллекции одной командой |
 
 С правом `collection.write` доступны также `collection create`, `collection
 add-skill`, `collection add-tag`, `collection delete`.
@@ -145,14 +145,14 @@ Daemon кладёт events в `~/.skills-hub/events.queue.json` и шлёт ба
 
 | Команда                                                | Назначение                                |
 | ------------------------------------------------------ | ----------------------------------------- |
-| `skills-hub publish <slug> --tag v0.1.0 [--dry-run]`   | Опубликовать новую версию из локальной папки |
+| `skills-hub publish <id-или-slug> --tag v0.1.0 [--dry-run]` | Опубликовать новую версию из локальной папки (slug при создании задаёт hub-admin) |
 
 ### Админка (только hub-admin / company-admin)
 
 | Команда                                       | Назначение                                       |
 | --------------------------------------------- | ------------------------------------------------ |
-| `skills-hub admin sync-skill <slug>`          | Подтянуть новые GitLab tags                      |
-| `skills-hub admin company-create <slug> ...`  | Создать новую компанию + invite owner'у          |
+| `skills-hub admin sync-skill <id-или-slug>`   | Подтянуть новые GitLab tags                      |
+| `skills-hub admin company-create <slug> ...`  | Создать новую компанию + invite owner'у (slug компании задаёт hub-admin) |
 | `skills-hub admin invite --company-id ... --role-id ...` | Выдать invite member'у                |
 
 `skills-hub --help` после login показывает только те команды, на которые у
@@ -164,19 +164,19 @@ Daemon кладёт events в `~/.skills-hub/events.queue.json` и шлёт ба
 1. **Первый запуск в сессии** — `skills-hub status`. Если `logged_in=false` →
    попросить у пользователя invite-token или email+password (через
    `skills-hub login`).
-2. **Установка нужного навыка** — если пользователь упомянул slug, который
-   не установлен, выполни `skills-hub install <slug>`.
+2. **Установка нужного навыка** — если пользователь упомянул id-или-slug,
+   который не установлен, выполни `skills-hub install <id-или-slug>`.
 3. **Регистрация события** — при `install` / `update` / `uninstall` CLI сам
    отправит `skill.*` event. Дополнительно при ручном run рекомендуется
-   `skills-hub events track skill.run --slug <slug>` (если daemon
+   `skills-hub events track skill.run --slug <id-или-slug>` (если daemon
    `opt_in=true`).
 4. **Bug / feedback flow:**
-   - Маленький баг → `skills-hub comment <slug> "<repro + лог>"`.
-   - Систематический → `skills-hub ticket create "<subject>" --skill <slug>
+   - Маленький баг → `skills-hub comment <id-или-slug> "<repro + лог>"`.
+   - Систематический → `skills-hub ticket create "<subject>" --skill <id-или-slug>
      --kind bug --body "<полный лог>"`.
    - Идея фичи → `--kind feature`.
 5. **Оценка после первого продуктивного использования** — мягко предложить
-   `skills-hub rate <slug> <1-5>`. Не настаивать.
+   `skills-hub rate <id-или-slug> <1-5>`. Не настаивать.
 6. **Обновления** — если в config включён `auto_update=true`, CLI сам
    тихонько обновит при следующей команде. Иначе подсказать `skills-hub
    update --all`.
@@ -218,7 +218,7 @@ SystemConfig (E9).
 4. Если skill после install не работает у пользователя:
    - Прогони smoke-тесты skill'а (если есть).
    - Если воспроизводимый bug — `skills-hub ticket create "..." --skill
-     <slug> --kind bug --screenshot trace.png`.
+     <id-или-slug> --kind bug --screenshot trace.png`.
 
 ## Структура
 

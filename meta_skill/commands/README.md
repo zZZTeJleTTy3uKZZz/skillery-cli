@@ -14,10 +14,10 @@ Claude Code новее `2025-03` — положи эти файлы в
 | Команда                        | Что делает                                       |
 | ------------------------------ | ------------------------------------------------ |
 | `/skills-hub-status`           | `skills-hub status` — что установлено + login    |
-| `/skills-hub-install <slug>`   | `skills-hub install <slug>`                      |
+| `/skills-hub-install <id-или-slug>` | `skills-hub install <id-или-slug>`          |
 | `/skills-hub-update`           | `skills-hub update --all`                        |
-| `/skills-hub-rate <slug> <N>`  | `skills-hub rate <slug> <N>` (1..5)              |
-| `/skills-hub-comment <slug>`   | `skills-hub comment <slug>` (тело берётся из ввода) |
+| `/skills-hub-rate <id-или-slug> <N>` | `skills-hub rate <id-или-slug> <N>` (1..5) |
+| `/skills-hub-comment <id-или-slug>` | `skills-hub comment <id-или-slug>` (тело берётся из ввода) |
 | `/skills-hub-ticket <subj>`    | Создать тикет тех-поддержки                      |
 | `/skills-hub-issue <descr>`    | Legacy alias: `report --kind bug`                |
 | `/skills-hub-collections`      | `skills-hub collections` — список                |

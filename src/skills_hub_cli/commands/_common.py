@@ -78,12 +78,24 @@ def make_client(cfg: ClientConfig, access: str) -> HubClient:
     )
 
 
-async def resolve_skill_id(client: HubClient, slug_or_id: str) -> str:
-    """Если передан slug — резолвим в skill_id через GET /skills/{slug}.
+async def resolve_skill_id(client: HubClient, id_or_slug: str) -> str:
+    """Привести ``id-или-slug`` к каноничному строковому skill_id.
 
-    Если уже похоже на id (Stripe-style ``slk_*``) — возвращаем как есть.
+    PK-миграция (см. ``PK_MIGRATION_DESIGN.md`` §2.3/§3.E): id теперь —
+    auto-increment int (на проводе строкой), slug опционален и не может быть
+    полностью числовым. Дискриминатор:
+
+    - ``id_or_slug.isdigit()`` → это id, отдаём как есть (fast-path без
+      сетевого запроса; backend сам отрежет несуществующий id 404-ответом
+      в последующей команде).
+    - иначе → это slug, резолвим через ``GET /skills/{slug}`` (backend
+      принимает и id, и slug) и возвращаем числовой ``id`` строкой.
+
+    404-fallback: если slug не нашёлся, ``get_skill`` бросит ``ApiError``
+    (404), которую вызывающая команда переведёт в человекочитаемый exit(1)
+    через :func:`run` — отдельной обработки тут не требуется.
     """
-    if slug_or_id.startswith("slk_"):
-        return slug_or_id
-    data: dict[str, Any] = await client.get_skill(slug_or_id)
+    if id_or_slug.isdigit():
+        return id_or_slug
+    data: dict[str, Any] = await client.get_skill(id_or_slug)
     return str(data["id"])

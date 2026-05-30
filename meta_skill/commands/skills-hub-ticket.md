@@ -1,13 +1,13 @@
 ---
 description: Открыть тикет тех-поддержки в Skills Hub.
-argument-hint: "<subject>" [--skill slug] [--kind bug|feature|question|other] [--priority low|normal|high|urgent] [--body "..."]
+argument-hint: "<subject>" [--skill <id-или-slug>] [--kind bug|feature|question|other] [--priority low|normal|high|urgent] [--body "..."]
 allowed-tools: Bash(skills-hub *)
 ---
 
 # /skills-hub-ticket
 
 Аргументы: `$ARGUMENTS` — минимум `"<subject>"`, плюс опционально
-`--skill <slug>`, `--kind bug|feature|question|other`, `--priority
+`--skill <id-или-slug>`, `--kind bug|feature|question|other`, `--priority
 low|normal|high|urgent`, `--body "<длинное описание>"`, `--screenshot
 <path>`.
 
@@ -24,7 +24,7 @@ skills-hub --json ticket create $ARGUMENTS
 ```
 
 Backend сам выберет assignee:
-1. Если `--skill <slug>` указан → creator этого skill'а.
+1. Если `--skill <id-или-slug>` указан → creator этого skill'а.
 2. Иначе → company-admin твоей компании.
 3. Иначе → null (висит в общей очереди hub-admin'у).
 

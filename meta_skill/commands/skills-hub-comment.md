@@ -1,16 +1,16 @@
 ---
-description: Оставить комментарий к skill'у. Аргументы — slug и тело.
-argument-hint: <slug> "<body>" [--screenshot path] [--parent cmt_id]
+description: Оставить комментарий к skill'у. Аргументы — id-или-slug и тело.
+argument-hint: <id-или-slug> "<body>" [--screenshot path] [--parent cmt_id]
 allowed-tools: Bash(skills-hub *)
 ---
 
 # /skills-hub-comment
 
-Аргументы: `$ARGUMENTS` — ожидается `<slug> "<body>"` плюс опционально
+Аргументы: `$ARGUMENTS` — ожидается `<id-или-slug> "<body>"` плюс опционально
 `--screenshot <path>` для прикрепления изображения и `--parent <cmt_id>`
 для ответа в thread.
 
-Если slug или body не переданы — спроси.
+Если id-или-slug или body не переданы — спроси.
 
 Запусти:
 

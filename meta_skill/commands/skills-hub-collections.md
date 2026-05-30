@@ -13,8 +13,8 @@ skills-hub --json collections
 
 Покажи пользователю коротко: название, описание, тип (static / dynamic),
 сколько skills внутри. Подскажи, что можно `skills-hub collection show
-<slug>` для развёрнутого списка, и `skills-hub collection install <slug>`
-для массовой установки всех skills из коллекции.
+<id-или-slug>` для развёрнутого списка, и `skills-hub collection install
+<id-или-slug>` для массовой установки всех skills из коллекции.
 
 Если пользователь спросил, что есть в hub'е — предпочитай collections
 перед плоским `list`, потому что они тематически сгруппированы.

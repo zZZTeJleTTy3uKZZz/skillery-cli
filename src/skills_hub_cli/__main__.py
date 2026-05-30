@@ -446,7 +446,9 @@ def cmd_whoami() -> None:
         if p["is_skill_creator"]:
             roles.append("skill-creator")
         if p["company_id"]:
-            roles.append(f"company={p['company_id'][:8]}…")
+            # PK-миграция: company_id теперь числовой id (строкой), обрезка
+            # бессмысленна — показываем полностью.
+            roles.append(f"company={p['company_id']}")
         console.print(f"  Роли:       {', '.join(roles) or 'member'}")
         console.print(
             f"  Permissions ({len(p['permissions'])}): {', '.join(p['permissions']) or '—'}"
@@ -616,9 +618,15 @@ def _scan_installed(
         for d in base.iterdir():
             meta = read_meta(d)
             if meta:
+                # PK-миграция §3.E: slug опционален. `ref` — стабильный
+                # идентификатор для install-bundle / папки: slug ?? skill_id ??
+                # имя каталога (равно тому, под чем skill установлен на диске).
+                ref = meta.get("slug") or meta.get("skill_id") or d.name
                 items.append(
                     {
-                        "slug": meta["slug"],
+                        "slug": meta.get("slug"),
+                        "skill_id": meta.get("skill_id"),
+                        "ref": ref,
                         "version": meta.get("version"),
                         "commit_sha": meta.get("commit_sha"),
                         "agent": meta.get("agent"),
@@ -664,13 +672,14 @@ def cmd_list(
                 )
                 return
             table = Table(title=f"Установленные ({target.name})")
-            table.add_column("slug")
+            table.add_column("id-или-slug")
             table.add_column("version")
             table.add_column("scope")
             table.add_column("path", overflow="fold")
             for s in rows:
                 table.add_row(
-                    s["slug"],
+                    # slug может быть None у slug-less skill — показываем ref (id).
+                    s.get("slug") or s.get("ref") or "—",
                     s["version"] or "—",
                     s["scope"],
                     s["path"],
@@ -721,8 +730,12 @@ def cmd_list(
     _run(_do())
 
 
-def cmd_show(slug: str) -> None:
-    """Детали skill'а."""
+def cmd_show(
+    slug: str = typer.Argument(
+        ..., metavar="ID_ИЛИ_SLUG", help="id-или-slug скилла (backend принимает оба)"
+    ),
+) -> None:
+    """Детали skill'а (по id-или-slug)."""
     cfg = ClientConfig.load()
     _maybe_auto_update(cfg)
     access = _get_access_token()
@@ -775,7 +788,9 @@ def _resolve_install_scope(
 
 
 def cmd_install(
-    slug: str,
+    slug: str = typer.Argument(
+        ..., metavar="ID_ИЛИ_SLUG", help="id-или-slug скилла (backend принимает оба)"
+    ),
     channel: str = typer.Option("published"),
     agent: Optional[str] = typer.Option(None),
     scope: Optional[str] = typer.Option(
@@ -791,8 +806,11 @@ def cmd_install(
 ) -> None:
     """Установить skill (global или в конкретный project).
 
-    global  → ~/.claude/skills/<slug>/  (видны во всех Claude Code сессиях)
-    project → <project>/.claude/skills/<slug>/  (только в данном проекте)
+    Аргумент — id-или-slug (backend резолвит оба). Имя папки на диске: slug
+    если задан, иначе числовой id (PK-миграция §3.E).
+
+    global  → ~/.claude/skills/<id-или-slug>/  (видны во всех Claude Code сессиях)
+    project → <project>/.claude/skills/<id-или-slug>/  (только в данном проекте)
     """
     cfg = ClientConfig.load()
     actual_scope, project_path = _resolve_install_scope(cfg, scope, project)
@@ -830,18 +848,23 @@ def cmd_install(
                     dep_bundle = await sub.install_bundle(dep_slug, channel=channel)
                 finally:
                     await sub.close()
+            # PK-миграция §3.E: slug опционален. Если backend отдал пустой slug,
+            # identity папки — числовой skill_id из bundle.
+            dep_id = dep_bundle.get("skill_id")
             result = installer.install(
-                slug=dep_slug,
+                slug=dep_slug or None,
                 version=dep_version,
                 commit_sha=dep_bundle["commit_sha"],
                 repo_url=dep_repo or dep_bundle.get("repo_url"),
                 manifest=dep_bundle["manifest"],
                 project=project_path,
                 force=force,
+                skill_id=dep_id,
             )
             installed_chain.append(
                 {
                     "slug": dep_slug,
+                    "skill_id": result.skill_id,
                     "version": dep_version,
                     "is_update": result.is_update,
                     "target_dir": str(result.target_dir),
@@ -851,7 +874,7 @@ def cmd_install(
             # E23: telemetry — silent track install/update event.
             track_skill_event(
                 "skill.update" if result.is_update else "skill.install",
-                slug=dep_slug,
+                slug=dep_slug or (str(dep_id) if dep_id is not None else ""),
                 version=dep_version,
                 scope=result.scope,
             )
@@ -870,7 +893,9 @@ def cmd_install(
 
 
 def cmd_update(
-    slug: Optional[str] = typer.Argument(None),
+    slug: Optional[str] = typer.Argument(
+        None, metavar="[ID_ИЛИ_SLUG]", help="id-или-slug скилла; без аргумента — все"
+    ),
     all_: bool = typer.Option(False, "--all"),
     channel: str = typer.Option("published"),
     project: Optional[Path] = typer.Option(None, "--project"),
@@ -888,10 +913,12 @@ def cmd_update(
         or Path.cwd()
     )
 
-    # Собираем список (slug, project | None) для апдейта
+    # Собираем список (ref, project | None) для апдейта. `ref` — id-или-slug,
+    # совпадает с именем папки на диске (PK-миграция §3.E: slug может быть None,
+    # тогда папка/ref = числовой id).
     targets: list[tuple[str, Path | None]] = []
     if slug and not all_:
-        # Если slug передан явно — обновим в указанном scope (или auto-detect)
+        # Если ref передан явно — обновим в указанном scope (или auto-detect)
         if wanted_scope in ("global", "all"):
             if target.slug_dir(slug).exists():
                 targets.append((slug, None))
@@ -901,10 +928,10 @@ def cmd_update(
     else:
         if wanted_scope in ("global", "all"):
             for s in _scan_installed(target, project=None):
-                targets.append((s["slug"], None))
+                targets.append((s["ref"], None))
         if wanted_scope in ("project", "all"):
             for s in _scan_installed(target, project=actual_project):
-                targets.append((s["slug"], actual_project))
+                targets.append((s["ref"], actual_project))
 
     if not targets:
         emit_data(
@@ -923,15 +950,21 @@ def cmd_update(
         results: list[dict] = []
         try:
             installer = SkillInstaller(target)
-            for s, proj in targets:
-                meta = read_meta(target.slug_dir(s, project=proj))
+            for ref, proj in targets:
+                meta = read_meta(target.slug_dir(ref, project=proj))
                 current_version = (meta or {}).get("version", "0.0.0")
-                bundle = await client.install_bundle(s, channel=channel)
+                # На диске identity = slug ?? skill_id; reconstruct, чтобы папка
+                # совпала (slug-less skill хранится под id).
+                meta_slug = (meta or {}).get("slug")
+                meta_skill_id = (meta or {}).get("skill_id")
+                bundle = await client.install_bundle(ref, channel=channel)
                 scope_label = "project" if proj else "global"
                 if bundle["version"] == current_version:
                     results.append(
                         {
-                            "slug": s,
+                            "slug": meta_slug,
+                            "skill_id": meta_skill_id,
+                            "ref": ref,
                             "scope": scope_label,
                             "project": str(proj) if proj else None,
                             "from": current_version,
@@ -941,7 +974,8 @@ def cmd_update(
                     )
                     continue
                 up = installer.install(
-                    slug=s,
+                    slug=meta_slug,
+                    skill_id=meta_skill_id,
                     version=bundle["version"],
                     commit_sha=bundle["commit_sha"],
                     repo_url=bundle.get("repo_url"),
@@ -950,7 +984,9 @@ def cmd_update(
                 )
                 results.append(
                     {
-                        "slug": s,
+                        "slug": meta_slug,
+                        "skill_id": up.skill_id or meta_skill_id,
+                        "ref": ref,
                         "scope": scope_label,
                         "project": str(proj) if proj else None,
                         "from": current_version,
@@ -962,7 +998,7 @@ def cmd_update(
                 # E23: track skill.update event.
                 track_skill_event(
                     "skill.update",
-                    slug=s,
+                    slug=ref,
                     version=bundle["version"],
                     scope=scope_label,
                 )
@@ -973,6 +1009,8 @@ def cmd_update(
 
         def _render(rows: list) -> None:
             for r in rows:
+                # slug может быть None у slug-less skill — показываем ref (id).
+                label = r.get("slug") or r.get("ref")
                 if r["updated"]:
                     d = r.get("diff")
                     diff_suffix = ""
@@ -981,12 +1019,12 @@ def cmd_update(
                             f" [dim](+{d['added']} ~{d['changed']} -{d['removed']})[/]"
                         )
                     console.print(
-                        f"[green]↑[/] {r['slug']} ({r['scope']}): "
+                        f"[green]↑[/] {label} ({r['scope']}): "
                         f"{r['from']} → {r['to']}{diff_suffix}"
                     )
                 else:
                     console.print(
-                        f"[dim]= {r['slug']}@{r['from']} ({r['scope']}, актуально)[/]"
+                        f"[dim]= {label}@{r['from']} ({r['scope']}, актуально)[/]"
                     )
 
         emit_data(results, text_renderer=_render)
@@ -995,7 +1033,11 @@ def cmd_update(
 
 
 def cmd_remove(
-    slug: str,
+    slug: str = typer.Argument(
+        ...,
+        metavar="ID_ИЛИ_SLUG",
+        help="id-или-slug установленного скилла (= имя папки на диске)",
+    ),
     scope: Optional[str] = typer.Option(
         None, "--scope", help="global | project (default из config.default_install_scope)"
     ),
@@ -1010,9 +1052,10 @@ def cmd_remove(
 ) -> None:
     """Удалить установленный skill (global или project scope).
 
-    По умолчанию удаляет всю slug-папку. `--keep-local` сохраняет
-    preserved-пути (`_local/`, `browser_profiles/`, ...) — например, чтобы не
-    потерять накопленный state при переустановке.
+    Аргумент — id-или-slug, совпадает с именем папки на диске (slug, либо
+    числовой id для slug-less skill). По умолчанию удаляет всю папку.
+    `--keep-local` сохраняет preserved-пути (`_local/`, `browser_profiles/`,
+    ...) — например, чтобы не потерять накопленный state при переустановке.
     """
     cfg = ClientConfig.load()
     actual_scope, project_path = _resolve_install_scope(cfg, scope, project)
@@ -1067,7 +1110,9 @@ def cmd_remove(
 
 
 def cmd_report(
-    slug: str,
+    slug: str = typer.Argument(
+        ..., metavar="ID_ИЛИ_SLUG", help="id-или-slug скилла (backend принимает оба)"
+    ),
     kind: str = typer.Option("bug"),
     title: str = typer.Option(...),
     description: str = typer.Option(...),
@@ -1176,7 +1221,11 @@ def _run_publish_secret_scan(
 
 
 def cmd_publish(
-    slug: str,
+    slug: str = typer.Argument(
+        ...,
+        metavar="ID_ИЛИ_SLUG",
+        help="id-или-slug скилла (backend принимает оба; slug при создании задаёт hub-admin)",
+    ),
     tag: str = typer.Option(..., "--tag"),
     path: Optional[Path] = typer.Option(None, "--path"),
     channel: str = typer.Option("published"),
@@ -1276,10 +1325,12 @@ def cmd_publish(
 
 
 def cmd_admin_sync(
-    slug: str,
+    slug: str = typer.Argument(
+        ..., metavar="ID_ИЛИ_SLUG", help="id-или-slug скилла (backend принимает оба)"
+    ),
     channel: str = typer.Option("published"),
 ) -> None:
-    """[hub.admin] Backend сам подтягивает новые GitLab tags."""
+    """[hub.admin] Backend сам подтягивает новые GitLab tags (по id-или-slug)."""
     cfg = ClientConfig.load()
     access = _get_access_token()
 

@@ -23,6 +23,8 @@ skills-hub list
 skills-hub collections                   # кураторские подборки (E10)
 
 # Установить навык (по умолчанию в ~/.claude/skills/, можно в .codex/)
+# Аргумент — id-или-slug: backend принимает оба (`skills-hub install 42`
+# тоже работает). Имя папки на диске: slug, либо числовой id для slug-less.
 skills-hub install bitrix24
 skills-hub install bitrix24 --scope project  # только в текущий cwd/.claude/skills/
 

@@ -55,6 +55,22 @@ _SKILL_META_FILE = "_skill_meta.json"
 _COPY_SKIP_ROOT = frozenset({".git"})
 
 
+def skill_dir_name(slug: str | None, skill_id: str | int | None = None) -> str:
+    """Имя on-disk папки skill'а: slug если задан, иначе числовой id (PK-миграция).
+
+    slug стал опциональным (см. ``PK_MIGRATION_DESIGN.md`` §3.E): для slug-less
+    скилла идентичностью каталога (и ключом ``_skill_meta.json``) становится
+    его числовой ``id``. Пустая строка трактуется как «slug не задан».
+
+    Бросает ``ValueError`` если нет ни slug, ни id — каталог некуда положить.
+    """
+    if slug:
+        return slug
+    if skill_id is not None and str(skill_id) != "":
+        return str(skill_id)
+    raise ValueError("Невозможно определить папку skill'а: нет ни slug, ни id")
+
+
 def _assert_within(base: Path, candidate: Path) -> Path:
     """Проверяет что candidate лежит ВНУТРИ base (после нормализации `..`).
 
@@ -139,22 +155,24 @@ def _authenticated_url(url: str) -> str:
 
 @dataclass
 class InstallResult:
-    slug: str
+    slug: str | None  # None для slug-less skill (PK-миграция); тогда identity = id
     version: str
     target_dir: Path
     is_update: bool
     scope: str  # "global" | "project"
     filter_result: dict[str, int] | None = None  # {"removed": N, "kept": M} после filter
     update_diff: dict[str, int] | None = None  # {"added": A, "changed": C, "removed": R} при update
+    skill_id: str | None = None  # числовой id (строкой); identity папки для slug-less
 
 
 @dataclass
 class RemoveResult:
-    slug: str
+    slug: str | None
     target_dir: Path
     scope: str
     removed: bool  # удалили ли что-то
     kept_local: bool  # сохранили ли preserved_paths (--keep-local)
+    skill_id: str | None = None
 
 
 def write_meta(slug_dir: Path, meta: dict[str, Any]) -> None:
@@ -283,16 +301,20 @@ class SkillInstaller:
     def install(
         self,
         *,
-        slug: str,
+        slug: str | None,
         version: str,
         commit_sha: str,
         repo_url: str | None,
         manifest: dict[str, Any],
         project: Path | None = None,
         force: bool = False,
+        skill_id: str | int | None = None,
     ) -> InstallResult:
         scope = "project" if project is not None else "global"
-        slug_dir = self._target.slug_dir(slug, project=project)
+        # PK-миграция §3.E: для slug-less skill папка/identity = числовой id.
+        dir_name = skill_dir_name(slug, skill_id)
+        skill_id_str = str(skill_id) if skill_id is not None else None
+        slug_dir = self._target.slug_dir(dir_name, project=project)
         has_our_meta = slug_dir.exists() and read_meta(slug_dir) is not None
         is_foreign = slug_dir.exists() and not has_our_meta
 
@@ -314,6 +336,7 @@ class SkillInstaller:
                 scope=scope,
                 project=project,
                 slug_dir=slug_dir,
+                skill_id=skill_id_str,
             )
 
         # Чистая установка (или force перезатирает foreign-папку)
@@ -333,13 +356,15 @@ class SkillInstaller:
         else:
             slug_dir.mkdir(parents=True, exist_ok=True)
             (slug_dir / "SKILL.md").write_text(
-                f"---\nname: {slug}\nversion: {version}\n---\n\n# {slug}\n\n"
+                f"---\nname: {dir_name}\nversion: {version}\n---\n\n# {dir_name}\n\n"
                 "Stub — установлено без git репо.\n",
                 encoding="utf-8",
             )
         write_meta(
             slug_dir,
-            self._build_meta(slug, version, commit_sha, manifest, scope, project),
+            self._build_meta(
+                slug, version, commit_sha, manifest, scope, project, skill_id_str
+            ),
         )
         return InstallResult(
             slug=slug,
@@ -348,6 +373,7 @@ class SkillInstaller:
             is_update=False,
             scope=scope,
             filter_result=filter_result,
+            skill_id=skill_id_str,
         )
 
     # ------------------------------------------------------------------
@@ -356,7 +382,7 @@ class SkillInstaller:
     def _do_update(
         self,
         *,
-        slug: str,
+        slug: str | None,
         version: str,
         commit_sha: str,
         repo_url: str | None,
@@ -364,6 +390,7 @@ class SkillInstaller:
         scope: str,
         project: Path | None,
         slug_dir: Path,
+        skill_id: str | None = None,
     ) -> InstallResult:
         """Докачивает diff между установленной и новой версией.
 
@@ -385,11 +412,13 @@ class SkillInstaller:
             # Stub-режим: нечего докачивать, только meta.
             write_meta(
                 slug_dir,
-                self._build_meta(slug, version, commit_sha, manifest, scope, project),
+                self._build_meta(
+                    slug, version, commit_sha, manifest, scope, project, skill_id
+                ),
             )
             return InstallResult(
                 slug=slug, version=version, target_dir=slug_dir,
-                is_update=True, scope=scope,
+                is_update=True, scope=scope, skill_id=skill_id,
             )
 
         added, changed, removed = _manifest_diff(old_manifest, manifest)
@@ -424,7 +453,9 @@ class SkillInstaller:
         # 7. meta.
         write_meta(
             slug_dir,
-            self._build_meta(slug, version, commit_sha, manifest, scope, project),
+            self._build_meta(
+                slug, version, commit_sha, manifest, scope, project, skill_id
+            ),
         )
         return InstallResult(
             slug=slug,
@@ -433,6 +464,7 @@ class SkillInstaller:
             is_update=True,
             scope=scope,
             filter_result=filter_result,
+            skill_id=skill_id,
             update_diff={
                 "added": len(added),
                 "changed": len(changed),
@@ -446,29 +478,35 @@ class SkillInstaller:
     def remove(
         self,
         *,
-        slug: str,
+        slug: str | None,
         project: Path | None = None,
         keep_local: bool = False,
+        skill_id: str | int | None = None,
     ) -> RemoveResult:
         """Удаляет skill. `keep_local` сохраняет preserved_paths (_local/, ...).
 
         - keep_local=False → удаляет всю slug-папку.
         - keep_local=True  → удаляет всё КРОМЕ preserved_paths; если после
           этого preserved-контента не осталось — папка удаляется целиком.
+
+        Для slug-less skill (PK-миграция §3.E) identity каталога — числовой
+        ``skill_id``; передайте его, если ``slug`` не задан.
         """
         scope = "project" if project is not None else "global"
-        slug_dir = self._target.slug_dir(slug, project=project)
+        dir_name = skill_dir_name(slug, skill_id)
+        skill_id_str = str(skill_id) if skill_id is not None else None
+        slug_dir = self._target.slug_dir(dir_name, project=project)
         if not slug_dir.exists():
             return RemoveResult(
                 slug=slug, target_dir=slug_dir, scope=scope,
-                removed=False, kept_local=False,
+                removed=False, kept_local=False, skill_id=skill_id_str,
             )
 
         if not keep_local:
             _force_rmtree(slug_dir)
             return RemoveResult(
                 slug=slug, target_dir=slug_dir, scope=scope,
-                removed=True, kept_local=False,
+                removed=True, kept_local=False, skill_id=skill_id_str,
             )
 
         # keep_local: удаляем всё кроме preserved.
@@ -489,11 +527,11 @@ class SkillInstaller:
             _force_rmtree(slug_dir)
             return RemoveResult(
                 slug=slug, target_dir=slug_dir, scope=scope,
-                removed=True, kept_local=False,
+                removed=True, kept_local=False, skill_id=skill_id_str,
             )
         return RemoveResult(
             slug=slug, target_dir=slug_dir, scope=scope,
-            removed=True, kept_local=True,
+            removed=True, kept_local=True, skill_id=skill_id_str,
         )
 
     # ------------------------------------------------------------------
@@ -528,15 +566,17 @@ class SkillInstaller:
 
     def _build_meta(
         self,
-        slug: str,
+        slug: str | None,
         version: str,
         commit_sha: str,
         manifest: dict[str, Any],
         scope: str,
         project: Path | None,
+        skill_id: str | None = None,
     ) -> dict[str, Any]:
         return {
             "slug": slug,
+            "skill_id": skill_id,  # PK-миграция §3.E: identity для slug-less skill
             "version": version,
             "commit_sha": commit_sha,
             "manifest": manifest,
