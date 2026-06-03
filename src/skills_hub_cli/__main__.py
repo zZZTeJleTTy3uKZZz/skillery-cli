@@ -32,6 +32,7 @@ from skills_hub_cli.config import (
     save_tokens,
     set_active_profile,
 )
+from skills_hub_cli.core import linker, project_manifest
 from skills_hub_cli.core.agents import detect_agent, get_target
 from skills_hub_cli.core.installer import SkillInstaller, read_meta
 from skills_hub_cli.core.manifest_builder import build_manifest, git_commit_sha
@@ -170,7 +171,7 @@ def _maybe_auto_update(cfg: ClientConfig) -> None:
                 except Exception:
                     continue
                 if bundle["version"] != current:
-                    installer = SkillInstaller(target)
+                    installer = SkillInstaller(target, cfg.effective_store_dir())
                     installer.install(
                         slug=slug,
                         version=bundle["version"],
@@ -787,6 +788,70 @@ def _resolve_install_scope(
     return "project", actual_project.resolve()
 
 
+async def _install_chain(
+    cfg: ClientConfig,
+    access: str,
+    *,
+    slug: str,
+    channel: str,
+    scope: str,
+    project_path: Optional[Path],
+    force: bool,
+    agent_target,  # IAgentTarget
+) -> list[dict]:
+    """Качает bundle (+deps), материализует в стор, линкует в scope.
+
+    Возвращает installed_chain (list dict с slug/version/scope/linked/...).
+    Используется и cmd_install, и cmd_enable.
+    """
+    client = HubClient(
+        base_url=cfg.base_url, access_token=access,
+        on_token_refresh=_make_refresh_callback(cfg),
+    )
+    try:
+        bundle = await client.install_bundle(slug, channel=channel)
+        installer = SkillInstaller(agent_target, cfg.effective_store_dir())
+        chain = bundle.get(
+            "dependencies_chain",
+            [[bundle["skill_slug"], bundle["version"], bundle.get("repo_url")]],
+        )
+        installed_chain: list[dict] = []
+        for dep_slug, dep_version, dep_repo in chain:
+            if dep_slug == bundle["skill_slug"]:
+                dep_bundle = bundle
+            else:
+                sub = HubClient(
+                    base_url=cfg.base_url, access_token=access,
+                    on_token_refresh=_make_refresh_callback(cfg),
+                )
+                try:
+                    dep_bundle = await sub.install_bundle(dep_slug, channel=channel)
+                finally:
+                    await sub.close()
+            dep_id = dep_bundle.get("skill_id")
+            result = installer.install(
+                slug=dep_slug or None, version=dep_version,
+                commit_sha=dep_bundle["commit_sha"],
+                repo_url=dep_repo or dep_bundle.get("repo_url"),
+                manifest=dep_bundle["manifest"], project=project_path,
+                force=force, skill_id=dep_id,
+            )
+            installed_chain.append({
+                "slug": dep_slug, "skill_id": result.skill_id,
+                "version": dep_version, "is_update": result.is_update,
+                "target_dir": str(result.target_dir), "scope": result.scope,
+                "linked": result.linked, "link_kind": result.link_kind,
+            })
+            track_skill_event(
+                "skill.update" if result.is_update else "skill.install",
+                slug=dep_slug or (str(dep_id) if dep_id is not None else ""),
+                version=dep_version, scope=result.scope,
+            )
+        return installed_chain
+    finally:
+        await client.close()
+
+
 def cmd_install(
     slug: str = typer.Argument(
         ..., metavar="ID_ИЛИ_SLUG", help="id-или-slug скилла (backend принимает оба)"
@@ -820,70 +885,23 @@ def cmd_install(
     _ = actual_scope  # передаётся через project_path
 
     async def _do() -> None:
-        client = HubClient(
-            base_url=cfg.base_url,
-            access_token=access,
-            on_token_refresh=_make_refresh_callback(cfg),
+        installed_chain = await _install_chain(
+            cfg, access, slug=slug, channel=channel, scope=actual_scope,
+            project_path=project_path, force=force, agent_target=target,
         )
-        try:
-            bundle = await client.install_bundle(slug, channel=channel)
-        finally:
-            await client.close()
-        installer = SkillInstaller(target)
-        chain = bundle.get(
-            "dependencies_chain",
-            [[bundle["skill_slug"], bundle["version"], bundle.get("repo_url")]],
-        )
-        installed_chain: list[dict] = []
-        for dep_slug, dep_version, dep_repo in chain:
-            if dep_slug == bundle["skill_slug"]:
-                dep_bundle = bundle
-            else:
-                sub = HubClient(
-                    base_url=cfg.base_url,
-                    access_token=access,
-                    on_token_refresh=_make_refresh_callback(cfg),
-                )
-                try:
-                    dep_bundle = await sub.install_bundle(dep_slug, channel=channel)
-                finally:
-                    await sub.close()
-            # PK-миграция §3.E: slug опционален. Если backend отдал пустой slug,
-            # identity папки — числовой skill_id из bundle.
-            dep_id = dep_bundle.get("skill_id")
-            result = installer.install(
-                slug=dep_slug or None,
-                version=dep_version,
-                commit_sha=dep_bundle["commit_sha"],
-                repo_url=dep_repo or dep_bundle.get("repo_url"),
-                manifest=dep_bundle["manifest"],
-                project=project_path,
-                force=force,
-                skill_id=dep_id,
-            )
-            installed_chain.append(
-                {
-                    "slug": dep_slug,
-                    "skill_id": result.skill_id,
-                    "version": dep_version,
-                    "is_update": result.is_update,
-                    "target_dir": str(result.target_dir),
-                    "scope": result.scope,
-                }
-            )
-            # E23: telemetry — silent track install/update event.
-            track_skill_event(
-                "skill.update" if result.is_update else "skill.install",
-                slug=dep_slug or (str(dep_id) if dep_id is not None else ""),
-                version=dep_version,
-                scope=result.scope,
-            )
+        # project scope → фиксируем набор в манифесте проекта.
+        if project_path is not None:
+            for item in installed_chain:
+                ref = item["slug"] or item.get("skill_id")
+                if ref:
+                    project_manifest.add(project_path, str(ref))
 
         def _render(items: list) -> None:
             for item in items:
                 action = "Обновлён" if item["is_update"] else "Установлен"
+                mount = "📎" if item["linked"] else "📄"
                 console.print(
-                    f"[green]✓[/] {action} ({item['scope']}): "
+                    f"[green]✓[/] {action} ({item['scope']}) {mount} "
                     f"{item['slug']}@{item['version']} → {item['target_dir']}"
                 )
 
@@ -949,7 +967,7 @@ def cmd_update(
         )
         results: list[dict] = []
         try:
-            installer = SkillInstaller(target)
+            installer = SkillInstaller(target, cfg.effective_store_dir())
             for ref, proj in targets:
                 meta = read_meta(target.slug_dir(ref, project=proj))
                 current_version = (meta or {}).get("version", "0.0.0")

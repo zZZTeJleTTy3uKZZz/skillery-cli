@@ -82,8 +82,10 @@ class ClientConfig:
     """text | json — формат вывода по умолчанию.
     Можно переопределить через --json флаг или env SKILLS_HUB_OUTPUT=json.
     Для AI агентов рекомендуется json."""
-    default_install_scope: str = "global"
+    default_install_scope: str = "project"
     """global | project — куда install ставит skill по умолчанию (без --scope).
+    Дефолт теперь project: навык включается в текущий проект через стор+ссылку
+    и пишется в .skills-hub/skills.toml.
     global → ~/.claude/skills/<id-или-slug>/  (видны во всех проектах)
     project → <project>/.claude/skills/<id-или-slug>/  (только в указанном проекте)
     """
@@ -140,7 +142,7 @@ class ClientConfig:
             auto_update_cooldown_min=int(data.get("auto_update_cooldown_min", 60)),
             last_auto_update_at=data.get("last_auto_update_at"),
             output_format=str(data.get("output_format", "text")),
-            default_install_scope=str(data.get("default_install_scope", "global")),
+            default_install_scope=str(data.get("default_install_scope", "project")),
             default_project_dir=data.get("default_project_dir"),
             store_dir=data.get("store_dir"),
             web_ui_url=data.get("web_ui_url"),
