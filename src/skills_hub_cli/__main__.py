@@ -612,30 +612,29 @@ def _scan_installed(
     *,
     project: Path | None,
 ) -> list[dict]:
-    """Сканирует папку (global или project) и возвращает meta-инфу установленных skills."""
+    """Сканирует scope-папку, возвращает meta + признак ссылки (linked/copied)."""
     base = target.base_dir(project=project)
     items: list[dict] = []
     if base.exists():
         for d in base.iterdir():
             meta = read_meta(d)
             if meta:
-                # PK-миграция §3.E: slug опционален. `ref` — стабильный
-                # идентификатор для install-bundle / папки: slug ?? skill_id ??
-                # имя каталога (равно тому, под чем skill установлен на диске).
                 ref = meta.get("slug") or meta.get("skill_id") or d.name
-                items.append(
-                    {
-                        "slug": meta.get("slug"),
-                        "skill_id": meta.get("skill_id"),
-                        "ref": ref,
-                        "version": meta.get("version"),
-                        "commit_sha": meta.get("commit_sha"),
-                        "agent": meta.get("agent"),
-                        "scope": meta.get("scope") or ("project" if project else "global"),
-                        "project": meta.get("project") or (str(project) if project else None),
-                        "path": str(d),
-                    }
-                )
+                linked = linker.is_link(d)
+                tgt = linker.link_target(d) if linked else None
+                items.append({
+                    "slug": meta.get("slug"),
+                    "skill_id": meta.get("skill_id"),
+                    "ref": ref,
+                    "version": meta.get("version"),
+                    "commit_sha": meta.get("commit_sha"),
+                    "agent": meta.get("agent"),
+                    "scope": "project" if project else "global",
+                    "project": str(project) if project else None,
+                    "path": str(d),
+                    "linked": linked,
+                    "link_target": str(tgt) if tgt else None,
+                })
     return items
 
 
@@ -676,6 +675,7 @@ def cmd_list(
             table.add_column("id-или-slug")
             table.add_column("version")
             table.add_column("scope")
+            table.add_column("mount")
             table.add_column("path", overflow="fold")
             for s in rows:
                 table.add_row(
@@ -683,6 +683,7 @@ def cmd_list(
                     s.get("slug") or s.get("ref") or "—",
                     s["version"] or "—",
                     s["scope"],
+                    "📎 link" if s.get("linked") else "📄 copy",
                     s["path"],
                 )
             console.print(table)
@@ -1101,6 +1102,88 @@ def cmd_migrate(
                 console.print(f"  [red]✗[/] {f['name']}: {f['error']}")
 
     emit_data({"dry_run": dry_run, "reports": reports}, text_renderer=_render)
+
+
+def cmd_store_list() -> None:
+    """Что лежит в центральном сторе (имя, версия, путь)."""
+    cfg = ClientConfig.load()
+    store_root = cfg.effective_store_dir()
+    items: list[dict] = []
+    if store_root.exists():
+        for d in sorted(store_root.iterdir(), key=lambda p: p.name):
+            if not d.is_dir():
+                continue
+            meta = read_meta(d) or {}
+            items.append({
+                "name": d.name, "slug": meta.get("slug"),
+                "version": meta.get("version"), "path": str(d),
+            })
+
+    def _render(rows: list) -> None:
+        if not rows:
+            console.print(f"[yellow]Стор пуст[/] ({store_root})")
+            return
+        table = Table(title=f"Стор ({store_root})")
+        table.add_column("навык")
+        table.add_column("version")
+        table.add_column("path", overflow="fold")
+        for s in rows:
+            table.add_row(s["name"], s["version"] or "—", s["path"])
+        console.print(table)
+
+    emit_data(items, text_renderer=_render)
+
+
+def cmd_store_path() -> None:
+    """Печатает путь центрального стора."""
+    cfg = ClientConfig.load()
+    emit_data(
+        {"store_dir": str(cfg.effective_store_dir())},
+        text_renderer=lambda d: console.print(d["store_dir"]),
+    )
+
+
+def cmd_store_gc(
+    dry_run: bool = typer.Option(False, "--dry-run", help="Показать кандидатов, не удаляя"),
+) -> None:
+    """Удалить из стора навыки без ссылок в GLOBAL scope.
+
+    ВНИМАНИЕ: project-scope ссылки НЕ сканируются (реестр проектов не ведётся) —
+    навык, на который ссылается только проект, будет сочтён orphan. Используйте
+    --dry-run для проверки.
+    """
+    from skills_hub_cli.core.installer import _force_rmtree
+
+    cfg = ClientConfig.load()
+    target = get_target(cfg.agent)
+    store_root = cfg.effective_store_dir()
+
+    referenced: set[str] = set()
+    base = target.base_dir()  # global
+    if base.exists():
+        for d in base.iterdir():
+            if linker.is_link(d):
+                tgt = linker.link_target(d)
+                if tgt is not None:
+                    referenced.add(os.path.normcase(str(tgt)))
+
+    candidates: list[str] = []
+    if store_root.exists():
+        for d in sorted(store_root.iterdir(), key=lambda p: p.name):
+            if not d.is_dir():
+                continue
+            key = os.path.normcase(os.path.abspath(d))
+            if key not in referenced:
+                candidates.append(d.name)
+                if not dry_run:
+                    _force_rmtree(d)
+
+    def _render(p: dict) -> None:
+        verb = "Кандидаты на удаление" if dry_run else "Удалено из стора"
+        console.print(f"[yellow]{verb}[/] ({len(p['candidates'])}): {', '.join(p['candidates']) or '—'}")
+        console.print("[dim]project-scope ссылки не учитываются — проверьте --dry-run.[/]")
+
+    emit_data({"candidates": candidates, "dry_run": dry_run}, text_renderer=_render)
 
 
 def cmd_update(
@@ -1790,6 +1873,11 @@ def build_app() -> typer.Typer:
         app.command(name="disable")(cmd_disable)
         app.command(name="sync")(cmd_sync)
         app.command(name="migrate")(cmd_migrate)
+        store_app = typer.Typer(no_args_is_help=True, help="Центральный стор навыков")
+        app.add_typer(store_app, name="store")
+        store_app.command("list")(cmd_store_list)
+        store_app.command("path")(cmd_store_path)
+        store_app.command("gc")(cmd_store_gc)
     if cfg.has_permission("skill.report_issue"):
         app.command(name="report")(cmd_report)
 
