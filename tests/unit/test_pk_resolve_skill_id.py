@@ -18,7 +18,9 @@ from skills_hub_cli.core.transport import ApiError, HubClient
 @pytest.mark.asyncio
 async def test_numeric_value_is_passed_through_without_request() -> None:
     """Числовой id отдаётся как есть и НЕ ходит на backend."""
-    with respx.mock(base_url="http://localhost:8000") as router:
+    # assert_all_called=False: route намеренно НЕ вызывается (fast-path для id).
+    # Новые версии respx по умолчанию ассертят вызов всех routes.
+    with respx.mock(base_url="http://localhost:8000", assert_all_called=False) as router:
         route = router.get("/skills/123").mock(return_value=Response(200, json={"id": 999}))
         client = HubClient(base_url="http://localhost:8000", access_token="t")
         try:
