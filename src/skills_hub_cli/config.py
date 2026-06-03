@@ -44,6 +44,12 @@ def _default_base_url() -> str:
     return os.environ.get("SKILLS_HUB_BASE_URL", "http://localhost:8000")
 
 
+def _default_store_dir() -> Path:
+    return Path(
+        os.environ.get("SKILLS_HUB_STORE_DIR", "~/.skills-hub/store")
+    ).expanduser()
+
+
 def _keyring_namespace() -> str:
     profile = active_profile()
     return f"{KEYRING_SERVICE}:{profile}" if profile else KEYRING_SERVICE
@@ -83,6 +89,9 @@ class ClientConfig:
     """
     default_project_dir: str | None = None
     """Дефолтный project root для scope=project. Если null — текущий cwd."""
+    store_dir: str | None = None
+    """Путь центрального стора навыков. None → SKILLS_HUB_STORE_DIR / ~/.skills-hub/store.
+    Навык материализуется в стор один раз; в scope кладётся junction/symlink на него."""
     web_ui_url: str | None = None
     """https://hub.example — куда CLI открывает браузер для handoff в Web UI.
     None → derive из base_url (api.* → host, localhost:8000 → localhost:3000)."""
@@ -90,6 +99,11 @@ class ClientConfig:
     def __post_init__(self) -> None:
         if not self.base_url:
             self.base_url = _default_base_url()
+
+    def effective_store_dir(self) -> Path:
+        if self.store_dir:
+            return Path(self.store_dir).expanduser()
+        return _default_store_dir()
 
     def effective_web_ui_url(self) -> str:
         """URL Web UI: explicit override > derive из base_url > base_url как fallback."""
@@ -128,6 +142,7 @@ class ClientConfig:
             output_format=str(data.get("output_format", "text")),
             default_install_scope=str(data.get("default_install_scope", "global")),
             default_project_dir=data.get("default_project_dir"),
+            store_dir=data.get("store_dir"),
             web_ui_url=data.get("web_ui_url"),
         )
 
@@ -159,6 +174,8 @@ class ClientConfig:
         data["default_install_scope"] = self.default_install_scope
         if self.default_project_dir:
             data["default_project_dir"] = self.default_project_dir
+        if self.store_dir:
+            data["store_dir"] = self.store_dir
         if self.web_ui_url:
             data["web_ui_url"] = self.web_ui_url
         actual_path.write_text(tomli_w.dumps(data), encoding="utf-8")
