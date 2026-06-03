@@ -31,7 +31,7 @@ def test_skill_dir_name_requires_some_identity() -> None:
 def test_install_slugless_uses_id_as_folder(tmp_path) -> None:
     """slug=None + skill_id=77 → папка ~/.claude/skills/77/ + meta.skill_id."""
     target = ClaudeCodeTarget(root=tmp_path / ".claude")
-    installer = SkillInstaller(target)
+    installer = SkillInstaller(target, store_dir=tmp_path / "store")
     result = installer.install(
         slug=None,
         skill_id=77,
@@ -54,7 +54,7 @@ def test_install_slugless_uses_id_as_folder(tmp_path) -> None:
 def test_reinstall_slugless_by_id_is_update(tmp_path) -> None:
     """Повторный install по тому же id попадает в ту же папку → update."""
     target = ClaudeCodeTarget(root=tmp_path / ".claude")
-    installer = SkillInstaller(target)
+    installer = SkillInstaller(target, store_dir=tmp_path / "store")
     installer.install(
         slug=None, skill_id=77, version="1.0.0", commit_sha="aaa0000000",
         repo_url=None, manifest={"version": "1.0.0", "description": "x", "files": []},
@@ -71,7 +71,7 @@ def test_reinstall_slugless_by_id_is_update(tmp_path) -> None:
 def test_remove_slugless_by_id(tmp_path) -> None:
     """remove(skill_id=77) удаляет папку с числовым именем."""
     target = ClaudeCodeTarget(root=tmp_path / ".claude")
-    installer = SkillInstaller(target)
+    installer = SkillInstaller(target, store_dir=tmp_path / "store")
     installer.install(
         slug=None, skill_id=77, version="1.0.0", commit_sha="ccc0000000",
         repo_url=None, manifest={"version": "1.0.0", "description": "x", "files": []},
@@ -85,7 +85,7 @@ def test_remove_slugless_by_id(tmp_path) -> None:
 def test_install_with_slug_still_uses_slug_folder(tmp_path) -> None:
     """Регрессия: при наличии slug папка по-прежнему slug, не id."""
     target = ClaudeCodeTarget(root=tmp_path / ".claude")
-    installer = SkillInstaller(target)
+    installer = SkillInstaller(target, store_dir=tmp_path / "store")
     result = installer.install(
         slug="bitrix24",
         skill_id=42,

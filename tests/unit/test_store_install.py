@@ -26,3 +26,86 @@ def test_effective_store_dir_default(monkeypatch: pytest.MonkeyPatch) -> None:
     # Дефолт — ~/.skills-hub/store (раскрытый).
     assert cfg.effective_store_dir().name == "store"
     assert ".skills-hub" in str(cfg.effective_store_dir())
+
+
+from skills_hub_cli.core import linker
+from skills_hub_cli.core.agents import ClaudeCodeTarget
+from skills_hub_cli.core.installer import SkillInstaller, read_meta
+
+_MANIFEST = {"version": "1.0.0", "description": "x", "files": []}
+
+
+def _installer(tmp_path: Path) -> tuple[SkillInstaller, ClaudeCodeTarget, Path]:
+    target = ClaudeCodeTarget(root=tmp_path / ".claude")
+    store = tmp_path / "store"
+    return SkillInstaller(target, store_dir=store), target, store
+
+
+def test_install_materializes_store_and_links(tmp_path: Path) -> None:
+    inst, target, store = _installer(tmp_path)
+    res = inst.install(
+        slug="demo", version="1.0.0", commit_sha="aaaa111111",
+        repo_url=None, manifest=_MANIFEST,
+    )
+    # Контент материализован в стор.
+    store_dir = store / "demo"
+    assert (store_dir / "SKILL.md").exists()
+    assert read_meta(store_dir) is not None
+    # В scope — ссылка на стор (на Windows junction, POSIX symlink).
+    link = target.slug_dir("demo")
+    assert res.target_dir == link
+    assert res.store_dir == store_dir
+    assert res.linked is True
+    assert linker.is_link(link)
+    assert (link / "SKILL.md").read_text(encoding="utf-8").startswith("---")
+
+
+def test_install_into_two_scopes_shares_one_store(tmp_path: Path) -> None:
+    inst, target, store = _installer(tmp_path)
+    inst.install(slug="demo", version="1.0.0", commit_sha="a1", repo_url=None, manifest=_MANIFEST)
+    project = tmp_path / "proj"
+    inst.install(slug="demo", version="1.0.0", commit_sha="a1", repo_url=None,
+                 manifest=_MANIFEST, project=project)
+    # Один стор, две ссылки.
+    assert (store / "demo").exists()
+    assert linker.is_link(target.slug_dir("demo"))
+    assert linker.is_link(target.slug_dir("demo", project=project))
+
+
+def test_install_fallback_to_copy_when_link_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inst, target, store = _installer(tmp_path)
+    monkeypatch.setattr(
+        linker, "create_link",
+        lambda link, tgt: (_ for _ in ()).throw(OSError("no perms")),
+    )
+    res = inst.install(slug="demo", version="1.0.0", commit_sha="a1",
+                       repo_url=None, manifest=_MANIFEST)
+    assert res.linked is False
+    assert res.link_kind == "copy"
+    link = target.slug_dir("demo")
+    assert not linker.is_link(link)
+    assert (link / "SKILL.md").exists()  # реальная копия
+    assert (link / "_skill_meta.json").exists()
+
+
+def test_install_refuses_foreign_scope_dir_without_force(tmp_path: Path) -> None:
+    inst, target, store = _installer(tmp_path)
+    link = target.slug_dir("demo")
+    link.mkdir(parents=True)
+    (link / "hand.txt").write_text("manual", encoding="utf-8")  # чужая папка, нет meta
+    with pytest.raises(RuntimeError, match="не управляется skills-hub"):
+        inst.install(slug="demo", version="1.0.0", commit_sha="a1",
+                     repo_url=None, manifest=_MANIFEST)
+
+
+def test_install_force_replaces_foreign_scope_dir_with_link(tmp_path: Path) -> None:
+    inst, target, store = _installer(tmp_path)
+    link = target.slug_dir("demo")
+    link.mkdir(parents=True)
+    (link / "hand.txt").write_text("manual", encoding="utf-8")
+    res = inst.install(slug="demo", version="1.0.0", commit_sha="a1",
+                       repo_url=None, manifest=_MANIFEST, force=True)
+    assert res.linked is True
+    assert linker.is_link(target.slug_dir("demo"))

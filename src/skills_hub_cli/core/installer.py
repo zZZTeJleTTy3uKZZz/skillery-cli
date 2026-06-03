@@ -163,6 +163,9 @@ class InstallResult:
     filter_result: dict[str, int] | None = None  # {"removed": N, "kept": M} после filter
     update_diff: dict[str, int] | None = None  # {"added": A, "changed": C, "removed": R} при update
     skill_id: str | None = None  # числовой id (строкой); identity папки для slug-less
+    store_dir: Path | None = None  # путь в центральном сторе (источник контента)
+    linked: bool = False           # True если scope-ссылка; False если copy-fallback
+    link_kind: str = "copy"        # "junction" | "symlink" | "copy"
 
 
 @dataclass
@@ -295,8 +298,15 @@ def _prune_empty_parents(start: Path, stop: Path) -> None:
 class SkillInstaller:
     """MVP: install через git clone + write meta. Scope = global | project."""
 
-    def __init__(self, target: IAgentTarget) -> None:
+    def __init__(self, target: IAgentTarget, store_dir: Path | None = None) -> None:
         self._target = target
+        # Лениво, чтобы не тянуть config на уровне модуля.
+        from skills_hub_cli.config import _default_store_dir
+
+        self._store_dir = Path(store_dir) if store_dir is not None else _default_store_dir()
+
+    def _store_path(self, dir_name: str) -> Path:
+        return self._store_dir / dir_name
 
     def install(
         self,
@@ -311,70 +321,90 @@ class SkillInstaller:
         skill_id: str | int | None = None,
     ) -> InstallResult:
         scope = "project" if project is not None else "global"
-        # PK-миграция §3.E: для slug-less skill папка/identity = числовой id.
         dir_name = skill_dir_name(slug, skill_id)
         skill_id_str = str(skill_id) if skill_id is not None else None
-        slug_dir = self._target.slug_dir(dir_name, project=project)
-        has_our_meta = slug_dir.exists() and read_meta(slug_dir) is not None
-        is_foreign = slug_dir.exists() and not has_our_meta
+        store_dir = self._store_path(dir_name)
 
-        if is_foreign and not force:
-            raise RuntimeError(
-                f"Папка {slug_dir} уже существует и не управляется skills-hub "
-                "(нет _skill_meta.json). Перезаписать через --force "
-                "(удалит содержимое!) или удалить вручную."
-            )
+        # 1. Материализация контента в центральный стор (idempotent).
+        mat = self._materialize_store(
+            slug=slug, dir_name=dir_name, version=version, commit_sha=commit_sha,
+            repo_url=repo_url, manifest=manifest, scope=scope, project=project,
+            skill_id=skill_id_str,
+        )
 
-        # Уже установлен нами → incremental update (ТЗ §8.2).
+        # 2. Линковка стор → scope агента (fallback на copy).
+        link = self._target.slug_dir(dir_name, project=project)
+        linked, link_kind = self._link_into_scope(link, store_dir, force=force)
+
+        return InstallResult(
+            slug=slug, version=version, target_dir=link, is_update=mat["is_update"],
+            scope=scope, filter_result=mat["filter_result"],
+            update_diff=mat["update_diff"], skill_id=skill_id_str,
+            store_dir=store_dir, linked=linked, link_kind=link_kind,
+        )
+
+    def _materialize_store(
+        self, *, slug, dir_name, version, commit_sha, repo_url, manifest,
+        scope, project, skill_id,
+    ) -> dict[str, Any]:
+        """Кладёт контент навыка в store_dir. Возвращает {is_update, filter_result, update_diff}."""
+        store_dir = self._store_path(dir_name)
+        has_our_meta = store_dir.exists() and read_meta(store_dir) is not None
+        is_foreign = store_dir.exists() and not has_our_meta
+        if is_foreign:
+            _force_rmtree(store_dir)  # стор — наш каталог, аномалию перезатираем
+            has_our_meta = False
+
         if has_our_meta:
-            return self._do_update(
-                slug=slug,
-                version=version,
-                commit_sha=commit_sha,
-                repo_url=repo_url,
-                manifest=manifest,
-                scope=scope,
-                project=project,
-                slug_dir=slug_dir,
-                skill_id=skill_id_str,
+            up = self._do_update(
+                slug=slug, version=version, commit_sha=commit_sha, repo_url=repo_url,
+                manifest=manifest, scope=scope, project=project, slug_dir=store_dir,
+                skill_id=skill_id,
             )
+            return {"is_update": True, "filter_result": up.filter_result,
+                    "update_diff": up.update_diff}
 
-        # Чистая установка (или force перезатирает foreign-папку)
-        if is_foreign and force:
-            _force_rmtree(slug_dir)
-
-        slug_dir.parent.mkdir(parents=True, exist_ok=True)
+        store_dir.parent.mkdir(parents=True, exist_ok=True)
         filter_result: dict[str, int] | None = None
         if repo_url:
             with self._clone_version(repo_url, version) as cloned:
-                # Копируем cloned-содержимое в slug_dir через traversal-guard.
-                safe_copy_tree(cloned, slug_dir)
-            # Применяем dev/release фильтр после копирования:
-            #   .skillignore — удаляет matched (dev-файлы);
-            #   SKILL.md `files:` allowlist — оставляет только matched.
-            filter_result = apply_skill_filter(slug_dir)
+                safe_copy_tree(cloned, store_dir)
+            filter_result = apply_skill_filter(store_dir)
         else:
-            slug_dir.mkdir(parents=True, exist_ok=True)
-            (slug_dir / "SKILL.md").write_text(
+            store_dir.mkdir(parents=True, exist_ok=True)
+            (store_dir / "SKILL.md").write_text(
                 f"---\nname: {dir_name}\nversion: {version}\n---\n\n# {dir_name}\n\n"
                 "Stub — установлено без git репо.\n",
                 encoding="utf-8",
             )
         write_meta(
-            slug_dir,
-            self._build_meta(
-                slug, version, commit_sha, manifest, scope, project, skill_id_str
-            ),
+            store_dir,
+            self._build_meta(slug, version, commit_sha, manifest, scope, project, skill_id),
         )
-        return InstallResult(
-            slug=slug,
-            version=version,
-            target_dir=slug_dir,
-            is_update=False,
-            scope=scope,
-            filter_result=filter_result,
-            skill_id=skill_id_str,
-        )
+        return {"is_update": False, "filter_result": filter_result, "update_diff": None}
+
+    def _link_into_scope(
+        self, link: Path, store_dir: Path, *, force: bool
+    ) -> tuple[bool, str]:
+        """Создаёт ссылку scope→стор. Возвращает (linked, link_kind)."""
+        from skills_hub_cli.core import linker
+
+        if not linker.is_link(link) and link.exists():
+            has_meta = read_meta(link) is not None
+            if not has_meta and not force:
+                raise RuntimeError(
+                    f"Папка {link} уже существует и не управляется skills-hub "
+                    "(нет _skill_meta.json). Перезаписать через --force "
+                    "(удалит содержимое!) или удалить вручную."
+                )
+            _force_rmtree(link)  # наша copy-fallback ИЛИ --force → заменяем ссылкой
+        try:
+            kind = linker.create_link(link, store_dir)
+            return True, kind
+        except OSError:
+            # Нет прав / ФС не поддерживает ссылки → копируем стор в scope.
+            safe_copy_tree(store_dir, link)
+            return False, "copy"
 
     # ------------------------------------------------------------------
     #  incremental update (ТЗ §8.2)

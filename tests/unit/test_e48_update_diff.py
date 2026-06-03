@@ -65,7 +65,7 @@ def _install_fresh(
 ) -> tuple[SkillInstaller, Path]:
     monkeypatch.setattr(installer_mod.subprocess, "run", _make_fake_clone(layout))
     target = ClaudeCodeTarget(root=tmp_path / ".claude")
-    inst = SkillInstaller(target)
+    inst = SkillInstaller(target, store_dir=tmp_path / "store")
     res = inst.install(
         slug="demo",
         version="1.0.0",

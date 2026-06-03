@@ -52,7 +52,7 @@ def test_install_applies_skillignore_after_clone(
     monkeypatch.setattr(installer_mod.subprocess, "run", _make_fake_clone(layout))
 
     target = ClaudeCodeTarget(root=tmp_path / ".claude")
-    inst = SkillInstaller(target)
+    inst = SkillInstaller(target, store_dir=tmp_path / "store")
     result = inst.install(
         slug="demo",
         version="0.1.0",
@@ -98,7 +98,7 @@ files:
     monkeypatch.setattr(installer_mod.subprocess, "run", _make_fake_clone(layout))
 
     target = ClaudeCodeTarget(root=tmp_path / ".claude")
-    inst = SkillInstaller(target)
+    inst = SkillInstaller(target, store_dir=tmp_path / "store")
     result = inst.install(
         slug="demo",
         version="0.1.0",
@@ -131,7 +131,7 @@ def test_install_no_skillignore_no_allowlist_keeps_everything(
     monkeypatch.setattr(installer_mod.subprocess, "run", _make_fake_clone(layout))
 
     target = ClaudeCodeTarget(root=tmp_path / ".claude")
-    inst = SkillInstaller(target)
+    inst = SkillInstaller(target, store_dir=tmp_path / "store")
     result = inst.install(
         slug="demo",
         version="0.1.0",
@@ -151,7 +151,7 @@ def test_install_no_skillignore_no_allowlist_keeps_everything(
 def test_install_stub_mode_no_filter_applied(tmp_path: Path) -> None:
     """Stub-режим (repo_url=None) НЕ вызывает filter."""
     target = ClaudeCodeTarget(root=tmp_path / ".claude")
-    inst = SkillInstaller(target)
+    inst = SkillInstaller(target, store_dir=tmp_path / "store")
     result = inst.install(
         slug="demo",
         version="0.1.0",

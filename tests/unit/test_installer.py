@@ -9,7 +9,7 @@ from skills_hub_cli.core.installer import SkillInstaller, read_meta
 
 def test_install_without_repo_creates_stub(tmp_path: Path) -> None:
     target = ClaudeCodeTarget(root=tmp_path / ".claude")
-    installer = SkillInstaller(target)
+    installer = SkillInstaller(target, store_dir=tmp_path / "store")
     result = installer.install(
         slug="wb-api",
         version="0.1.0",
@@ -27,7 +27,7 @@ def test_install_without_repo_creates_stub(tmp_path: Path) -> None:
 
 def test_reinstall_marks_as_update(tmp_path: Path) -> None:
     target = ClaudeCodeTarget(root=tmp_path / ".claude")
-    installer = SkillInstaller(target)
+    installer = SkillInstaller(target, store_dir=tmp_path / "store")
     installer.install(
         slug="wb-api",
         version="0.1.0",
