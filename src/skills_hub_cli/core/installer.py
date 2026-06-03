@@ -417,6 +417,51 @@ class SkillInstaller:
         link = self._target.slug_dir(dir_name, project=project)
         return self._link_into_scope(link, store_dir, force=force)
 
+    def migrate_scope(
+        self, *, project: Path | None = None, dry_run: bool = False
+    ) -> dict[str, list]:
+        """Переводит наши copy-установки в scope на модель стор+ссылка.
+
+        - copy (есть _skill_meta.json, не ссылка) → перенос в стор + ссылка;
+        - foreign (нет meta) → пропуск;
+        - already-linked (ссылка) → пропуск.
+        dry_run только собирает план, ничего не меняя.
+        """
+        from skills_hub_cli.core import linker
+
+        base = self._target.base_dir(project=project)
+        report: dict[str, list] = {
+            "migrated": [], "skipped_foreign": [], "skipped_linked": [], "failed": [],
+        }
+        if not base.exists():
+            return report
+        for d in sorted(base.iterdir(), key=lambda p: p.name):
+            try:
+                if linker.is_link(d):
+                    report["skipped_linked"].append(d.name)
+                    continue
+                if not d.is_dir():
+                    continue
+                if read_meta(d) is None:
+                    report["skipped_foreign"].append(d.name)
+                    continue
+                if dry_run:
+                    report["migrated"].append(d.name)
+                    continue
+                dir_name = d.name
+                store_dir = self._store_path(dir_name)
+                if store_dir.exists():
+                    _force_rmtree(d)  # стор уже есть → копию убираем
+                else:
+                    store_dir.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(d), str(store_dir))
+                link = self._target.slug_dir(dir_name, project=project)
+                self._link_into_scope(link, store_dir, force=True)
+                report["migrated"].append(dir_name)
+            except Exception as e:  # noqa: BLE001
+                report["failed"].append({"name": d.name, "error": str(e)})
+        return report
+
     # ------------------------------------------------------------------
     #  incremental update (ТЗ §8.2)
     # ------------------------------------------------------------------

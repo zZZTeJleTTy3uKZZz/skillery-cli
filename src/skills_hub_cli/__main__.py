@@ -1066,6 +1066,43 @@ def cmd_sync(
     _run(_do())
 
 
+def cmd_migrate(
+    scope: str = typer.Option("all", "--scope", help="all | global | project"),
+    project: Optional[Path] = typer.Option(None, "--project"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Показать план, ничего не меняя"),
+    agent: Optional[str] = typer.Option(None),
+) -> None:
+    """Перевести существующие copy-установки на модель стор+ссылка.
+
+    Чужие папки (без _skill_meta.json) и внешние ссылки не трогаются.
+    """
+    cfg = ClientConfig.load()
+    target = get_target(agent or cfg.agent)
+    installer = SkillInstaller(target, cfg.effective_store_dir())
+    project_path = _resolve_project(cfg, project)
+
+    reports: dict[str, dict] = {}
+    if scope in ("global", "all"):
+        reports["global"] = installer.migrate_scope(project=None, dry_run=dry_run)
+    if scope in ("project", "all"):
+        reports["project"] = installer.migrate_scope(project=project_path, dry_run=dry_run)
+
+    def _render(rs: dict) -> None:
+        prefix = "[yellow]dry-run[/] " if dry_run else ""
+        for sc, r in rs.items():
+            console.print(
+                f"{prefix}migrate {sc}: "
+                f"→стор {len(r['migrated'])}  пропущено(чужое) {len(r['skipped_foreign'])}  "
+                f"пропущено(ссылки) {len(r['skipped_linked'])}  ошибок {len(r['failed'])}"
+            )
+            for name in r["migrated"]:
+                console.print(f"  [green]→[/] {name}")
+            for f in r["failed"]:
+                console.print(f"  [red]✗[/] {f['name']}: {f['error']}")
+
+    emit_data({"dry_run": dry_run, "reports": reports}, text_renderer=_render)
+
+
 def cmd_update(
     slug: Optional[str] = typer.Argument(
         None, metavar="[ID_ИЛИ_SLUG]", help="id-или-slug скилла; без аргумента — все"
@@ -1752,6 +1789,7 @@ def build_app() -> typer.Typer:
         app.command(name="enable")(cmd_enable)
         app.command(name="disable")(cmd_disable)
         app.command(name="sync")(cmd_sync)
+        app.command(name="migrate")(cmd_migrate)
     if cfg.has_permission("skill.report_issue"):
         app.command(name="report")(cmd_report)
 
