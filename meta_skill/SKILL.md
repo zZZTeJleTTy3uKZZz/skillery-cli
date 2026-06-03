@@ -62,6 +62,24 @@ skills-hub status                                # global + project + agent + lo
 skills-hub update --all                          # global + project одной командой
 ```
 
+## Модель установки: центральный стор + ссылки
+
+Навык материализуется **один раз** в центральный стор
+(`~/.skills-hub/store/<slug>/`, путь настраивается `SKILLS_HUB_STORE_DIR`).
+В каждый scope CLI кладёт **junction (Windows) / symlink (mac/linux)** на стор —
+не копию. Это даёт:
+- один контент на диске, много ссылок (global + любые проекты);
+- `update` обновляет стор → все проекты сразу видят новую версию;
+- динамическое управление набором проекта без перекачки.
+
+**Scope по умолчанию теперь `project`** (`install <slug>` без `--scope` включает
+навык в текущий проект и пишет `.skills-hub/skills.toml`). Для глобальной
+установки: `install <slug> --scope global`.
+
+Если ссылку создать нельзя (нет прав/ФС не поддерживает) — CLI делает копию и
+предупреждает (`📄 copy` в `status`); динамическое управление для такого навыка
+ограничено.
+
 ## Команды по группам (доступность зависит от RBAC permissions в JWT)
 
 ### Auth + статус (always-on)
@@ -85,6 +103,12 @@ skills-hub update --all                          # global + project одной �
 | `skills-hub show <id-или-slug>`                        | Детали (включая versions / tags / repo)   |
 | `skills-hub install <id-или-slug> [--scope ...] [--force]` | Поставить (global или project)        |
 | `skills-hub update [<id-или-slug>] [--all] [--scope ...]` | Обновить установленные                 |
+| `skills-hub enable <id-или-slug> [--project P]`        | Включить навык в наборе проекта (стор + ссылка + манифест) |
+| `skills-hub disable <id-или-slug> [--project P]`       | Выключить из набора проекта (снять ссылку + манифест; стор цел) |
+| `skills-hub sync [--project P] [--no-prune]`           | Привести project scope к `.skills-hub/skills.toml` |
+| `skills-hub migrate [--scope all\|global\|project] [--dry-run]` | Перевести старые copy-установки в стор+ссылки |
+| `skills-hub store list / path / gc`                    | Содержимое стора / путь / сборка мусора |
+| `skills-hub remove <id-или-slug> [--purge]`            | Снять ссылку (с `--purge` — и из стора) |
 
 ### Оценки и комментарии — E7 (`skill.rate`, `skill.comment`)
 

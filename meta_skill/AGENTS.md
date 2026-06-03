@@ -87,10 +87,26 @@ skills-hub --json install <id-или-slug>         # global по дефолту
 skills-hub --json install <id-или-slug> --scope project --project /path/to/proj
 ```
 
-Дефолтный scope берётся из `cfg.default_install_scope` (по дефолту `global`).
+Дефолтный scope берётся из `cfg.default_install_scope` (по дефолту `project`).
 
 После install в папке `<id-или-slug>/_skill_meta.json` лежит полный manifest +
 commit_sha + scope + `skill_id` (identity для slug-less skill).
+
+## Динамическое управление набором навыков проекта
+
+Набор активных в проекте навыков фиксируется в `<project>/.skills-hub/skills.toml`
+(коммитится в git). Алгоритм для агента:
+
+1. **Войти в проект** → `skills-hub status --project .` (что уже включено).
+2. **Включить нужные навыки** → `skills-hub enable <slug>` (для каждого). Создаёт
+   ссылку из стора в `<project>/.claude/skills/<slug>` и пишет манифест.
+3. **Воспроизвести набор на другой машине / после clone** → `skills-hub sync`
+   (создаёт ссылки по манифесту, докачивая отсутствующее в сторе).
+4. **Выключить ненужное** → `skills-hub disable <slug>` (ссылка снята, стор цел).
+5. **Перенести старые копии** → `skills-hub migrate --dry-run` затем без флага.
+
+Один навык в сторе используется во многих проектах — `enable`/`disable` дёшевы
+(операции со ссылками, без перекачки).
 
 ## Шаг 3 — обновления
 

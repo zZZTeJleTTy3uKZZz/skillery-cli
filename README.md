@@ -22,11 +22,17 @@ skills-hub login --email me@x.io --password ...
 skills-hub list
 skills-hub collections                   # кураторские подборки (E10)
 
-# Установить навык (по умолчанию в ~/.claude/skills/, можно в .codex/)
-# Аргумент — id-или-slug: backend принимает оба (`skills-hub install 42`
-# тоже работает). Имя папки на диске: slug, либо числовой id для slug-less.
-skills-hub install bitrix24
-skills-hub install bitrix24 --scope project  # только в текущий cwd/.claude/skills/
+# Навыки ставятся в центральный стор (~/.skills-hub/store) и линкуются junction/
+# symlink. Дефолтный scope — project (текущая папка).
+skills-hub install bitrix24                 # → стор + ссылка в ./.claude/skills + манифест
+skills-hub install bitrix24 --scope global  # → стор + ссылка в ~/.claude/skills
+
+# Динамический набор проекта
+skills-hub enable wb-api          # включить в текущем проекте
+skills-hub disable wb-api         # выключить (стор цел)
+skills-hub sync                   # применить .skills-hub/skills.toml
+skills-hub migrate --dry-run      # перенести старые копии в стор
+skills-hub store list             # что в сторе
 
 # Обновить установленные навыки
 skills-hub update --all
@@ -144,7 +150,8 @@ web_ui_url = "https://hub.example.com/app"
 output_format = "text"           # text | json
 auto_update = false              # true → тихо обновляет skills при следующей команде
 auto_update_cooldown_min = 30
-default_install_scope = "global" # global | project
+# store_dir = "~/.skills-hub/store"   # центральный стор (env: SKILLS_HUB_STORE_DIR)
+default_install_scope = "project"      # дефолт сменён с global на project
 # default_project_dir = "..."    # если scope=project, куда по дефолту
 ```
 
