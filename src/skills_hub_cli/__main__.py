@@ -910,6 +910,83 @@ def cmd_install(
     _run(_do())
 
 
+def _resolve_project(cfg: ClientConfig, project: Optional[Path]) -> Path:
+    return (
+        project
+        or (Path(cfg.default_project_dir) if cfg.default_project_dir else None)
+        or Path.cwd()
+    ).resolve()
+
+
+def cmd_enable(
+    slug: str = typer.Argument(..., metavar="ID_ИЛИ_SLUG"),
+    project: Optional[Path] = typer.Option(None, "--project", help="Корень проекта (default: cwd)"),
+    agent: Optional[str] = typer.Option(None),
+    force: bool = typer.Option(False, "--force"),
+    channel: str = typer.Option("published"),
+) -> None:
+    """Включить навык в наборе проекта: стор + ссылка в project scope + манифест."""
+    cfg = ClientConfig.load()
+    project_path = _resolve_project(cfg, project)
+    access = _get_access_token()
+    target = get_target(agent or cfg.agent)
+
+    async def _do() -> None:
+        installed_chain = await _install_chain(
+            cfg, access, slug=slug, channel=channel, scope="project",
+            project_path=project_path, force=force, agent_target=target,
+        )
+        for item in installed_chain:
+            ref = item["slug"] or item.get("skill_id")
+            if ref:
+                project_manifest.add(project_path, str(ref))
+
+        def _render(_: dict) -> None:
+            for item in installed_chain:
+                mount = "📎" if item["linked"] else "📄"
+                console.print(
+                    f"[green]✓[/] Включён в проект {mount} "
+                    f"{item['slug']}@{item['version']} → {item['target_dir']}"
+                )
+            console.print(f"[dim]Манифест: {project_manifest.manifest_path(project_path)}[/]")
+
+        emit_data(
+            {"event": "enabled", "project": str(project_path), "skills": installed_chain},
+            text_renderer=_render,
+        )
+
+    _run(_do())
+
+
+def cmd_disable(
+    slug: str = typer.Argument(..., metavar="ID_ИЛИ_SLUG"),
+    project: Optional[Path] = typer.Option(None, "--project"),
+    agent: Optional[str] = typer.Option(None),
+) -> None:
+    """Выключить навык из набора проекта: снять ссылку + убрать из манифеста (стор цел)."""
+    cfg = ClientConfig.load()
+    project_path = _resolve_project(cfg, project)
+    target = get_target(agent or cfg.agent)
+    installer = SkillInstaller(target, cfg.effective_store_dir())
+    result = installer.remove(slug=slug, project=project_path)
+    in_manifest = project_manifest.remove(project_path, slug)
+    track_skill_event("skill.uninstall", slug=slug, scope="project")
+
+    def _render(_: dict) -> None:
+        if result.removed:
+            console.print(f"[green]✓[/] Выключен из проекта: {slug} [dim](стор сохранён)[/]")
+        else:
+            console.print(f"[yellow]Не был включён[/]: {slug}")
+        if in_manifest:
+            console.print("[dim]Убран из .skills-hub/skills.toml[/]")
+
+    emit_data(
+        {"event": "disabled", "slug": slug, "project": str(project_path),
+         "unlinked": result.removed, "manifest_removed": in_manifest},
+        text_renderer=_render,
+    )
+
+
 def cmd_update(
     slug: Optional[str] = typer.Argument(
         None, metavar="[ID_ИЛИ_SLUG]", help="id-или-slug скилла; без аргумента — все"
@@ -1593,6 +1670,8 @@ def build_app() -> typer.Typer:
         app.command(name="install")(cmd_install)
         app.command(name="update")(cmd_update)
         app.command(name="remove")(cmd_remove)
+        app.command(name="enable")(cmd_enable)
+        app.command(name="disable")(cmd_disable)
     if cfg.has_permission("skill.report_issue"):
         app.command(name="report")(cmd_report)
 
