@@ -1088,9 +1088,9 @@ def cmd_migrate(
     if scope in ("project", "all"):
         reports["project"] = installer.migrate_scope(project=project_path, dry_run=dry_run)
 
-    def _render(rs: dict) -> None:
+    def _render(payload: dict) -> None:
         prefix = "[yellow]dry-run[/] " if dry_run else ""
-        for sc, r in rs.items():
+        for sc, r in payload["reports"].items():
             console.print(
                 f"{prefix}migrate {sc}: "
                 f"→стор {len(r['migrated'])}  пропущено(чужое) {len(r['skipped_foreign'])}  "

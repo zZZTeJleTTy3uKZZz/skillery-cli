@@ -69,3 +69,32 @@ def test_migrate_dry_run_changes_nothing(tmp_path: Path) -> None:
     assert not (store / "wb-api").exists()
     assert not linker.is_link(target.slug_dir("wb-api"))
     assert (target.slug_dir("wb-api") / "SKILL.md").exists()  # копия на месте
+
+
+def test_cmd_migrate_text_render_does_not_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """Регрессия: cmd_migrate в TEXT-режиме рендерит payload['reports'], не падая.
+
+    Раньше _render итерировал весь payload ({dry_run, reports}) → r['migrated']
+    на bool → TypeError. JSON-режим баг не ловил (text_renderer не вызывается).
+    """
+    import skills_hub_cli.__main__ as main_mod
+    from skills_hub_cli import output as out_mod
+    from skills_hub_cli.config import ClientConfig
+
+    target = ClaudeCodeTarget(root=tmp_path / ".claude")
+    store = tmp_path / "store"
+    _copy_install(target.base_dir(), "demo")
+
+    cfg = ClientConfig(store_dir=str(store))
+    monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
+    monkeypatch.setattr(main_mod, "get_target", lambda name: target)
+    monkeypatch.setattr(out_mod, "_mode", "text")  # именно text-режим вызывает _render
+
+    # Не должно бросить (раньше — TypeError на payload['dry_run']).
+    main_mod.cmd_migrate(scope="global", project=None, dry_run=False, agent=None)
+
+    out = capsys.readouterr().out
+    assert "migrate global" in out
+    assert linker.is_link(target.slug_dir("demo"))
