@@ -176,6 +176,7 @@ class RemoveResult:
     removed: bool  # удалили ли что-то
     kept_local: bool  # сохранили ли preserved_paths (--keep-local)
     skill_id: str | None = None
+    purged: bool = False  # удалён ли навык из стора (--purge)
 
 
 def write_meta(slug_dir: Path, meta: dict[str, Any]) -> None:
@@ -512,34 +513,42 @@ class SkillInstaller:
         project: Path | None = None,
         keep_local: bool = False,
         skill_id: str | int | None = None,
+        purge: bool = False,
     ) -> RemoveResult:
-        """Удаляет skill. `keep_local` сохраняет preserved_paths (_local/, ...).
+        """Снимает скилл из scope. Ссылка → remove_link (стор цел); copy → прежняя
+        логика keep_local. `purge` дополнительно удаляет навык из стора."""
+        from skills_hub_cli.core import linker
 
-        - keep_local=False → удаляет всю slug-папку.
-        - keep_local=True  → удаляет всё КРОМЕ preserved_paths; если после
-          этого preserved-контента не осталось — папка удаляется целиком.
-
-        Для slug-less skill (PK-миграция §3.E) identity каталога — числовой
-        ``skill_id``; передайте его, если ``slug`` не задан.
-        """
         scope = "project" if project is not None else "global"
         dir_name = skill_dir_name(slug, skill_id)
         skill_id_str = str(skill_id) if skill_id is not None else None
-        slug_dir = self._target.slug_dir(dir_name, project=project)
-        if not slug_dir.exists():
-            return RemoveResult(
-                slug=slug, target_dir=slug_dir, scope=scope,
-                removed=False, kept_local=False, skill_id=skill_id_str,
-            )
+        link = self._target.slug_dir(dir_name, project=project)
 
+        removed = False
+        kept_local = False
+        if linker.is_link(link):
+            linker.remove_link(link)
+            removed = True
+        elif link.exists():
+            removed, kept_local = self._remove_copy(link, keep_local)
+
+        purged = False
+        if purge:
+            store_dir = self._store_path(dir_name)
+            if store_dir.exists():
+                _force_rmtree(store_dir)
+                purged = True
+
+        return RemoveResult(
+            slug=slug, target_dir=link, scope=scope, removed=(removed or purged),
+            kept_local=kept_local, skill_id=skill_id_str, purged=purged,
+        )
+
+    def _remove_copy(self, slug_dir: Path, keep_local: bool) -> tuple[bool, bool]:
+        """Удаляет copy-папку (не ссылку) в scope. Возвращает (removed, kept_local)."""
         if not keep_local:
             _force_rmtree(slug_dir)
-            return RemoveResult(
-                slug=slug, target_dir=slug_dir, scope=scope,
-                removed=True, kept_local=False, skill_id=skill_id_str,
-            )
-
-        # keep_local: удаляем всё кроме preserved.
+            return True, False
         meta = read_meta(slug_dir) or {}
         preserved = _preserved_for(meta.get("manifest") or {}, self._target)
         for child in list(slug_dir.iterdir()):
@@ -550,19 +559,10 @@ class SkillInstaller:
                 child.unlink(missing_ok=True)
             elif child.is_dir():
                 _force_rmtree(child)
-
-        # Что-то из preserved осталось?
-        remaining = list(slug_dir.iterdir())
-        if not remaining:
+        if not list(slug_dir.iterdir()):
             _force_rmtree(slug_dir)
-            return RemoveResult(
-                slug=slug, target_dir=slug_dir, scope=scope,
-                removed=True, kept_local=False, skill_id=skill_id_str,
-            )
-        return RemoveResult(
-            slug=slug, target_dir=slug_dir, scope=scope,
-            removed=True, kept_local=True, skill_id=skill_id_str,
-        )
+            return True, False
+        return True, True
 
     # ------------------------------------------------------------------
     #  helpers

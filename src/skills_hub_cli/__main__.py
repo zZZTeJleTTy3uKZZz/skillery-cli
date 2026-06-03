@@ -1048,6 +1048,10 @@ def cmd_remove(
         False, "--keep-local",
         help="Сохранить _local/ и прочие preserved_paths (пользовательский state).",
     ),
+    purge: bool = typer.Option(
+        False, "--purge",
+        help="Удалить навык и из центрального стора (а не только ссылку из scope).",
+    ),
     agent: Optional[str] = typer.Option(None),
 ) -> None:
     """Удалить установленный skill (global или project scope).
@@ -1056,13 +1060,16 @@ def cmd_remove(
     числовой id для slug-less skill). По умолчанию удаляет всю папку.
     `--keep-local` сохраняет preserved-пути (`_local/`, `browser_profiles/`,
     ...) — например, чтобы не потерять накопленный state при переустановке.
+    `--purge` дополнительно удаляет навык из центрального стора.
     """
     cfg = ClientConfig.load()
     actual_scope, project_path = _resolve_install_scope(cfg, scope, project)
     _ = actual_scope  # передаётся через project_path
     target = get_target(agent or cfg.agent)
-    installer = SkillInstaller(target)
-    result = installer.remove(slug=slug, project=project_path, keep_local=keep_local)
+    installer = SkillInstaller(target, cfg.effective_store_dir())
+    result = installer.remove(
+        slug=slug, project=project_path, keep_local=keep_local, purge=purge
+    )
 
     if not result.removed:
         emit_data(
@@ -1071,6 +1078,7 @@ def cmd_remove(
                 "scope": result.scope,
                 "removed": False,
                 "kept_local": False,
+                "purged": result.purged,
                 "path": str(result.target_dir),
             },
             text_renderer=lambda _: console.print(
@@ -1103,6 +1111,7 @@ def cmd_remove(
             "scope": result.scope,
             "removed": True,
             "kept_local": result.kept_local,
+            "purged": result.purged,
             "path": str(result.target_dir),
         },
         text_renderer=_render,
