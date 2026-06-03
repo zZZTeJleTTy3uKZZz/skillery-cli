@@ -918,6 +918,15 @@ def _resolve_project(cfg: ClientConfig, project: Optional[Path]) -> Path:
     ).resolve()
 
 
+def _path_within(base: Path, candidate: Path) -> bool:
+    try:
+        base_abs = os.path.abspath(base)
+        cand_abs = os.path.abspath(candidate)
+        return os.path.commonpath([base_abs, cand_abs]) == base_abs
+    except ValueError:
+        return False
+
+
 def cmd_enable(
     slug: str = typer.Argument(..., metavar="ID_ИЛИ_SLUG"),
     project: Optional[Path] = typer.Option(None, "--project", help="Корень проекта (default: cwd)"),
@@ -985,6 +994,76 @@ def cmd_disable(
          "unlinked": result.removed, "manifest_removed": in_manifest},
         text_renderer=_render,
     )
+
+
+def cmd_sync(
+    project: Optional[Path] = typer.Option(None, "--project", help="Корень проекта (default: cwd)"),
+    prune: bool = typer.Option(True, "--prune/--no-prune",
+                               help="Удалять наши ссылки, которых нет в манифесте"),
+    agent: Optional[str] = typer.Option(None),
+    channel: str = typer.Option("published"),
+) -> None:
+    """Привести project scope в соответствие .skills-hub/skills.toml.
+
+    Линкует навыки из стора; отсутствующие в сторе — докачивает; --prune убирает
+    наши (на стор) ссылки, которых нет в манифесте. Чужие папки и внешние ссылки
+    не трогаются.
+    """
+    cfg = ClientConfig.load()
+    project_path = _resolve_project(cfg, project)
+    target = get_target(agent or cfg.agent)
+    installer = SkillInstaller(target, cfg.effective_store_dir())
+    manifest = project_manifest.load(project_path)
+    store_root = cfg.effective_store_dir()
+    report: dict[str, list] = {
+        "linked": [], "downloaded": [], "pruned": [], "missing": [],
+    }
+    access_holder: dict[str, str] = {}
+
+    async def _do() -> None:
+        for slug in sorted(manifest):
+            out = installer.link_existing(slug, project=project_path, force=True)
+            if out is not None:
+                report["linked"].append(slug)
+                continue
+            # Нет в сторе → докачать (ленивый access).
+            if "tok" not in access_holder:
+                access_holder["tok"] = _get_access_token()
+            try:
+                await _install_chain(
+                    cfg, access_holder["tok"], slug=slug, channel=channel,
+                    scope="project", project_path=project_path, force=True,
+                    agent_target=target,
+                )
+                report["downloaded"].append(slug)
+            except Exception:
+                report["missing"].append(slug)
+
+        if prune:
+            base = target.base_dir(project=project_path)
+            if base.exists():
+                for d in list(base.iterdir()):
+                    if d.name in manifest:
+                        continue
+                    if not linker.is_link(d):
+                        continue  # чужая папка-копия — не трогаем
+                    tgt = linker.link_target(d)
+                    if tgt is not None and _path_within(store_root, tgt):
+                        linker.remove_link(d)  # только НАШИ (на стор) ссылки
+                        report["pruned"].append(d.name)
+
+        def _render(r: dict) -> None:
+            console.print(
+                f"[green]sync[/] {project_path}: "
+                f"+linked {len(r['linked'])}  ↓downloaded {len(r['downloaded'])}  "
+                f"-pruned {len(r['pruned'])}  ?missing {len(r['missing'])}"
+            )
+            for s in r["missing"]:
+                console.print(f"  [yellow]✗ не удалось получить:[/] {s}")
+
+        emit_data(report, text_renderer=_render)
+
+    _run(_do())
 
 
 def cmd_update(
@@ -1672,6 +1751,7 @@ def build_app() -> typer.Typer:
         app.command(name="remove")(cmd_remove)
         app.command(name="enable")(cmd_enable)
         app.command(name="disable")(cmd_disable)
+        app.command(name="sync")(cmd_sync)
     if cfg.has_permission("skill.report_issue"):
         app.command(name="report")(cmd_report)
 

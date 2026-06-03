@@ -407,6 +407,16 @@ class SkillInstaller:
             safe_copy_tree(store_dir, link)
             return False, "copy"
 
+    def link_existing(
+        self, dir_name: str, *, project: Path | None = None, force: bool = False
+    ) -> tuple[bool, str] | None:
+        """Линкует уже materialized стор-навык в scope (без сети). None если в сторе нет."""
+        store_dir = self._store_path(dir_name)
+        if not store_dir.exists():
+            return None
+        link = self._target.slug_dir(dir_name, project=project)
+        return self._link_into_scope(link, store_dir, force=force)
+
     # ------------------------------------------------------------------
     #  incremental update (ТЗ §8.2)
     # ------------------------------------------------------------------
