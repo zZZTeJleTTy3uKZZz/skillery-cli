@@ -67,9 +67,13 @@ class ClientConfig:
     user_email: str | None = None
     agent: str | None = None
     permissions: list[str] = field(default_factory=list)
-    """Permission keys из JWT (используется для модульной регистрации команд)."""
-    is_hub_admin: bool = False
-    is_skill_creator: bool = False
+    """Permission keys из JWT (используется для модульной регистрации команд).
+
+    «hub-admin»/«skill-creator» больше НЕ хранятся отдельными флагами — после
+    wave-B права идут от глобальных memberships и приходят в JWT как обычные
+    permission-ключи (`hub.admin`, `skill.publish`). Признаки роли выводятся из
+    этого набора методами `is_hub_admin()` / `is_skill_creator()`.
+    """
     company_id: str | None = None
     role_id: str | None = None
     access_expires_at: str | None = None  # iso-формат
@@ -133,8 +137,6 @@ class ClientConfig:
             user_email=data.get("user_email"),
             agent=data.get("agent"),
             permissions=list(data.get("permissions", [])),
-            is_hub_admin=bool(data.get("is_hub_admin", False)),
-            is_skill_creator=bool(data.get("is_skill_creator", False)),
             company_id=data.get("company_id"),
             role_id=data.get("role_id"),
             access_expires_at=data.get("access_expires_at"),
@@ -158,10 +160,6 @@ class ClientConfig:
             data["agent"] = self.agent
         if self.permissions:
             data["permissions"] = self.permissions
-        if self.is_hub_admin:
-            data["is_hub_admin"] = self.is_hub_admin
-        if self.is_skill_creator:
-            data["is_skill_creator"] = self.is_skill_creator
         if self.company_id:
             data["company_id"] = self.company_id
         if self.role_id:
@@ -186,6 +184,14 @@ class ClientConfig:
         if "hub.admin" in self.permissions:
             return True
         return permission_key in self.permissions
+
+    def is_hub_admin(self) -> bool:
+        """hub-admin = наличие права `hub.admin` в эффективном наборе (не флаг)."""
+        return "hub.admin" in self.permissions
+
+    def is_skill_creator(self) -> bool:
+        """skill-creator = наличие права `skill.publish` в эффективном наборе."""
+        return "skill.publish" in self.permissions
 
     def is_logged_in(self) -> bool:
         return bool(self.user_email and self.permissions)
@@ -222,8 +228,6 @@ def populate_from_jwt(cfg: ClientConfig, access_token: str) -> None:
         cfg.permissions = [str(p) for p in perms]
     cfg.role_id = claims.get("role_id") if claims.get("role_id") else None  # type: ignore[assignment]
     cfg.company_id = claims.get("company_id") if claims.get("company_id") else None  # type: ignore[assignment]
-    cfg.is_hub_admin = "hub.admin" in cfg.permissions
-    cfg.is_skill_creator = "skill.publish" in cfg.permissions
     exp = claims.get("exp")
     if isinstance(exp, int):
         cfg.access_expires_at = datetime.fromtimestamp(exp, UTC).isoformat()

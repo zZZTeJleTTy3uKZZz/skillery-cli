@@ -271,8 +271,8 @@ def cmd_login(
             "event": "logged_in",
             "user_email": email,
             "is_new_user": bool(data.get("is_new_user")),
-            "is_hub_admin": cfg.is_hub_admin,
-            "is_skill_creator": cfg.is_skill_creator,
+            "is_hub_admin": cfg.is_hub_admin(),
+            "is_skill_creator": cfg.is_skill_creator(),
             "permissions": cfg.permissions,
             "company_id": cfg.company_id,
             "role_id": cfg.role_id,
@@ -284,9 +284,9 @@ def cmd_login(
             if data.get("is_new_user"):
                 console.print("  (новый пользователь, аккаунт создан)")
             roles_descr = []
-            if cfg.is_hub_admin:
+            if cfg.is_hub_admin():
                 roles_descr.append("hub-admin")
-            if cfg.is_skill_creator:
+            if cfg.is_skill_creator():
                 roles_descr.append("skill-creator")
             if cfg.permissions and not roles_descr:
                 roles_descr.append("member")
@@ -316,8 +316,8 @@ def _do_password_login(cfg: ClientConfig, *, email: str, password: str) -> None:
             "event": "logged_in",
             "method": "password",
             "user_email": email,
-            "is_hub_admin": cfg.is_hub_admin,
-            "is_skill_creator": cfg.is_skill_creator,
+            "is_hub_admin": cfg.is_hub_admin(),
+            "is_skill_creator": cfg.is_skill_creator(),
             "permissions": cfg.permissions,
             "company_id": cfg.company_id,
             "role_id": cfg.role_id,
@@ -327,9 +327,9 @@ def _do_password_login(cfg: ClientConfig, *, email: str, password: str) -> None:
         def _render(_: dict) -> None:
             console.print(f"[green]✓[/] Авторизован как {email} (password)")
             roles_descr = []
-            if cfg.is_hub_admin:
+            if cfg.is_hub_admin():
                 roles_descr.append("hub-admin")
-            if cfg.is_skill_creator:
+            if cfg.is_skill_creator():
                 roles_descr.append("skill-creator")
             if cfg.permissions and not roles_descr:
                 roles_descr.append("member")
@@ -404,8 +404,6 @@ def cmd_logout() -> None:
         clear_tokens(cfg.user_email)
     cfg.user_email = None
     cfg.permissions = []
-    cfg.is_hub_admin = False
-    cfg.is_skill_creator = False
     cfg.company_id = None
     cfg.role_id = None
     cfg.access_expires_at = None
@@ -428,8 +426,8 @@ def cmd_whoami() -> None:
         "user_email": cfg.user_email,
         "backend": cfg.base_url,
         "agent": cfg.agent or detect_agent(),
-        "is_hub_admin": cfg.is_hub_admin,
-        "is_skill_creator": cfg.is_skill_creator,
+        "is_hub_admin": cfg.is_hub_admin(),
+        "is_skill_creator": cfg.is_skill_creator(),
         "company_id": cfg.company_id,
         "role_id": cfg.role_id,
         "permissions": cfg.permissions,
@@ -1800,11 +1798,13 @@ def build_app() -> typer.Typer:
 
     description_lines = ["Skills Hub CLI"]
     if is_logged_in:
+        is_hub_admin = cfg.is_hub_admin()
+        is_skill_creator = cfg.is_skill_creator()
         roles = [
             r for r in (
-                "hub-admin" if cfg.is_hub_admin else None,
-                "skill-creator" if cfg.is_skill_creator else None,
-                "member" if not (cfg.is_hub_admin or cfg.is_skill_creator) else None,
+                "hub-admin" if is_hub_admin else None,
+                "skill-creator" if is_skill_creator else None,
+                "member" if not (is_hub_admin or is_skill_creator) else None,
             ) if r
         ]
         description_lines.append(
@@ -1911,7 +1911,7 @@ def build_app() -> typer.Typer:
     # === Admin sub-app (если есть хотя бы одно admin-право) ===
     can_sync = cfg.has_permission("hub.admin")
     can_company_create = cfg.has_permission("hub.company_create")
-    can_invite = cfg.has_permission("invite.manage") or cfg.is_hub_admin
+    can_invite = cfg.has_permission("invite.manage") or cfg.is_hub_admin()
     if can_sync or can_company_create or can_invite:
         admin_app = typer.Typer(
             no_args_is_help=True,
