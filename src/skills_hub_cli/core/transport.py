@@ -167,10 +167,14 @@ class HubClient:
         return await self._request("POST", "/skills", json=payload)
 
     async def sync_skill(self, slug: str, channel: str = "published") -> dict[str, Any]:
+        # T5: бэкенд по умолчанию выполняет sync-from-git ФОНОМ (202 + job_id).
+        # CLI — разовый интерактивный вызов: форсим синхронный путь
+        # (`wait=true`), чтобы сразу получить полный SyncSkillResponse (200) —
+        # прежнее поведение/контракт сохранены без поллинга статус-эндпоинта.
         return await self._request(
             "POST",
             f"/skills/{slug}/sync-from-git",
-            params={"channel": channel},
+            params={"channel": channel, "wait": "true"},
         )
 
     async def create_company(self, payload: dict[str, Any]) -> dict[str, Any]:
