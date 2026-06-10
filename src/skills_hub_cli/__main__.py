@@ -2349,6 +2349,21 @@ def build_app() -> typer.Typer:
     if cfg.has_permission("skill.publish"):
         app.command(name="publish")(cmd_publish)
 
+    # --- P1 member ---
+    # Участники + каталог ролей (C3): members/roles — любой залогиненный
+    # (backend сам сужает выдачу: member без admin-прав видит только себя),
+    # мутации — по правам (hub.admin bypass внутри has_permission).
+    from skills_hub_cli.commands import member as _member_mod
+
+    _member_mod.register(
+        app,
+        can_invite=cfg.has_permission("user.invite"),
+        can_remove=cfg.has_permission("user.remove"),
+        can_change_role=cfg.has_permission("role.manage"),
+        can_lock=cfg.has_permission("user.lock"),
+        can_reset_password=cfg.has_permission("company.manage"),
+    )
+
     # === Admin sub-app (если есть хотя бы одно admin-право) ===
     can_sync = cfg.has_permission("hub.admin")
     can_company_create = cfg.has_permission("hub.company_create")
