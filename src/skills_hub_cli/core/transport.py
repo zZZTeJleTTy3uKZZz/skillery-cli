@@ -94,6 +94,26 @@ class HubClient:
                 data = resp.json()
             except Exception:
                 data = {"code": "UNKNOWN", "message": resp.text, "details": {}}
+            # FastAPI заворачивает ошибки в {"detail": ...}: dict (наши
+            # use-case коды), str (HTTPException) или list (422 pydantic).
+            # Разворачиваем, чтобы code/message были машинно-доступны
+            # (EMAIL_TAKEN, PERMISSION_DENIED, ...), а не сырой JSON-блоб.
+            detail = data.get("detail")
+            if isinstance(detail, dict):
+                data = {**data, **detail}
+            elif isinstance(detail, str):
+                data = {**data, "message": detail}
+            elif isinstance(detail, list):
+                parts = []
+                for err in detail:
+                    if isinstance(err, dict):
+                        loc = ".".join(str(x) for x in err.get("loc", []))
+                        parts.append(f"{loc}: {err.get('msg', '')}".strip(": "))
+                data = {
+                    **data,
+                    "code": "VALIDATION",
+                    "message": "; ".join(parts) or resp.text,
+                }
             raise ApiError(
                 status_code=resp.status_code,
                 code=data.get("code", "UNKNOWN"),

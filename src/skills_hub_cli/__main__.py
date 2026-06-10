@@ -914,9 +914,28 @@ async def _install_local_source(
             )
             raise typer.Exit(1)
         version = _read_skill_md_version(skill_dir)
+        # tags/description из frontmatter → в manifest меты: по ним onboard
+        # матчит локально установленные навыки (live-smoke bug Phase E).
+        from skills_hub_cli.core.manifest_builder import _read_frontmatter
+
+        fm = _read_frontmatter(skill_dir / "SKILL.md")
+        manifest: dict[str, object] = {"version": version, "files": []}
+        if fm.get("tags"):
+            tags = fm["tags"]
+            if isinstance(tags, list):
+                manifest["tags"] = [str(t).strip() for t in tags]
+            else:
+                # Самописный frontmatter-парсер отдаёт inline-список строкой
+                # "[a, b]" — срезаем скобки и сплитим по запятой.
+                raw = str(tags).strip().strip("[]")
+                manifest["tags"] = [
+                    s.strip().strip("\"'") for s in raw.split(",") if s.strip()
+                ]
+        if fm.get("description"):
+            manifest["description"] = str(fm["description"]).strip()
         result = installer.install(
             slug=slug, version=version, commit_sha="",
-            repo_url=None, local_src=skill_dir, manifest={"version": version, "files": []},
+            repo_url=None, local_src=skill_dir, manifest=manifest,
             project=project_path, force=force,
         )
     else:  # git
@@ -2223,7 +2242,12 @@ def build_app() -> typer.Typer:
             f"Вы вошли как [bold]{cfg.user_email}[/] ({', '.join(roles)})."
         )
     else:
-        description_lines.append("[dim]Не авторизован — доступна только login.[/]")
+        description_lines.append(
+            "[dim]Не авторизован. Доступно без логина: login / register / join, "
+            "автономная установка (install --path | --from-git), управление "
+            "стором (enable/disable/remove/sync/migrate/store), локальные "
+            "коллекции (collection *-local), onboard.[/]"
+        )
 
     app = typer.Typer(
         no_args_is_help=True,

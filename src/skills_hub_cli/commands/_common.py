@@ -22,11 +22,27 @@ console = Console()
 
 
 def run(coro) -> None:  # noqa: ANN001
-    """asyncio.run + перевод ApiError в console-friendly exit(1)."""
+    """asyncio.run + канон ошибок (зеркало ``__main__._run``).
+
+    В json-режиме ApiError/RuntimeError уходят единым событием
+    ``{"event":"error",...}`` в stderr (stdout остаётся машинным каналом);
+    в text-режиме — прежнее читабельное сообщение. ``typer.Exit``/``Abort``
+    наследуют RuntimeError через click — пропускаем их наверх как есть.
+    """
+    from skills_hub_cli.output import is_json
+
     try:
         asyncio.run(coro)
     except ApiError as e:
-        console.print(f"[red]Ошибка API:[/] {e}")
+        if is_json():
+            emit_error(e.code or "API", e.message, status_code=e.status_code)
+        else:
+            console.print(f"[red]Ошибка API:[/] {e}")
+        sys.exit(1)
+    except (typer.Exit, typer.Abort):
+        raise
+    except RuntimeError as e:
+        emit_error("RUNTIME", str(e))
         sys.exit(1)
 
 
