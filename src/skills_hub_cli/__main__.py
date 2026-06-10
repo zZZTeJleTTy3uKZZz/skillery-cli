@@ -2282,6 +2282,20 @@ def build_app() -> typer.Typer:
     store_app.command("list")(cmd_store_list)
     store_app.command("path")(cmd_store_path)
     store_app.command("gc")(cmd_store_gc)
+    # --- P1 local-collections ---
+    # collection sub-app — ALWAYS-ON: локальные коллекции (create-local /
+    # add-local / remove-local / list-local / install-local / delete-local)
+    # живут оффлайн без логина. Серверные команды (collections list /
+    # collection show / collection install) гейтятся ВНУТРИ модуля флагами
+    # server_enabled (skill.read) / can_install (skill.install) — регистрация
+    # перенесена сюда из gated-блока skill.read ниже.
+    from skills_hub_cli.commands import collection as _coll_mod
+
+    _coll_mod.register(
+        app,
+        server_enabled=cfg.has_permission("skill.read"),
+        can_install=cfg.has_permission("skill.install"),
+    )
 
     if not is_logged_in:
         return app
@@ -2293,11 +2307,10 @@ def build_app() -> typer.Typer:
     if cfg.has_permission("skill.read"):
         app.command(name="list")(cmd_list)
         app.command(name="show")(cmd_show)
-        # E23 — collections: read-only (skill.read) + bulk-install под
-        # skill.install (`collection install` ставит все навыки коллекции).
-        from skills_hub_cli.commands import collection as _coll_mod
-
-        _coll_mod.register(app, can_install=cfg.has_permission("skill.install"))
+        # --- P1 local-collections --- (перенесено): collection.register
+        # теперь вызывается в always-on зоне выше — серверные команды
+        # гейтятся внутри модуля (server_enabled=skill.read,
+        # can_install=skill.install), локальные живут без логина.
         # E23 — contributors (public-аналог skill.read).
         from skills_hub_cli.commands import contrib as _contrib_mod
 
