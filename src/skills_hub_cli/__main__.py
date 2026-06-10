@@ -2366,6 +2366,29 @@ def build_app() -> typer.Typer:
         if can_invite:
             admin_app.command("invite")(cmd_admin_invite)
 
+    # --- P1 company ---
+    # sub-app `company` (C2): show/switch — always-on для залогиненного
+    # (бэк сам режет tenant-изоляцией); остальные подкоманды гейтятся
+    # permissions-зеркалом backend-роутов. has_permission() уже включает
+    # hub.admin bypass.
+    from skills_hub_cli.commands import company as _company_mod
+
+    _company_mod.register(
+        app,
+        can_list=cfg.is_hub_admin(),
+        can_create=cfg.has_permission("hub.company_create"),
+        can_edit=cfg.has_permission("company.manage"),
+        can_invite_links=(
+            cfg.has_permission("company.manage")
+            or cfg.has_permission("role.manage")
+        ),
+        can_catalog_view=(
+            cfg.has_permission("catalog.manage")
+            or cfg.has_permission("catalog.view_all")
+        ),
+        can_catalog_manage=cfg.has_permission("catalog.manage"),
+    )
+
     return app
 
 
