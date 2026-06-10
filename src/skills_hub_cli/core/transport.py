@@ -239,6 +239,168 @@ class HubClient:
     async def create_company(self, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._request("POST", "/companies", json=payload)
 
+    # --- P1 company ---
+    async def list_companies(
+        self,
+        *,
+        q: str | None = None,
+        page: int | None = None,
+        size: int | None = None,
+    ) -> dict[str, Any]:
+        """GET /companies — список компаний (hub.admin).
+
+        Сверено с ``routes/companies.py::list_companies`` (W5): server-side
+        offset-пагинация ``page/size/q`` → ``{items,total,page,size}``.
+        Неуказанные параметры не шлём — backend применит свои дефолты.
+        """
+        params: dict[str, Any] = {}
+        if q:
+            params["q"] = q
+        if page is not None:
+            params["page"] = page
+        if size is not None:
+            params["size"] = size
+        return await self._request("GET", "/companies", params=params)
+
+    async def get_company(self, company_id: str) -> dict[str, Any]:
+        """GET /companies/{id} — детали компании.
+
+        Сверено с ``routes/companies.py::get_company``: доступ — член ЭТОЙ
+        компании или hub.admin (tenant-изоляция через require_same_company).
+        Ответ — ``CompanyDetailResponse`` (counts, plan/status, owner UserRef).
+        """
+        return await self._request("GET", f"/companies/{company_id}")
+
+    async def update_company(
+        self, company_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """PATCH /companies/{id} — merge-patch компании.
+
+        Сверено с ``routes/companies.py::update_company``: право — hub.admin
+        ИЛИ company.manage в своей компании; plan/status меняет только
+        hub.admin. Шлём только изменяемые поля (None = «не менять»).
+        """
+        return await self._request(
+            "PATCH", f"/companies/{company_id}", json=payload
+        )
+
+    async def switch_active_company(self, company_id: str) -> dict[str, Any]:
+        """POST /me/active-company — переключить активную компанию.
+
+        Сверено с ``routes/me.py::switch_active_company``: переключение
+        возможно ТОЛЬКО в компанию с membership (иначе 403). Ответ —
+        ``LoginPasswordResponse`` с НОВОЙ парой токенов (re-issue под
+        permissions роли в целевой компании) — caller обязан сохранить пару.
+        """
+        return await self._request(
+            "POST", "/me/active-company", json={"company_id": company_id}
+        )
+
+    async def list_invite_links(self, company_id: str) -> dict[str, Any]:
+        """GET /companies/{id}/invite-links — переиспользуемые ссылки.
+
+        Сверено с ``routes/company_invite_links.py::list_invite_links``:
+        гейт — hub.admin ИЛИ company-admin (role.manage|company.manage в этой
+        компании). Ответ ``{"links": [InviteLinkDTO]}``.
+        """
+        return await self._request(
+            "GET", f"/companies/{company_id}/invite-links"
+        )
+
+    async def create_invite_link(
+        self,
+        company_id: str,
+        *,
+        kind: str = "member",
+        max_uses: int | None = None,
+        expires_in_days: int | None = None,
+    ) -> dict[str, Any]:
+        """POST /companies/{id}/invite-links — создать ссылку (201).
+
+        Сверено с ``routes/company_invite_links.py::create_invite_link``:
+        body ``{kind: member|manager, max_uses?, expires_in_days?}``;
+        manager-ссылку создаёт только владелец компании или hub.admin.
+        Ответ ``InviteLinkCreatedResponse`` — plaintext ``token`` отдаётся
+        ОДИН раз (из него строится join-URL).
+        """
+        body: dict[str, Any] = {"kind": kind}
+        if max_uses is not None:
+            body["max_uses"] = max_uses
+        if expires_in_days is not None:
+            body["expires_in_days"] = expires_in_days
+        return await self._request(
+            "POST", f"/companies/{company_id}/invite-links", json=body
+        )
+
+    async def revoke_invite_link(self, company_id: str, link_id: str) -> None:
+        """DELETE /companies/{id}/invite-links/{link_id} — отозвать (204)."""
+        return await self._request(
+            "DELETE", f"/companies/{company_id}/invite-links/{link_id}"
+        )
+
+    async def get_company_catalog(self, company_id: str) -> dict[str, Any]:
+        """GET /companies/{id}/catalog — granted-каталог компании.
+
+        Сверено с ``routes/catalog.py::get_company_catalog``: чтение —
+        hub.admin / catalog.manage / catalog.view_all в своей компании.
+        Ответ ``{company_id, skills, collections, effective_skills}``.
+        """
+        return await self._request("GET", f"/companies/{company_id}/catalog")
+
+    async def grant_catalog_skill(
+        self, company_id: str, skill_id: str
+    ) -> None:
+        """POST /companies/{id}/catalog/skills — выдать навык компании (204).
+
+        Сверено с ``routes/catalog.py::grant_skill``: body ``{skill_id}`` —
+        строго ЧИСЛОВОЙ id (``_int_id``, иначе 404) — slug caller резолвит
+        заранее (``GET /skills/{slug}``).
+        """
+        return await self._request(
+            "POST",
+            f"/companies/{company_id}/catalog/skills",
+            json={"skill_id": skill_id},
+        )
+
+    async def revoke_catalog_skill(
+        self, company_id: str, id_or_slug: str
+    ) -> None:
+        """DELETE /companies/{id}/catalog/skills/{slug} — отозвать навык (204).
+
+        Сверено с ``routes/catalog.py::revoke_skill``: path-сегмент принимает
+        id-ИЛИ-slug (backend резолвит через get_by_id_or_slug).
+        """
+        return await self._request(
+            "DELETE", f"/companies/{company_id}/catalog/skills/{id_or_slug}"
+        )
+
+    async def grant_catalog_collection(
+        self, company_id: str, collection_id: str
+    ) -> None:
+        """POST /companies/{id}/catalog/collections — выдать коллекцию (204).
+
+        Сверено с ``routes/catalog.py::grant_collection``: body
+        ``{collection_id}`` — числовой id.
+        """
+        return await self._request(
+            "POST",
+            f"/companies/{company_id}/catalog/collections",
+            json={"collection_id": collection_id},
+        )
+
+    async def revoke_catalog_collection(
+        self, company_id: str, collection_id: str
+    ) -> None:
+        """DELETE /companies/{id}/catalog/collections/{id} — отозвать (204).
+
+        Сверено с ``routes/catalog.py::revoke_collection``: path — строго
+        ЧИСЛОВОЙ collection_id (slug caller резолвит заранее).
+        """
+        return await self._request(
+            "DELETE",
+            f"/companies/{company_id}/catalog/collections/{collection_id}",
+        )
+
     async def issue_invite(
         self,
         company_id: str,
