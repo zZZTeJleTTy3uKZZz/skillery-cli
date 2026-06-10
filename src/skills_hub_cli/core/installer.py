@@ -94,18 +94,24 @@ def safe_copy_tree(src: Path, dst: Path) -> None:
 
     Правила безопасности:
     - `.git/` source-репо пропускается (это state репо, не содержимое skill).
-    - Симлинки НЕ следуются; если symlink-цель резолвится наружу dst →
-      PathTraversalError. Симлинк внутрь dst копируется как обычный файл/папка
+    - Ссылки НЕ следуются вслепую; если цель ссылки резолвится наружу dst →
+      PathTraversalError. Ссылка внутрь dst копируется как обычный файл/папка
       (через материализацию содержимого).
+    - Под «ссылкой» понимаем и POSIX symlink, и Windows junction (reparse
+      mount-point): `Path.is_symlink()` для junction = False, а
+      `os.walk(followlinks=False)` его НЕ отсекает и спустился бы внутрь →
+      детект идёт через `linker.is_link` (reparse-tag).
     - Любой относительный путь с `..`, который вырвался бы за dst → отвергается.
 
     dst создаётся при необходимости. Существующие файлы перезаписываются.
     """
+    from skills_hub_cli.core import linker
+
     src = Path(src)
     dst = Path(dst)
     dst.mkdir(parents=True, exist_ok=True)
     dst_abs = Path(os.path.abspath(dst))
-    # Реальный корень источника: symlink безопасен только если его цель
+    # Реальный корень источника: ссылка безопасна только если её цель
     # резолвится ВНУТРЬ src (clone). Escape наружу = host-FS / секрет → reject.
     src_root = Path(os.path.realpath(src))
 
@@ -118,28 +124,35 @@ def safe_copy_tree(src: Path, dst: Path) -> None:
             continue
         dirnames[:] = [d for d in dirnames if d not in _COPY_SKIP_ROOT]
 
+        linked_dirs: list[str] = []
         for name in list(dirnames):
             child = root_path / name
             target = _assert_within(dst_abs, dst / rel_root / name)
-            if child.is_symlink():
-                # Симлинк-директория: цель обязана быть внутри src, иначе reject.
+            if linker.is_link(child):
+                # Ссылка-директория (symlink ИЛИ junction): цель обязана быть
+                # внутри src, иначе reject.
                 real = Path(os.path.realpath(child))
                 _assert_within(src_root, real)  # бросит, если наружу clone
-                # Внутрь — материализуем рекурсивно как обычную папку,
-                # os.walk сам по symlink-папке не пойдёт (followlinks=False).
+                # Внутрь — материализуем рекурсивно как обычную папку и убираем
+                # из dirnames: os.walk по symlink-папке не идёт сам, но junction
+                # он НЕ отсекает (followlinks=False ловит только symlink) и
+                # спустился бы внутрь, дублируя/обходя guard.
                 target.mkdir(parents=True, exist_ok=True)
                 safe_copy_tree(child, target)
+                linked_dirs.append(name)
             else:
                 target.mkdir(parents=True, exist_ok=True)
+        if linked_dirs:
+            dirnames[:] = [d for d in dirnames if d not in linked_dirs]
 
         for name in filenames:
             child = root_path / name
             target = _assert_within(dst_abs, dst / rel_root / name)
-            if child.is_symlink():
+            if linker.is_link(child):
                 real = Path(os.path.realpath(child))
-                _assert_within(src_root, real)  # бросит, если symlink наружу clone
+                _assert_within(src_root, real)  # бросит, если ссылка наружу clone
             target.parent.mkdir(parents=True, exist_ok=True)
-            # copy2 следует по симлинку и копирует РЕАЛЬНОЕ содержимое (цель
+            # copy2 следует по ссылке и копирует РЕАЛЬНОЕ содержимое (цель
             # уже проверена что внутри src).
             shutil.copy2(child, target)
 
@@ -268,16 +281,18 @@ def _is_preserved_rel(rel: str, preserved: tuple[str, ...]) -> bool:
 def _safe_copy_file(src: Path, dst: Path, slug_dir: Path, src_root: Path) -> None:
     """Копирует один файл src → dst.
 
-    Гарантии: dst внутри slug_dir; если src — symlink, его цель резолвится
-    внутрь src_root (clone), а не на хост-ФС (защита от malicious repo).
+    Гарантии: dst внутри slug_dir; РЕАЛЬНАЯ цель src (после резолва symlink И
+    Windows junction в любом компоненте пути) лежит внутри src_root (clone), а
+    не на хост-ФС (защита от malicious repo). `realpath` резолвит и junction,
+    который `Path.is_symlink()` НЕ ловит, поэтому проверяем всегда — даже когда
+    сам src выглядит обычным файлом, его родитель может быть ссылкой наружу.
     """
     _assert_within(slug_dir, dst)
-    if src.is_symlink():
-        real = Path(os.path.realpath(src))
-        try:
-            _assert_within(Path(os.path.realpath(src_root)), real)
-        except PathTraversalError:
-            raise PathTraversalError(f"Symlink наружу репо: {src}") from None
+    real = Path(os.path.realpath(src))
+    try:
+        _assert_within(Path(os.path.realpath(src_root)), real)
+    except PathTraversalError:
+        raise PathTraversalError(f"Ссылка наружу репо: {src}") from None
     shutil.copy2(src, dst)
 
 

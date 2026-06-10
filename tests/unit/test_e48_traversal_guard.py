@@ -16,6 +16,20 @@ import pytest
 from skills_hub_cli.core.installer import PathTraversalError, safe_copy_tree
 
 
+def _make_junction(link: Path, target: Path) -> None:
+    """Создаёт Windows junction link→target (reparse mount-point, НЕ symlink).
+
+    Junction не требует прав администратора / Developer Mode (в отличие от
+    symlink), поэтому воспроизводим на обычной Windows-машине. Ключевое:
+    ``Path.is_symlink()`` и ``os.path.islink()`` для junction возвращают
+    ``False`` — в этом суть дыры, которую закрывает детект через
+    ``linker.is_link`` (reparse-tag).
+    """
+    import _winapi
+
+    _winapi.CreateJunction(str(target), str(link))
+
+
 def test_safe_copy_tree_copies_normal_files(tmp_path: Path) -> None:
     src = tmp_path / "src"
     dst = tmp_path / "dst"
@@ -137,3 +151,89 @@ def test_assert_within_rejects_different_drive(tmp_path: Path) -> None:
     other_drive = "Z:" if str(dst)[0].upper() != "Z" else "Y:"
     with pytest.raises(PathTraversalError):
         _assert_within(dst, Path(f"{other_drive}\\evil.txt"))
+
+
+# ---------------------------------------------------------------------------
+#  Junction (Windows reparse mount-point) — defense-in-depth.
+#  os.path.islink()/Path.is_symlink() для junction = False, поэтому голый
+#  is_symlink-guard его не ловит, а os.walk(followlinks=False) НЕ отсекает
+#  junction (отсекает только symlink) и спускается внутрь. Детект обязан идти
+#  через linker.is_link (reparse-tag), цель junction резолвиться и проверяться
+#  на нахождение внутри src — иначе junction наружу материализует host-секрет.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="junction — Windows-only reparse-point")
+def test_safe_copy_tree_rejects_junction_escaping_dst(tmp_path: Path) -> None:
+    """Junction-директория наружу src (на host-секрет) должна быть отвергнута."""
+    secret_dir = tmp_path / "secret"
+    secret_dir.mkdir()
+    (secret_dir / "host.txt").write_text("HOST SECRET", encoding="utf-8")
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "SKILL.md").write_text("x", encoding="utf-8")
+    junction = src / "evil"
+    try:
+        _make_junction(junction, secret_dir)
+    except (ImportError, AttributeError, OSError):
+        pytest.skip("junction creation unavailable")
+    # Суть бага: junction — НЕ symlink для стандартных проверок.
+    assert not junction.is_symlink()
+
+    dst = tmp_path / "dst"
+    with pytest.raises(PathTraversalError):
+        safe_copy_tree(src, dst)
+    # Секрет не должен материализоваться в dst.
+    assert not (dst / "evil" / "host.txt").exists()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="junction — Windows-only reparse-point")
+def test_safe_copy_tree_allows_internal_junction(tmp_path: Path) -> None:
+    """Junction, указывающий ВНУТРЬ src, легитимен — материализуется, не reject."""
+    src = tmp_path / "src"
+    real = src / "realdir"
+    real.mkdir(parents=True)
+    (real / "data.txt").write_text("payload", encoding="utf-8")
+    (src / "SKILL.md").write_text("x", encoding="utf-8")
+    junction = src / "alias"
+    try:
+        _make_junction(junction, real)
+    except (ImportError, AttributeError, OSError):
+        pytest.skip("junction creation unavailable")
+
+    dst = tmp_path / "dst"
+    safe_copy_tree(src, dst)  # не должно бросать
+    # Содержимое внутреннего junction материализовано как обычная папка.
+    assert (dst / "alias" / "data.txt").read_text(encoding="utf-8") == "payload"
+    assert (dst / "realdir" / "data.txt").read_text(encoding="utf-8") == "payload"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="junction — Windows-only reparse-point")
+def test_safe_copy_file_rejects_junction_parent(tmp_path: Path) -> None:
+    """`_safe_copy_file`: файл через junction-родителя наружу clone отвергается.
+
+    Junction в компоненте пути не ловится ``Path.is_symlink()``, поэтому src
+    выглядит обычным файлом — реальную цель надо резолвить и проверять.
+    """
+    from skills_hub_cli.core.installer import _safe_copy_file
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("SECRET", encoding="utf-8")
+
+    clone = tmp_path / "clone"
+    clone.mkdir()
+    junction = clone / "jdir"
+    try:
+        _make_junction(junction, outside)
+    except (ImportError, AttributeError, OSError):
+        pytest.skip("junction creation unavailable")
+
+    slug_dir = tmp_path / "slug"
+    slug_dir.mkdir()
+    dst = slug_dir / "secret.txt"
+    # src идёт через junction → реальная цель снаружи clone → reject.
+    with pytest.raises(PathTraversalError):
+        _safe_copy_file(junction / "secret.txt", dst, slug_dir, clone)
+    assert not dst.exists()
