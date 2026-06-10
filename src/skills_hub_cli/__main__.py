@@ -1976,6 +1976,23 @@ def cmd_config(
 # ======================================================
 #                  BUILD APP DYNAMICALLY
 # ======================================================
+def _version_callback(value: bool) -> None:
+    """Eager-callback для глобального ``--version``: печать версии + выход.
+
+    ``__version__`` живёт в ``skills_hub_cli/__init__.py`` — пробрасываем его
+    в typer (раньше флаг отсутствовал). Печать уважает json-режим.
+    """
+    if not value:
+        return
+    from skills_hub_cli import __version__
+
+    emit_data(
+        {"version": __version__},
+        text_renderer=lambda p: console.print(p["version"]),
+    )
+    raise typer.Exit()
+
+
 def build_app() -> typer.Typer:
     cfg = ClientConfig.load()
     is_logged_in = cfg.is_logged_in()
@@ -2013,9 +2030,15 @@ def build_app() -> typer.Typer:
             False, "--json", "-J",
             help="Вывод в JSON (для AI-агентов и скриптов). По умолчанию из config.output_format.",
         ),
+        version: bool = typer.Option(
+            False, "--version", "-V",
+            help="Показать версию skills-hub CLI и выйти.",
+            callback=_version_callback,
+            is_eager=True,
+        ),
     ) -> None:
         """Корневой callback (профиль + json считаны до построения app)."""
-        _ = profile, json_output
+        _ = profile, json_output, version
 
     # === Always-on ===
     app.command(name="login")(cmd_login)
@@ -2039,10 +2062,11 @@ def build_app() -> typer.Typer:
     if cfg.has_permission("skill.read"):
         app.command(name="list")(cmd_list)
         app.command(name="show")(cmd_show)
-        # E23 — read-only collections (видимо для skill.read).
+        # E23 — collections: read-only (skill.read) + bulk-install под
+        # skill.install (`collection install` ставит все навыки коллекции).
         from skills_hub_cli.commands import collection as _coll_mod
 
-        _coll_mod.register(app)
+        _coll_mod.register(app, can_install=cfg.has_permission("skill.install"))
         # E23 — contributors (public-аналог skill.read).
         from skills_hub_cli.commands import contrib as _contrib_mod
 
@@ -2078,12 +2102,25 @@ def build_app() -> typer.Typer:
         from skills_hub_cli.commands import comment as _comment_mod
 
         app.command(name="comment")(_comment_mod.cmd_comment_post)
+    # comment-edit / comment-delete — независимые per-permission гейты
+    # (PATCH/DELETE /comments/{id} адресуют comment по числовому id).
+    if cfg.has_permission("comment.edit_own"):
+        from skills_hub_cli.commands import comment as _comment_mod
+
+        app.command(name="comment-edit")(_comment_mod.cmd_comment_edit)
+    if cfg.has_permission("comment.delete_own"):
+        from skills_hub_cli.commands import comment as _comment_mod
+
+        app.command(name="comment-delete")(_comment_mod.cmd_comment_delete)
 
     # === E23 — Support tickets ===
     if cfg.has_permission("ticket.create") or cfg.has_permission("ticket.read"):
         from skills_hub_cli.commands import ticket as _ticket_mod
 
-        _ticket_mod.register_ticket(app)
+        # `status` (PATCH) — под ticket.update_status; reply — под ticket.create.
+        _ticket_mod.register_ticket(
+            app, can_update=cfg.has_permission("ticket.update_status")
+        )
 
     # === E23 — Event tracking + daemon (always-on для залогиненного user'а) ===
     from skills_hub_cli.commands import daemon as _daemon_mod

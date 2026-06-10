@@ -263,3 +263,84 @@ def install_for_platform(
     if actual == "windows":
         return install_windows_task(home_dir=home_dir, binary=binary)
     raise ValueError(f"Неизвестная платформа: {actual}")
+
+
+# === Uninstall (обратное к install) ===
+@dataclass
+class AutostartUninstallResult:
+    """Результат снятия autostart unit-файла."""
+
+    platform: str
+    """``macos`` | ``linux`` | ``windows``"""
+
+    unit_path: Path
+    """Путь, по которому ожидался unit-файл."""
+
+    removed: bool
+    """``True`` если файл существовал и был удалён; ``False`` если его не было."""
+
+    instructions: list[str]
+    """Что сделать пользователю (деактивировать в launchd/systemd/schtasks)."""
+
+
+def _unit_path_for(platform: str, home_dir: Path) -> Path:
+    """Путь unit-файла, который пишет соответствующий ``install_*``.
+
+    Единый источник правды о расположении — переиспользуется install/uninstall.
+    """
+    if platform == "macos":
+        return home_dir / "Library" / "LaunchAgents" / f"{SERVICE_NAME}.plist"
+    if platform == "linux":
+        return (
+            home_dir / ".config" / "systemd" / "user" / "skills-hub-daemon.service"
+        )
+    if platform == "windows":
+        return home_dir / ".skills-hub" / "tasks" / "skills-hub-daemon.xml"
+    raise ValueError(f"Неизвестная платформа: {platform}")
+
+
+def _uninstall_instructions(platform: str, unit_path: Path) -> list[str]:
+    """Инструкция как деактивировать autostart (sudo не нужен)."""
+    if platform == "macos":
+        return [
+            f"# Снят launchd plist: {unit_path}",
+            f"launchctl unload {unit_path}",
+            "# (если демон ещё не выгружен — команда выше остановит autostart)",
+        ]
+    if platform == "linux":
+        return [
+            f"# Снят systemd user unit: {unit_path}",
+            "systemctl --user disable --now skills-hub-daemon.service",
+            "systemctl --user daemon-reload",
+        ]
+    if platform == "windows":
+        return [
+            f"# Снят Task Scheduler XML: {unit_path}",
+            'schtasks /Delete /TN "SkillsHubDaemon" /F',
+        ]
+    raise ValueError(f"Неизвестная платформа: {platform}")
+
+
+def uninstall_for_platform(
+    platform: str | None = None,
+    *,
+    home_dir: Path,
+) -> AutostartUninstallResult:
+    """Снять autostart unit-файл (обратное к :func:`install_for_platform`).
+
+    Удаляет тот же файл, что писал ``install_*`` (user-scope, без sudo). Файла
+    нет ⇒ ``removed=False`` (идемпотентно). Печать инструкции (как
+    деактивировать в launchd/systemd/schtasks) — задача вызывающей команды.
+    """
+    actual = platform or detect_platform()
+    unit_path = _unit_path_for(actual, home_dir)
+    removed = False
+    if unit_path.exists():
+        unit_path.unlink()
+        removed = True
+    return AutostartUninstallResult(
+        platform=actual,
+        unit_path=unit_path,
+        removed=removed,
+        instructions=_uninstall_instructions(actual, unit_path),
+    )

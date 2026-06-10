@@ -24,6 +24,7 @@ from skills_hub_cli.config import ClientConfig
 from skills_hub_cli.daemon.autostart import (
     detect_platform,
     install_for_platform,
+    uninstall_for_platform,
 )
 from skills_hub_cli.daemon.daemon_runner import (
     DaemonRunner,
@@ -293,6 +294,58 @@ def cmd_daemon_install(
     emit_data(payload, text_renderer=_render)
 
 
+def cmd_daemon_uninstall(
+    platform: str | None = typer.Option(
+        None,
+        "--platform",
+        help="macos | linux | windows (default: автодетект)",
+    ),
+    home: Path | None = typer.Option(
+        None,
+        "--home",
+        help="Override $HOME для теста (default: реальный $HOME)",
+    ),
+) -> None:
+    """Снять autostart unit-файл (обратное к ``daemon install``).
+
+    Удаляет тот же user-scope файл, что писал ``daemon install``
+    (``~/Library/LaunchAgents`` / ``~/.config/systemd/user`` /
+    ``~/.skills-hub/tasks``). НЕ вызывает sudo и не трогает system-wide
+    settings. После удаления печатает инструкцию, как окончательно
+    деактивировать autostart (``launchctl unload`` / ``systemctl --user
+    disable`` / ``schtasks /Delete``). Идемпотентно: если файла нет —
+    ``removed=False`` без ошибки.
+    """
+    if platform not in (None, "macos", "linux", "windows"):
+        emit_error("VALIDATION", "platform: macos | linux | windows")
+        raise typer.Exit(1)
+    home_dir = home or Path.home()
+    result = uninstall_for_platform(platform, home_dir=home_dir)
+    payload = {
+        "event": "autostart_uninstalled",
+        "platform": result.platform,
+        "unit_path": str(result.unit_path),
+        "removed": result.removed,
+        "instructions": result.instructions,
+    }
+
+    def _render(p: dict[str, Any]) -> None:
+        if p["removed"]:
+            console.print(
+                f"[green]✓[/] Autostart {p['platform']} снят → {p['unit_path']}"
+            )
+        else:
+            console.print(
+                f"[yellow]Unit-файл не найден[/] ({p['platform']}): "
+                f"{p['unit_path']} — нечего удалять"
+            )
+        console.print("[bold]Что делать дальше:[/]")
+        for line in p["instructions"]:
+            console.print(f"  {line}")
+
+    emit_data(payload, text_renderer=_render)
+
+
 def register(app: typer.Typer) -> None:
     """Register ``daemon`` sub-app."""
     d_app = typer.Typer(
@@ -304,6 +357,7 @@ def register(app: typer.Typer) -> None:
     d_app.command("stop")(cmd_daemon_stop)
     d_app.command("status")(cmd_daemon_status)
     d_app.command("install")(cmd_daemon_install)
+    d_app.command("uninstall")(cmd_daemon_uninstall)
     app.add_typer(d_app, name="daemon")
 
 

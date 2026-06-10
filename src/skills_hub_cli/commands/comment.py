@@ -141,6 +141,72 @@ def cmd_comments_list(
     _common.run(_do())
 
 
+def cmd_comment_edit(
+    comment_id: str = typer.Argument(..., help="Числовой id комментария"),
+    body: str = typer.Argument(..., help="Новый текст комментария"),
+) -> None:
+    """Отредактировать свой комментарий (``PATCH /comments/{id}``).
+
+    Permission ``comment.edit_own`` (только автор). Backend адресует comment по
+    числовому id (резолв скилла не нужен). Возвращает обновлённый comment.
+    """
+    if not body.strip():
+        emit_error("VALIDATION", "Текст комментария не может быть пустым")
+        raise typer.Exit(1)
+    cfg = ClientConfig.load()
+    access = _common.get_access_token()
+
+    async def _do() -> None:
+        client = _common.make_client(cfg, access)
+        try:
+            comment = await client.edit_comment(comment_id, body=body)
+        finally:
+            await client.close()
+
+        def _render(c: dict[str, Any]) -> None:
+            console.print(f"[green]✓[/] Comment {c['id']} отредактирован")
+            console.print(f"  {c['body']}")
+
+        emit_data(comment, text_renderer=_render)
+
+    _common.run(_do())
+
+
+def cmd_comment_delete(
+    comment_id: str = typer.Argument(..., help="Числовой id комментария"),
+) -> None:
+    """Удалить (soft-delete) комментарий (``DELETE /comments/{id}``).
+
+    Permission ``comment.delete_own`` (автор) ИЛИ
+    ``comment.delete_any``/``hub.admin``/``skill.manage`` (модератор).
+    Backend помечает ``is_deleted=True`` (body → ``[deleted]``).
+    """
+    cfg = ClientConfig.load()
+    access = _common.get_access_token()
+
+    async def _do() -> None:
+        client = _common.make_client(cfg, access)
+        try:
+            comment = await client.delete_comment(comment_id)
+        finally:
+            await client.close()
+        payload: dict[str, Any] = {
+            "event": "comment_deleted",
+            "comment": comment,
+        }
+
+        def _render(p: dict[str, Any]) -> None:
+            c = p["comment"]
+            console.print(
+                f"[green]✓[/] Comment {c['id']} удалён "
+                f"(is_deleted={c.get('is_deleted')})"
+            )
+
+        emit_data(payload, text_renderer=_render)
+
+    _common.run(_do())
+
+
 def register(app: typer.Typer) -> None:
     """Регистрирует ``comment`` (post) + ``comments`` (list)."""
     app.command(name="comment")(cmd_comment_post)
