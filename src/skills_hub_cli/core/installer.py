@@ -51,6 +51,11 @@ def _force_rmtree(path: Path) -> None:
 
 _SKILL_META_FILE = "_skill_meta.json"
 
+# Маркер сгенерированной заглушки (см. stub-ветку _materialize_store).
+# По нему отличаем НАШ stub от реального контента: stub можно заменять,
+# реальный контент — НИКОГДА (P0: stub-would-clobber guard).
+_STUB_SENTINEL = "Stub — установлено без git репо."
+
 # Внутри source-репо НЕ копируем в slug_dir (state репозитория, не skill).
 _COPY_SKIP_ROOT = frozenset({".git"})
 
@@ -179,6 +184,9 @@ class InstallResult:
     store_dir: Path | None = None  # путь в центральном сторе (источник контента)
     linked: bool = False           # True если scope-ссылка; False если copy-fallback
     link_kind: str = "copy"        # "junction" | "symlink" | "copy"
+    skipped: bool = False          # установка НЕ выполнена (см. skip_reason)
+    skip_reason: str | None = None  # напр. "stub-would-clobber" (P0-guard)
+    content: str = "real"          # "real" | "stub" — что лежит в установке
 
 
 @dataclass
@@ -311,6 +319,56 @@ def _prune_empty_parents(start: Path, stop: Path) -> None:
         cur = cur.parent
 
 
+def _stub_would_clobber(path: Path) -> bool:
+    """True если в path есть ЖИВОЙ контент, который нельзя затирать stub'ом.
+
+    P0-guard (живой инцидент: auto-update скилла с repo_url=null уничтожил
+    реальный ~/.claude/skills/bitrix24 112-байтовым stub'ом).
+
+    «Живой контент» = любые файлы кроме ``_skill_meta.json`` и нашего же
+    сгенерированного stub-SKILL.md (детект по ``_STUB_SENTINEL``). Пустой или
+    отсутствующий каталог, голая meta и прежний stub — заменяемы (свежая
+    установка / stub-over-stub разрешены).
+    """
+    try:
+        if not path.exists():
+            return False
+        entries = list(path.iterdir())
+    except OSError:
+        return False  # битая ссылка и т.п. — терять нечего
+    others = [p for p in entries if p.name != _SKILL_META_FILE]
+    if not others:
+        return False
+    if len(others) == 1 and others[0].name == "SKILL.md" and others[0].is_file():
+        try:
+            return _STUB_SENTINEL not in others[0].read_text(encoding="utf-8")
+        except OSError:
+            return True  # не смогли прочитать — считаем живым, не трогаем
+    return True
+
+
+def _version_from_skill_md(skill_dir: Path, fallback: str) -> str:
+    """Версия навыка из ``SKILL.md`` frontmatter / ``_skill_meta.toml``.
+
+    Используется для git-url источника (фикс l2): раньше в meta хардкодился
+    ``0.0.0-local``, хотя клон содержит реальную версию во frontmatter —
+    симметрично тому, как ``--path`` читает версию локальной папки.
+    """
+    from skills_hub_cli.core.manifest_builder import (
+        _read_frontmatter,
+        _read_meta_toml,
+    )
+
+    try:
+        ver = _read_meta_toml(skill_dir).get("version")
+        if not ver:
+            ver = _read_frontmatter(skill_dir / "SKILL.md").get("version")
+    except Exception:  # повреждённый frontmatter не валит install
+        ver = None
+    ver_str = str(ver).strip() if ver else ""
+    return ver_str or fallback
+
+
 class SkillInstaller:
     """MVP: install через git clone + write meta. Scope = global | project."""
 
@@ -354,6 +412,23 @@ class SkillInstaller:
         dir_name = skill_dir_name(slug, skill_id)
         skill_id_str = str(skill_id) if skill_id is not None else None
         store_dir = self._store_path(dir_name)
+        link = self._target.slug_dir(dir_name, project=project)
+
+        # P0-guard: stub-источник (нет ни repo_url, ни local_src) НЕ имеет
+        # права заменить существующую НЕпустую установку — ни стор, ни
+        # copy-scope (живой инцидент: stub затёр реальный bitrix24). Guard
+        # жёсткий: --force его НЕ обходит. Stub разрешён только в пустое /
+        # stub-место.
+        is_stub_source = repo_url is None and local_src is None
+        if is_stub_source and (
+            _stub_would_clobber(store_dir) or _stub_would_clobber(link)
+        ):
+            return InstallResult(
+                slug=slug, version=version, target_dir=link, is_update=False,
+                scope=scope, skill_id=skill_id_str, store_dir=store_dir,
+                linked=False, link_kind="none",
+                skipped=True, skip_reason="stub-would-clobber", content="stub",
+            )
 
         # 1. Материализация контента в центральный стор (idempotent).
         mat = self._materialize_store(
@@ -361,16 +436,19 @@ class SkillInstaller:
             repo_url=repo_url, manifest=manifest, scope=scope, project=project,
             skill_id=skill_id_str, local_src=local_src, git_ref=git_ref,
         )
+        # git-url источник мог уточнить версию из frontmatter клона (фикс l2).
+        effective_version = mat.get("version") or version
 
         # 2. Линковка стор → scope агента (fallback на copy).
-        link = self._target.slug_dir(dir_name, project=project)
         linked, link_kind = self._link_into_scope(link, store_dir, force=force)
 
         return InstallResult(
-            slug=slug, version=version, target_dir=link, is_update=mat["is_update"],
-            scope=scope, filter_result=mat["filter_result"],
+            slug=slug, version=effective_version, target_dir=link,
+            is_update=mat["is_update"], scope=scope,
+            filter_result=mat["filter_result"],
             update_diff=mat["update_diff"], skill_id=skill_id_str,
             store_dir=store_dir, linked=linked, link_kind=link_kind,
+            content="stub" if is_stub_source else "real",
         )
 
     def _materialize_store(
@@ -393,7 +471,7 @@ class SkillInstaller:
                 skill_id=skill_id, local_src=local_src, git_ref=git_ref,
             )
             return {"is_update": True, "filter_result": up.filter_result,
-                    "update_diff": up.update_diff}
+                    "update_diff": up.update_diff, "version": up.version}
 
         store_dir.parent.mkdir(parents=True, exist_ok=True)
         filter_result: dict[str, int] | None = None
@@ -404,6 +482,9 @@ class SkillInstaller:
             filter_result = apply_skill_filter(store_dir)
             if git_ref is not None:
                 source = "git-url"  # явный ref ⇒ произвольный git-репо, не hub
+                # Версия из frontmatter клона (как у --path), не хардкод
+                # '0.0.0-local' (фикс l2).
+                version = _version_from_skill_md(store_dir, version)
         elif local_src is not None:
             # Локальный источник: копируем папку как навык через тот же
             # traversal-guard (safe_copy_tree junction-aware). НЕ stub.
@@ -414,7 +495,7 @@ class SkillInstaller:
             store_dir.mkdir(parents=True, exist_ok=True)
             (store_dir / "SKILL.md").write_text(
                 f"---\nname: {dir_name}\nversion: {version}\n---\n\n# {dir_name}\n\n"
-                "Stub — установлено без git репо.\n",
+                f"{_STUB_SENTINEL}\n",
                 encoding="utf-8",
             )
         write_meta(
@@ -424,7 +505,8 @@ class SkillInstaller:
                 source=source, repo_url=repo_url,
             ),
         )
-        return {"is_update": False, "filter_result": filter_result, "update_diff": None}
+        return {"is_update": False, "filter_result": filter_result,
+                "update_diff": None, "version": version}
 
     def _link_into_scope(
         self, link: Path, store_dir: Path, *, force: bool
@@ -555,6 +637,8 @@ class SkillInstaller:
                     safe_copy_tree(cloned, slug_dir)
                 src_label = "git-url"
                 meta_repo = repo_url
+                # Версия из frontmatter свежего клона (фикс l2).
+                version = _version_from_skill_md(slug_dir, version)
             filter_result = apply_skill_filter(slug_dir, extra_preserved=preserved)
             write_meta(
                 slug_dir,

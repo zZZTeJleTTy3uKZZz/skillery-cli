@@ -164,7 +164,10 @@ def _setup_auto_update_env(
             return {
                 "version": bundle_version,
                 "commit_sha": "deadbeef",
-                "repo_url": None,
+                # P0-фикс: bundle БЕЗ repo_url теперь пропускается целиком
+                # (stub-источник, обновлять нечем) — для B8-тестов сравнения
+                # версий нужен «нормальный» bundle с репо.
+                "repo_url": "https://git.example/demo.git",
                 "manifest": {"version": bundle_version, "files": []},
             }
 
