@@ -261,6 +261,135 @@ class HubClient:
             body["display_name"] = display_name
         return await self._request("POST", "/invites", json=body)
 
+    # --- P1 member ---
+    async def list_users(
+        self,
+        *,
+        company_id: str | None = None,
+        q: str | None = None,
+        page: int = 1,
+        size: int = 25,
+    ) -> dict[str, Any]:
+        """GET /users — участники (offset-режим W5).
+
+        Сверено с ``routes/users.py::list_users`` (:233): наличие
+        ``page``/``size`` включает серверную offset-пагинацию — ответ
+        ``UserListResponse`` = ``{items, total, page, size}`` (cap size=200,
+        422 PAGE_SIZE_TOO_LARGE сверху). ``q`` — подстрока по email/имени,
+        ``company_id`` — фильтр по компании. Guard: hub-admin видит всех;
+        tenant с user.invite/user.remove/company.manage — своих; обычный
+        member получает «только себя» (бэк сужает сам, 403 не кидает).
+        """
+        params: dict[str, Any] = {"page": page, "size": size}
+        if company_id is not None:
+            params["company_id"] = company_id
+        if q is not None:
+            params["q"] = q
+        return await self._request("GET", "/users", params=params)
+
+    async def remove_membership(
+        self, *, user_id: str, company_id: str
+    ) -> None:
+        """DELETE /memberships?user_id=&company_id= — убрать из компании.
+
+        Сверено с ``routes/memberships.py::delete_membership`` (:32): flat-
+        форма (E1), оба query-параметра обязательны, право ``user.remove``
+        (hub-admin bypass). Ответ 204 → None. Side-effects бэка: refresh-
+        токены target user'а revoked + audit ``user.remove``.
+        """
+        return await self._request(
+            "DELETE",
+            "/memberships",
+            params={"user_id": user_id, "company_id": company_id},
+        )
+
+    async def bulk_change_role(
+        self,
+        *,
+        user_ids: list[str],
+        role_id: str,
+        company_id: str,
+    ) -> dict[str, Any]:
+        """POST /users/bulk/change_role — смена membership.role_id.
+
+        Сверено с ``routes/users.py::bulk_change_role`` (:1095): body
+        ``BulkChangeRoleRequest`` = ``{user_ids, role_id, company_id}``;
+        право hub.admin ИЛИ role.manage в этой company. Ответ
+        ``BulkActionResponse`` = ``{updated_count, skipped_ids,
+        results:[{id,outcome}], affected_count, dry_run}``. Не-assignable
+        роль для company-admin → 422 ROLE_NOT_ASSIGNABLE_BY_COMPANY.
+        """
+        return await self._request(
+            "POST",
+            "/users/bulk/change_role",
+            json={
+                "user_ids": user_ids,
+                "role_id": role_id,
+                "company_id": company_id,
+            },
+        )
+
+    async def lock_user(
+        self, user_id: str, *, reason: str | None = None
+    ) -> dict[str, Any]:
+        """POST /users/{id}/lock — заблокировать вход (E12).
+
+        Сверено с ``routes/users.py::lock_user`` (:842): body
+        ``LockUserRequest`` = ``{reason?}`` (опционален, ≤500 симв.; без
+        причины шлём ``{}``). Право hub.admin ИЛИ company-admin
+        (``_can_admin_users``: user.lock/company.manage/...). Self-lock
+        запрещён (409). Ответ — ``UserListItemDTO`` (``is_locked=True``);
+        refresh-токены target'а revoked.
+        """
+        body: dict[str, Any] = {}
+        if reason is not None:
+            body["reason"] = reason
+        return await self._request(
+            "POST", f"/users/{user_id}/lock", json=body
+        )
+
+    async def unlock_user(self, user_id: str) -> dict[str, Any]:
+        """POST /users/{id}/unlock — снять блокировку (E12).
+
+        Сверено с ``routes/users.py::unlock_user`` (:888): без body, права
+        те же, что у /lock. Ответ — ``UserListItemDTO``.
+        """
+        return await self._request("POST", f"/users/{user_id}/unlock")
+
+    async def reset_user_password(self, user_id: str) -> dict[str, Any]:
+        """POST /users/{id}/reset-password — одноразовый пароль.
+
+        Сверено с ``routes/users.py::reset_user_password`` (:1152): без
+        body; право hub.admin ИЛИ company.manage (target должен состоять в
+        компании актора). Ответ ``ResetPasswordResponse`` =
+        ``{temp_password, expires_hint, requires_password_change}``.
+        Пароль отдаётся ТОЛЬКО в этом ответе (в БД — хэш), все refresh-
+        токены target'а revoked.
+        """
+        return await self._request(
+            "POST", f"/users/{user_id}/reset-password"
+        )
+
+    async def list_roles(
+        self,
+        *,
+        page: int = 1,
+        size: int = 100,
+        q: str | None = None,
+    ) -> dict[str, Any]:
+        """GET /roles — глобальный каталог ролей (W3, paged W5).
+
+        Сверено с ``routes/roles.py::list_roles`` (:99): форма — PAGED
+        (НЕ плоский список): ``RoleWithScopeListResponse`` = ``{items,
+        total, page, size}`` (cap size=500). Любой авторизованный (для
+        role-picker'а). Item: id/slug/name/is_system/permission_keys/
+        is_assignable_by_company/member_count/...
+        """
+        params: dict[str, Any] = {"page": page, "size": size}
+        if q is not None:
+            params["q"] = q
+        return await self._request("GET", "/roles", params=params)
+
     async def submit_issue(
         self,
         slug: str,
