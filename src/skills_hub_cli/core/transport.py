@@ -512,3 +512,26 @@ class HubClient:
             json={"events": events},
             headers={"Idempotency-Key": idempotency_key},
         )
+
+    # --- P1 onboard ---
+    async def search_skills(
+        self,
+        *,
+        q: str,
+        size: int = 20,
+        page: int = 1,
+        channel: str = "published",
+    ) -> dict[str, Any]:
+        """GET /skills?q=…&size=…&page=… — bounded-поиск каталога.
+
+        Сверено с ``routes/skills.py::list_skills`` (W5-пагинация, :234):
+        ``q`` — подстрока title/slug/description (case-insensitive), ``page``
+        1-based, ``size`` капится бэком на 200 (422 PAGE_SIZE_TOO_LARGE),
+        ``channel`` как в ``list_skills``. Ответ — ``SkillListResponse``
+        ``{items, total, page, size}``.
+        """
+        return await self._request(
+            "GET",
+            "/skills",
+            params={"q": q, "size": size, "page": page, "channel": channel},
+        )

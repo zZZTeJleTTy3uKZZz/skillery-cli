@@ -2276,6 +2276,13 @@ def build_app() -> typer.Typer:
     store_app.command("path")(cmd_store_path)
     store_app.command("gc")(cmd_store_gc)
 
+    # --- P1 onboard ---
+    # Онбординг проекта (E11) — ALWAYS-ON: без логина работает по локальному
+    # стору; hub-поиск и докачка отсутствующих включаются только при сессии.
+    from skills_hub_cli.commands import onboard as _onboard_mod
+
+    _onboard_mod.register(app)
+
     if not is_logged_in:
         return app
 
