@@ -2253,6 +2253,13 @@ def build_app() -> typer.Typer:
 
     # === Always-on ===
     app.command(name="login")(cmd_login)
+    # --- P1 account ---
+    # register/join — always-on онбординг (E6): самостоятельная регистрация и
+    # вступление в компанию по ссылке работают ДО login (join у залогиненного
+    # сам переключается на /invite-links/accept).
+    from skills_hub_cli.commands import account as _account_mod
+
+    _account_mod.register(app)
     app.command(name="set-tokens", hidden=True)(cmd_set_tokens)
     app.command(name="status")(cmd_status)
     app.command(name="logout")(cmd_logout)

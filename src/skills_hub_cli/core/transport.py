@@ -132,6 +132,65 @@ class HubClient:
             json={"email": email, "password": password},
         )
 
+    # --- P1 account ---
+    async def register(
+        self, *, email: str, password: str, display_name: str
+    ) -> dict[str, Any]:
+        """POST /auth/register — самостоятельная регистрация (без инвайта).
+
+        Сверено с ``routes/auth.py::register`` (line 137): body =
+        ``{email, password, display_name}`` — display_name ОБЯЗАТЕЛЕН
+        (schemas.RegisterRequest: min_length=1), пароль ≥ 8 символов.
+        Ответ 201 ``LoginPasswordResponse`` = ``{access_token,
+        access_expires_at, refresh_token, refresh_expires_at, user_id}``.
+        Errors: 409 EMAIL_TAKEN; 422 VALIDATION (слабый пароль).
+        """
+        return await self._request(
+            "POST",
+            "/auth/register",
+            json={
+                "email": email,
+                "password": password,
+                "display_name": display_name,
+            },
+        )
+
+    async def register_with_link(
+        self, *, email: str, password: str, display_name: str, token: str
+    ) -> dict[str, Any]:
+        """POST /auth/register-with-link — регистрация по пригласительной ссылке.
+
+        Сверено с ``routes/auth.py::register_with_link`` (line 188): body =
+        ``{email, password, display_name, token}`` (token ≥ 8 символов).
+        Создаёт юзера + membership в компании ссылки → токены с company_id.
+        Ответ 201 ``LoginPasswordResponse``. Errors: 404 LINK_NOT_FOUND;
+        409 CONFLICT (email занят / ссылка исчерпана или отозвана);
+        422 VALIDATION.
+        """
+        return await self._request(
+            "POST",
+            "/auth/register-with-link",
+            json={
+                "email": email,
+                "password": password,
+                "display_name": display_name,
+                "token": token,
+            },
+        )
+
+    async def accept_invite_link(self, *, token: str) -> None:
+        """POST /invite-links/accept — залогиненный вступает в компанию по ссылке.
+
+        Сверено с ``routes/company_invite_links.py::accept_invite_link``
+        (line 207): body = ``{token}``, требуется auth (Bearer). Ответ —
+        204 No Content (``_request`` вернёт None). Errors: 404 NOT_FOUND
+        (невалидная ссылка); 409 LINK_UNUSABLE (исчерпана/отозвана).
+        После вступления переключение компании — POST /me/active-company.
+        """
+        await self._request(
+            "POST", "/invite-links/accept", json={"token": token}
+        )
+
     async def set_password(self, *, new_password: str) -> None:
         """POST /me/password — установка/смена пароля для текущего user'а."""
         await self._request(
