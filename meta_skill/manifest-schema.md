@@ -35,7 +35,18 @@ dependencies = [
 ]
 ```
 
-## E7 / E8 / E10 — новые опциональные поля (с v0.2 manifest)
+## E7 / E8 / E10 — опциональные поля (ROADMAP — publish их пока НЕ передаёт)
+
+> ⚠️ **Внимание, skill-авторы:** поля ниже (`rating_enabled`,
+> `comments_enabled`, `comments_allow_screenshots`, `support_tickets_enabled`,
+> `support_assignee_email`, `support_kinds_allowed`) — **запланированная**
+> функциональность. Текущая команда `skills-hub publish` собирает и отправляет
+> только `version` / `description` / `triggers` / `tags` / `files` /
+> `dependencies` / `preserved_paths`; перечисленные `*_enabled` /
+> `support_*` ключи она **игнорирует** (на backend не уходят). Прописывать их
+> сейчас бессмысленно — поведение определяется дефолтами `SystemConfig` (E9)
+> до тех пор, пока publish не научится их передавать. Раздел оставлен как
+> описание целевой схемы.
 
 Backend трактует отсутствие этих полей как «использовать дефолт из
 `SystemConfig`» (E9) — то есть skill-creator не обязан их прописывать.
@@ -97,7 +108,7 @@ dependencies = [
     { slug = "bitrix24-base", min_version = "0.1.0" },
 ]
 
-# Скилл принимает оценки и комменты, тикеты по нему идут к создателю.
+# Целевые (ROADMAP) поля — publish их пока НЕ передаёт (см. раздел выше).
 rating_enabled = true
 comments_enabled = true
 comments_allow_screenshots = true

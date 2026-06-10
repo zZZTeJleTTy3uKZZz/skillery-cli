@@ -8,13 +8,15 @@ allowed-tools: Bash(skills-hub *)
 Запусти:
 
 ```bash
-skills-hub --json collections
+skills-hub --json collections list
 ```
 
 Покажи пользователю коротко: название, описание, тип (static / dynamic),
 сколько skills внутри. Подскажи, что можно `skills-hub collection show
 <id-или-slug>` для развёрнутого списка, и `skills-hub collection install
-<id-или-slug>` для массовой установки всех skills из коллекции.
+<id-или-slug>` для массовой установки всех skills из коллекции (главный
+онбординг-кейс — поставить всю подборку одной командой).
 
-Если пользователь спросил, что есть в hub'е — предпочитай collections
-перед плоским `list`, потому что они тематически сгруппированы.
+Если пользователь спросил, что есть в hub'е — предпочитай `collections list`
+перед плоским `list`, потому что они тематически сгруппированы. А если он
+хочет «поставь мне набор для X» — `collection install <id-или-slug>`.

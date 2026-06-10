@@ -19,4 +19,4 @@ skills-hub --json rate $ARGUMENTS
 
 Backend применит upsert (одна оценка на user × skill — повторный rate
 обновит). Кратко сообщи новое значение и текущий средний балл по skill'у
-(можно дополнительно вызвать `skills-hub --json ratings <id-или-slug>`).
+(можно дополнительно вызвать `skills-hub --json rating-summary <id-или-slug>`).

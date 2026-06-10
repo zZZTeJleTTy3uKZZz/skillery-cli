@@ -4,11 +4,20 @@ CLI клиент для Skills Hub — приватного маркетплей
 
 ## Установка
 
+Пакет в PyPI/npm пока **не опубликован** (планируется). Установка — из
+исходников этого репозитория (`client/`):
+
 ```bash
-pip install skills-hub-cli
-# или из локального исходника
+# Изолированно через pipx (рекомендуется), запустив из корня client/:
+pipx install .
+# editable-режим в текущий venv:
 pip install -e .
+# либо через bootstrap-скрипт meta-skill (pipx/pip автоматически):
+python meta_skill/scripts/install.py
 ```
+
+> `pip install skills-hub-cli` (из PyPI) пока НЕ работает — дистрибутив только
+> планируется.
 
 ## Quickstart
 
@@ -27,6 +36,10 @@ skills-hub collections                   # кураторские подборк
 skills-hub install bitrix24                 # → стор + ссылка в ./.claude/skills + манифест
 skills-hub install bitrix24 --scope global  # → стор + ссылка в ~/.claude/skills
 
+# Автономно — без хаба, из локальной папки или git (логин не нужен)
+skills-hub install --path ./my-skill
+skills-hub install --from-git <url> --ref v1.0.0
+
 # Динамический набор проекта
 skills-hub enable wb-api          # включить в текущем проекте
 skills-hub disable wb-api         # выключить (стор цел)
@@ -44,12 +57,12 @@ skills-hub comments bitrix24
 
 # Тикет тех-поддержки (E8)
 skills-hub ticket create "OAuth ломается" --skill bitrix24 --kind bug --priority high
-skills-hub tickets --mine
+skills-hub tickets list --status open
 skills-hub ticket show tkt_abc123
 
-# Event tracking + daemon (E23, opt-in)
-skills-hub events opt-in
-skills-hub daemon start            # background process
+# Event tracking + daemon (E23)
+skills-hub event queue --show      # что в локальной очереди
+skills-hub daemon start            # background process (batch sender)
 skills-hub daemon install          # autostart (launchd / systemd user / Task Scheduler)
 ```
 
@@ -124,17 +137,17 @@ skills-hub install bitrix24 --agent codex
 
 ## Что нового в v0.2 (E1..E26 marathon)
 
-- **E7 — оценки и комментарии**: `rate`, `comment`, `comments`,
-  `comment-edit`, `comment-delete`, `contributors`, `ratings`.
+- **E7 — оценки и комментарии**: `rate`, `rating-summary`, `comment`,
+  `comments`, `comment-edit`, `comment-delete`, `contributors`.
   Threaded replies + screenshots (multipart upload до 5 МБ файл).
-- **E8 — тикеты тех-поддержки**: `ticket create / show / reply / status /
-  assign`, `tickets`. Scope-aware listing (hub-admin → всё, company-admin
-  → company, skill-creator → свои, user → свои).
-- **E10 — коллекции**: `collections`, `collection show`, `collection
+- **E8 — тикеты тех-поддержки**: `ticket create / show / reply / status`,
+  `tickets list`. Scope-aware listing (hub-admin → всё, company-admin
+  → company, skill-creator → свои, user → свои). `ticket assign` — планируется.
+- **E10 — коллекции**: `collections list`, `collection show`, `collection
   install` (массовая установка). Static + dynamic (по тегам).
-- **E23 — event tracking + daemon**: `events status/flush/opt-in/opt-out`,
-  `daemon start/stop/status/install/uninstall`. Шлёт `skill.install`,
-  `skill.update`, `skill.run` в `/events/ingest` (E6 backend).
+- **E23 — event tracking + daemon**: `event track / queue / flush`,
+  `daemon run/start/stop/status/install/uninstall`. Шлёт `skill.install`,
+  `skill.update`, `skill.run` в `/events` (E6 backend).
 - Stripe-style API conventions (`/skills`, `/support/tickets`,
   `/collections`, ID prefixes `rat_`, `cmt_`, `tkt_`, `tmsg_`, `col_`,
   `evt_`).

@@ -6,7 +6,9 @@
 
 ## Глоссарий
 
-- **CLI** — команда `skills-hub`, ставится один раз через `scripts/install.py`.
+- **CLI** — команда `skills-hub`, ставится один раз через `scripts/install.py`
+  (из исходников монорепо: pipx/pip install `client/`). Пакета на PyPI/npm
+  пока НЕТ — `pip install skills-hub-cli` не сработает.
 - **Skill** — отдельный навык (например, `bitrix24`), живёт в собственном
   GitLab-репо, ставится в `~/.claude/skills/<id-или-slug>/` или
   `<project>/.claude/skills/<id-или-slug>/` (имя папки — slug, либо числовой
@@ -20,25 +22,28 @@
 
 ```
 ┌─────────────────┐
-│ not installed   │ ── pip install skills-hub-cli ──▶ ┌─────────────────┐
-└─────────────────┘                                    │ installed       │
-                                                       │ logged out      │
-                                                       └────────┬────────┘
-                                                                │
-            skills-hub login <invite-token>                     │
-            (первый раз)                                        │
-                                                                │
-            skills-hub login --email --password                 │
-            (повторно)                                          │
-                                                                ▼
-                                                       ┌─────────────────┐
-                                                       │ logged in       │
-                                                       │ permissions: [] │
-                                                       └────────┬────────┘
-                                                                │
-                                                                ▼
-                                            list / install / rate / comment /
-                                            ticket / collections / events
+│ not installed   │ ─ python scripts/install.py ──▶ ┌─────────────────┐
+└─────────────────┘   (pipx/pip из client/)          │ installed       │
+                                                      │ logged out      │
+                                                      └────────┬────────┘
+                                                               │
+            skills-hub login <invite-token>                    │
+            (первый раз)                                       │
+                                                               │
+            skills-hub login --email --password                │
+            (повторно)                                         │
+                                                               ▼
+                                                      ┌─────────────────┐
+                                                      │ logged in       │
+                                                      │ permissions: [] │
+                                                      └────────┬────────┘
+                                                               │
+                                                               ▼
+                                           list / install / rate / comment /
+                                           ticket / collections / events
+
+Примечание: `install --path` / `install --from-git` (автономно, без хаба)
+работают и в состоянии «logged out» — логин для них не требуется.
 ```
 
 ## Шаг 0 — детектировать состояние
@@ -81,9 +86,12 @@ skills-hub login --email <user@x.io>
 
 ## Шаг 2 — установить нужный skill
 
+### Из хаба (по id-или-slug)
+
 ```bash
 skills-hub --json list                          # доступные
-skills-hub --json install <id-или-slug>         # global по дефолту
+skills-hub --json install <id-или-slug>         # scope по дефолту (см. ниже)
+skills-hub --json install <id-или-slug> --scope global
 skills-hub --json install <id-или-slug> --scope project --project /path/to/proj
 ```
 
@@ -91,6 +99,25 @@ skills-hub --json install <id-или-slug> --scope project --project /path/to/pr
 
 После install в папке `<id-или-slug>/_skill_meta.json` лежит полный manifest +
 commit_sha + scope + `skill_id` (identity для slug-less skill).
+
+### Автономно — без хаба (из папки / git)
+
+`install` умеет ставить навык в стор **без backend и без логина**:
+
+```bash
+# Из локальной папки
+skills-hub --json install --path ./my-skill
+skills-hub --json install --path /abs/path/to/skill --scope global
+
+# Из git-репозитория (--ref фиксирует тег/ветку/коммит; по умолчанию — default-ветка)
+skills-hub --json install --from-git https://github.com/acme/some-skill
+skills-hub --json install --from-git <url> --ref v1.0.0
+```
+
+Это позволяет положить **любой** навык в центральный стор и подключить его в
+проект (через ссылку), даже если навыка нет в каталоге Skills Hub. Используй,
+когда у пользователя есть готовая папка навыка или git-ссылка, а тянуть его из
+хаба не нужно/нельзя.
 
 ## Динамическое управление набором навыков проекта
 
@@ -129,7 +156,7 @@ skills-hub config --auto-update-cooldown-min 30
 
 ```bash
 skills-hub --json rate <slug> 5              # 1..5
-skills-hub --json ratings <slug>             # средний + распределение
+skills-hub --json rating-summary <slug>      # средний + распределение
 ```
 
 Backend применяет уникальность (user_id, skill_id) — повторный `rate`
@@ -170,14 +197,10 @@ skills-hub --json ticket create "OAuth не работает" \
     --body "Получаю 401 при /auth/redirect. См. screenshot." \
     --screenshot ~/Desktop/trace.png
 
-# Список своих
-skills-hub --json tickets --mine
-
-# Список назначенных мне (для skill-creator)
-skills-hub --json tickets --assigned-to-me
-
-# Открытые в моей компании (для company-admin)
-skills-hub --json tickets --status open
+# Список тикетов в твоём scope (RBAC определяет видимость на backend)
+skills-hub --json tickets list
+skills-hub --json tickets list --status open          # фильтр по статусу
+skills-hub --json tickets list --skill bitrix24 --kind bug --page 1 --page-size 50
 
 # Один тикет + thread
 skills-hub --json ticket show tkt_xyz789
@@ -189,6 +212,12 @@ skills-hub ticket reply tkt_xyz789 "Попробуйте включить debug 
 skills-hub ticket status tkt_xyz789 in_progress
 skills-hub ticket status tkt_xyz789 resolved
 ```
+
+Команда листинга — `tickets list` (под-app `tickets`). Видимость задаётся
+backend'ом по роли: hub-admin → все, company-admin → company, skill-creator →
+свои назначения, user → свои создания. Клиентских фильтров `--mine` /
+`--assigned-to-me` **нет** (это roadmap) — scope определяется сервером.
+Назначить тикет вручную (`ticket assign`) тоже пока нельзя.
 
 Auto-assignee:
 1. Если `--skill` указан и у skill'а есть creator → creator.
@@ -202,58 +231,61 @@ Auto-assignee:
 - **dynamic** — формируется по тегам (любой skill с `tag in [...]` входит).
 
 ```bash
-skills-hub --json collections                 # все, к которым есть доступ
-skills-hub --json collections --mine          # созданные мной
-skills-hub --json collection show <slug>      # детали + развёрнутый список skills
-skills-hub --json collection install <slug>   # массовый install всех skills
+skills-hub --json collections list                  # все, к которым есть доступ
+skills-hub --json collections list --type dynamic    # фильтр по типу
+skills-hub --json collections list --company <id>    # фильтр по компании
+skills-hub --json collection show <slug>             # детали + развёрнутый список skills
+skills-hub --json collection install <slug>          # массовый install всех skills
 ```
 
 Полезно при onboarding нового клиента: `collection install bitrix-starter`
 ставит сразу `bitrix24` + `bitrix-1c-partners-cli` + `bitrix24-stats`.
 
+Создание/редактирование коллекций из CLI не поддержано — только Web UI.
+
 ## Шаг 8 — event tracking + daemon (E23)
 
-Скилл шлёт events в `/events/ingest` (E6) — backend хранит в Postgres
-(будущий ClickHouse).
+Скилл шлёт events в `/events` (E6) — backend хранит в Postgres
+(будущий ClickHouse). Sub-app называется `event` (в единственном числе).
 
 ```bash
-# Включить opt-in (по дефолту off)
-skills-hub events opt-in
+# Положить произвольный event в очередь
+skills-hub event track skill.run --resource-type skill \
+  --resource-id <id-или-slug> --payload '{"duration_ms": 1234}'
 
-# Статус
-skills-hub --json events status
-# {
-#   "opt_in": true,
-#   "queue_size": 12,
-#   "last_flush_at": "2026-05-28T10:15:00Z",
-#   "daemon_running": true,
-#   "daemon_pid": 12345
-# }
+# Инспектировать / очистить локальную очередь
+skills-hub --json event queue --show
+skills-hub event queue --clear
 
-# Принудительный flush
-skills-hub events flush
+# Принудительный flush (синхронно, один цикл sender'а)
+skills-hub --json event flush
 
 # Daemon как long-running процесс
-skills-hub daemon start
+skills-hub daemon run            # foreground (для systemd/launchd/schtasks)
+skills-hub daemon start          # detached background
 skills-hub daemon status
 skills-hub daemon stop
 
 # Autostart на ОС
 skills-hub daemon install     # пишет launchd plist / systemd user unit / Task Scheduler XML
-skills-hub daemon uninstall   # убирает
+skills-hub daemon uninstall   # убирает autostart-юнит
 ```
+
+Команды управления телеметрией opt-in/opt-out **нет** — трекинг install /
+update / uninstall происходит автоматически (silent fail, никогда не ломает
+команду). Реальная отправка batch'а на backend гейтится правом `events.send`.
 
 Что трекается автоматически:
 - `skill.install` — slug, version, scope.
 - `skill.update` — slug, from_version, to_version.
 - `skill.uninstall` — slug.
-- (Опционально) `skill.run` — если skill сам вызвал `skills-hub events
-  track skill.run --slug <slug>`.
+- (Опционально) `skill.run` — если skill сам вызвал `skills-hub event
+  track skill.run --resource-type skill --resource-id <id-или-slug>`.
 
 Events queue — JSON-файл `~/.skills-hub/events.queue.json`. Daemon
-батчит и шлёт раз в 60 секунд (configurable). Если daemon не запущен —
-CLI отправляет sync прямо в команде (`install` / `update` / `uninstall`),
-чтобы не терять данные.
+батчит и шлёт раз в 60 секунд (configurable через `--interval`). Если daemon не
+запущен — CLI отправляет sync прямо в команде (`install` / `update` /
+`uninstall`), чтобы не терять данные.
 
 ## Шаг 9 — bug-report / feedback
 
@@ -278,22 +310,25 @@ Backend выдаёт `code`, привязанный к JWT текущей CLI-с
 
 | Permission              | Что разрешает                                       |
 | ----------------------- | --------------------------------------------------- |
-| `skill.read`            | `list`, `show`, `ratings`, `comments`, `contributors` |
-| `skill.install`         | `install`, `update`                                 |
-| `skill.rate`            | `rate`                                              |
-| `skill.comment`         | `comment*` команды                                  |
+| `skill.read`            | `list`, `show`, `comments`, `contributors`, `rating-summary`, `collections list` / `collection show` / `collection install` |
+| `skill.install`         | `install`, `update`, `remove`, `enable`, `disable`, `sync`, `migrate`, `store *` |
+| `skill.rate`            | `rate`, `rating-summary`                            |
+| `comment.post`          | `comment`, `comment-edit`, `comment-delete`         |
 | `skill.publish`         | `publish` (creator)                                 |
 | `skill.report_issue`    | legacy `report`                                     |
-| `support.create`        | `ticket create`                                     |
-| `support.read`          | `tickets`, `ticket show`                            |
-| `support.respond`       | `ticket reply` (на тикеты, где я assignee)          |
-| `support.manage`        | `ticket status`, `ticket assign`                    |
-| `collection.read`       | `collections`, `collection show`, `collection install` |
-| `collection.write`      | `collection create / delete / add-*`                |
-| `events.send`           | автоматическая отправка events                      |
+| `ticket.create`         | `ticket create`, `ticket reply`                     |
+| `ticket.read`           | `tickets list`, `ticket show`                       |
+| `events.send`           | реальная отправка events на backend (daemon/flush)  |
 | `hub.admin`             | `admin sync-skill`                                  |
 | `hub.company_create`    | `admin company-create`                              |
 | `invite.manage`         | `admin invite`                                      |
+
+> `ticket reply` / `ticket status`, `comment-edit` / `comment-delete`,
+> `collection install`, `daemon uninstall`, `install --path` / `--from-git` —
+> новые команды; их точные permission-гейты определяются backend'ом. Коллекции
+> и rating-summary видны при `skill.read` (отдельного `collection.*` permission
+> нет). Команды `ticket assign` и `collection create/delete/add-*` из CLI
+> **не реализованы**.
 
 CLI скрывает в `--help` все команды, на которые нет permission, — это
 управляется build_app() при запуске.
