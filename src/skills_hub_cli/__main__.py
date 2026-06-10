@@ -830,6 +830,86 @@ def _resolve_install_scope(
     return "project", actual_project.resolve()
 
 
+def _read_skill_md_version(skill_dir: Path) -> str:
+    """Версия локального навыка: из SKILL.md frontmatter (`version:`) или
+    _skill_meta.toml (`version`), иначе "0.0.0-local"."""
+    from skills_hub_cli.core.manifest_builder import (
+        _read_frontmatter,
+        _read_meta_toml,
+    )
+
+    meta_toml = _read_meta_toml(skill_dir)
+    ver = meta_toml.get("version")
+    if not ver:
+        fm = _read_frontmatter(skill_dir / "SKILL.md")
+        ver = fm.get("version")
+    ver = str(ver).strip() if ver else ""
+    return ver or "0.0.0-local"
+
+
+def _has_skill_md(skill_dir: Path) -> bool:
+    """True если папка похожа на навык (есть SKILL.md либо его frontmatter)."""
+    md = skill_dir / "SKILL.md"
+    return md.is_file()
+
+
+async def _install_local_source(
+    cfg: ClientConfig,
+    *,
+    source: dict,
+    scope: str,
+    project_path: Path | None,
+    force: bool,
+    agent_target,  # IAgentTarget
+) -> list[dict]:
+    """Материализует навык из локального источника (path / git-url) БЕЗ сети.
+
+    source: {"kind":"path","slug":..,"path":Path}
+          | {"kind":"git","slug":..,"url":str,"ref":str|None}
+    Возвращает installed_chain того же формата, что и hub-режим.
+    """
+    installer = SkillInstaller(agent_target, cfg.effective_store_dir())
+    slug = source["slug"]
+    if source["kind"] == "path":
+        skill_dir = Path(source["path"]).expanduser().resolve()
+        if not skill_dir.is_dir():
+            emit_error("VALIDATION", f"Папка не найдена: {skill_dir}")
+            raise typer.Exit(1)
+        if not _has_skill_md(skill_dir):
+            emit_error(
+                "VALIDATION",
+                f"В папке нет SKILL.md — это не похоже на навык: {skill_dir}",
+            )
+            raise typer.Exit(1)
+        version = _read_skill_md_version(skill_dir)
+        result = installer.install(
+            slug=slug, version=version, commit_sha="",
+            repo_url=None, local_src=skill_dir, manifest={"version": version, "files": []},
+            project=project_path, force=force,
+        )
+    else:  # git
+        version = "0.0.0-local"
+        # "" → дефолтная ветка репо (без --ref); иначе явный ref.
+        ref = source.get("ref") or ""
+        result = installer.install(
+            slug=slug, version=version, commit_sha="",
+            repo_url=source["url"], git_ref=ref,
+            manifest={"version": version, "files": []},
+            project=project_path, force=force,
+        )
+    track_skill_event(
+        "skill.update" if result.is_update else "skill.install",
+        slug=slug, version=result.version, scope=result.scope,
+    )
+    return [{
+        "slug": slug, "skill_id": result.skill_id,
+        "version": result.version, "is_update": result.is_update,
+        "target_dir": str(result.target_dir), "scope": result.scope,
+        "linked": result.linked, "link_kind": result.link_kind,
+        "source": source["kind"],
+    }]
+
+
 async def _install_chain(
     cfg: ClientConfig,
     access: str,
@@ -840,12 +920,23 @@ async def _install_chain(
     project_path: Optional[Path],
     force: bool,
     agent_target,  # IAgentTarget
+    source: dict | None = None,
 ) -> list[dict]:
     """Качает bundle (+deps), материализует в стор, линкует в scope.
+
+    source (стратегия источника):
+    - None / {"kind":"hub"} → backend bundle + git (как раньше; нужен access);
+    - {"kind":"path",...} / {"kind":"git",...} → локальная материализация без
+      сети (делегирует в _install_local_source; access игнорируется).
 
     Возвращает installed_chain (list dict с slug/version/scope/linked/...).
     Используется и cmd_install, и cmd_enable.
     """
+    if source is not None and source.get("kind") in ("path", "git"):
+        return await _install_local_source(
+            cfg, source=source, scope=scope, project_path=project_path,
+            force=force, agent_target=agent_target,
+        )
     client = HubClient(
         base_url=cfg.base_url, access_token=access,
         on_token_refresh=_make_refresh_callback(cfg),
@@ -910,26 +1001,62 @@ def cmd_install(
         False, "--force",
         help="Перезаписать существующую папку (если в ней нет _skill_meta.json — например, старая ручная установка)",
     ),
+    path: Optional[Path] = typer.Option(
+        None, "--path",
+        help="Локальная папка-источник навыка (автономно, без хаба и сети). "
+             "Должна содержать SKILL.md.",
+    ),
+    from_git: Optional[str] = typer.Option(
+        None, "--from-git",
+        help="URL git-репозитория навыка (автономно, без backend bundle). "
+             "Ветку/тег задаёт --ref.",
+    ),
+    ref: Optional[str] = typer.Option(
+        None, "--ref",
+        help="Git-ref (ветка/тег/sha) для --from-git (default: HEAD репозитория).",
+    ),
 ) -> None:
-    """Установить skill (global или в конкретный project).
+    """Установить skill из хаба, локальной папки (--path) или git-url (--from-git).
 
-    Аргумент — id-или-slug (backend резолвит оба). Имя папки на диске: slug
-    если задан, иначе числовой id (PK-миграция §3.E).
+    Источники (взаимоисключающие):
+    - по умолчанию (без --path/--from-git) — из хаба по id-или-slug (нужен login);
+    - `--path ./skill` — скопировать локальную папку как навык (БЕЗ login/сети);
+    - `--from-git <url> [--ref <branch/tag>]` — clone произвольного репо (БЕЗ хаба).
 
     global  → ~/.claude/skills/<id-или-slug>/  (видны во всех Claude Code сессиях)
     project → <project>/.claude/skills/<id-или-slug>/  (только в данном проекте)
     """
     cfg = ClientConfig.load()
     actual_scope, project_path = _resolve_install_scope(cfg, scope, project)
-    _maybe_auto_update(cfg)
-    access = _get_access_token()
+
+    # --- разбор источника + взаимоисключение флагов ---
+    if path is not None and from_git is not None:
+        emit_error("VALIDATION", "--path и --from-git взаимоисключающие")
+        raise typer.Exit(1)
+    if ref is not None and from_git is None:
+        emit_error("VALIDATION", "--ref имеет смысл только вместе с --from-git")
+        raise typer.Exit(1)
+
+    source: dict | None = None
+    if path is not None:
+        source = {"kind": "path", "slug": slug, "path": path}
+    elif from_git is not None:
+        source = {"kind": "git", "slug": slug, "url": from_git, "ref": ref}
+
     target = get_target(agent or cfg.agent)
     _ = actual_scope  # передаётся через project_path
+
+    # Hub-режим (источник не задан) требует login+токен; локальные — нет.
+    access = ""
+    if source is None:
+        _maybe_auto_update(cfg)
+        access = _get_access_token()
 
     async def _do() -> None:
         installed_chain = await _install_chain(
             cfg, access, slug=slug, channel=channel, scope=actual_scope,
             project_path=project_path, force=force, agent_target=target,
+            source=source,
         )
         # project scope → фиксируем набор в манифесте проекта.
         if project_path is not None:
@@ -1898,6 +2025,9 @@ def build_app() -> typer.Typer:
     app.command(name="whoami")(cmd_whoami)
     app.command(name="config")(cmd_config)
     app.command(name="web")(cmd_web)
+    # install — ALWAYS-ON: автономные источники (--path/--from-git) работают без
+    # login; hub-режим (без этих флагов) внутри cmd_install сам требует токен.
+    app.command(name="install")(cmd_install)
 
     if not is_logged_in:
         return app
@@ -1923,7 +2053,8 @@ def build_app() -> typer.Typer:
         # post-команду регистрируем отдельно ниже (нужен comment.post).
         app.command(name="comments")(_comment_mod.cmd_comments_list)
     if cfg.has_permission("skill.install"):
-        app.command(name="install")(cmd_install)
+        # install зарегистрирован в always-on блоке (см. выше): автономные
+        # источники --path/--from-git не требуют login.
         app.command(name="update")(cmd_update)
         app.command(name="remove")(cmd_remove)
         app.command(name="enable")(cmd_enable)

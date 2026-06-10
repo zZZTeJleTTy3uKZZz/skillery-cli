@@ -137,7 +137,7 @@ def test_cmd_install_project_writes_manifest(
     monkeypatch.setattr(main_mod, "track_skill_event", lambda *a, **k: None, raising=False)
     monkeypatch.setattr(out_mod, "_mode", "json")
 
-    async def fake_chain(cfg_, access, *, slug, channel, scope, project_path, force, agent_target):
+    async def fake_chain(cfg_, access, *, slug, channel, scope, project_path, force, agent_target, source=None):
         inst = main_mod.SkillInstaller(agent_target, cfg_.effective_store_dir())
         res = inst.install(slug=slug, version="1.0.0", commit_sha="a1",
                            repo_url=None, manifest={"version": "1.0.0", "files": []},
@@ -149,6 +149,7 @@ def test_cmd_install_project_writes_manifest(
     monkeypatch.setattr(main_mod, "_install_chain", fake_chain)
 
     main_mod.cmd_install(slug="bitrix24", channel="published", agent=None,
-                         scope=None, project=None, force=False)
+                         scope=None, project=None, force=False,
+                         path=None, from_git=None, ref=None)
 
     assert pm.load(project) == {"bitrix24": "*"}

@@ -335,7 +335,21 @@ class SkillInstaller:
         project: Path | None = None,
         force: bool = False,
         skill_id: str | int | None = None,
+        local_src: Path | None = None,
+        git_ref: str | None = None,
     ) -> InstallResult:
+        """Материализует навык в стор и линкует в scope агента.
+
+        Источник контента (взаимоисключающие):
+        - ``repo_url`` задан → git clone (hub: тег ``v<version>``; git-url:
+          явный ``git_ref`` — ветка/тег/sha как есть);
+        - ``local_src`` задан (а ``repo_url`` нет) → копируем локальную папку
+          через ``safe_copy_tree`` (тот же traversal-guard) — без сети;
+        - оба None → stub-навык (как раньше).
+
+        ``git_ref`` отличает git-url источник от hub: при нём ref берётся
+        дословно (не ``v<version>``) и source в meta = "git-url".
+        """
         scope = "project" if project is not None else "global"
         dir_name = skill_dir_name(slug, skill_id)
         skill_id_str = str(skill_id) if skill_id is not None else None
@@ -345,7 +359,7 @@ class SkillInstaller:
         mat = self._materialize_store(
             slug=slug, dir_name=dir_name, version=version, commit_sha=commit_sha,
             repo_url=repo_url, manifest=manifest, scope=scope, project=project,
-            skill_id=skill_id_str,
+            skill_id=skill_id_str, local_src=local_src, git_ref=git_ref,
         )
 
         # 2. Линковка стор → scope агента (fallback на copy).
@@ -361,7 +375,8 @@ class SkillInstaller:
 
     def _materialize_store(
         self, *, slug, dir_name, version, commit_sha, repo_url, manifest,
-        scope, project, skill_id,
+        scope, project, skill_id, local_src: Path | None = None,
+        git_ref: str | None = None,
     ) -> dict[str, Any]:
         """Кладёт контент навыка в store_dir. Возвращает {is_update, filter_result, update_diff}."""
         store_dir = self._store_path(dir_name)
@@ -375,17 +390,26 @@ class SkillInstaller:
             up = self._do_update(
                 slug=slug, version=version, commit_sha=commit_sha, repo_url=repo_url,
                 manifest=manifest, scope=scope, project=project, slug_dir=store_dir,
-                skill_id=skill_id,
+                skill_id=skill_id, local_src=local_src, git_ref=git_ref,
             )
             return {"is_update": True, "filter_result": up.filter_result,
                     "update_diff": up.update_diff}
 
         store_dir.parent.mkdir(parents=True, exist_ok=True)
         filter_result: dict[str, int] | None = None
+        source = "hub"
         if repo_url:
-            with self._clone_version(repo_url, version) as cloned:
+            with self._clone_version(repo_url, version, ref=git_ref) as cloned:
                 safe_copy_tree(cloned, store_dir)
             filter_result = apply_skill_filter(store_dir)
+            if git_ref is not None:
+                source = "git-url"  # явный ref ⇒ произвольный git-репо, не hub
+        elif local_src is not None:
+            # Локальный источник: копируем папку как навык через тот же
+            # traversal-guard (safe_copy_tree junction-aware). НЕ stub.
+            safe_copy_tree(Path(local_src), store_dir)
+            filter_result = apply_skill_filter(store_dir)
+            source = "local-path"
         else:
             store_dir.mkdir(parents=True, exist_ok=True)
             (store_dir / "SKILL.md").write_text(
@@ -395,7 +419,10 @@ class SkillInstaller:
             )
         write_meta(
             store_dir,
-            self._build_meta(slug, version, commit_sha, manifest, scope, project, skill_id),
+            self._build_meta(
+                slug, version, commit_sha, manifest, scope, project, skill_id,
+                source=source, repo_url=repo_url,
+            ),
         )
         return {"is_update": False, "filter_result": filter_result, "update_diff": None}
 
@@ -492,6 +519,8 @@ class SkillInstaller:
         project: Path | None,
         slug_dir: Path,
         skill_id: str | None = None,
+        local_src: Path | None = None,
+        git_ref: str | None = None,
     ) -> InstallResult:
         """Докачивает diff между установленной и новой версией.
 
@@ -505,9 +534,40 @@ class SkillInstaller:
         7. write meta.
 
         Без repo_url (stub-режим) — diff пропускаем, только обновляем meta.
+        local_src (локальный источник) — пере-копируем папку целиком (sha-diff
+        не нужен, у локального навыка нет manifest-инвентаря). git_ref (git-url
+        источник) — пере-клонируем ref и копируем дерево целиком (manifest у
+        git-url пустой, sha-diff неприменим).
         """
         old_meta = read_meta(slug_dir) or {}
         old_manifest = old_meta.get("manifest") or {}
+
+        # Источники без manifest-инвентаря (local-path / git-url) обновляем
+        # пере-материализацией всего дерева, сохраняя preserved-пути.
+        if local_src is not None or (repo_url and git_ref is not None):
+            preserved = _preserved_for(manifest, self._target)
+            if local_src is not None:
+                safe_copy_tree(Path(local_src), slug_dir)
+                src_label = "local-path"
+                meta_repo = None
+            else:
+                with self._clone_version(repo_url, version, ref=git_ref) as cloned:
+                    safe_copy_tree(cloned, slug_dir)
+                src_label = "git-url"
+                meta_repo = repo_url
+            filter_result = apply_skill_filter(slug_dir, extra_preserved=preserved)
+            write_meta(
+                slug_dir,
+                self._build_meta(
+                    slug, version, commit_sha, manifest, scope, project, skill_id,
+                    source=src_label, repo_url=meta_repo,
+                ),
+            )
+            return InstallResult(
+                slug=slug, version=version, target_dir=slug_dir,
+                is_update=True, scope=scope, skill_id=skill_id,
+                filter_result=filter_result,
+            )
 
         if not repo_url:
             # Stub-режим: нечего докачивать, только meta.
@@ -555,7 +615,8 @@ class SkillInstaller:
         write_meta(
             slug_dir,
             self._build_meta(
-                slug, version, commit_sha, manifest, scope, project, skill_id
+                slug, version, commit_sha, manifest, scope, project, skill_id,
+                source="hub", repo_url=repo_url,
             ),
         )
         return InstallResult(
@@ -638,19 +699,29 @@ class SkillInstaller:
     #  helpers
     # ------------------------------------------------------------------
     @contextlib.contextmanager
-    def _clone_version(self, repo_url: str, version: str):
-        """git clone версии v<version> во временную папку (yield Path).
+    def _clone_version(self, repo_url: str, version: str, *, ref: str | None = None):
+        """git clone во временную папку (yield Path).
 
+        Поведение по ``ref``:
+        - ``None`` → hub-релиз, клонируется тег ``v<version>``;
+        - ``""`` (пусто) → git-url без явного ref: клон дефолтной ветки репо
+          (``--branch`` опускается — ``--branch HEAD`` git не принимает);
+        - иначе → дословный ref (ветка/тег/sha).
         Папка удаляется при выходе из контекста.
         """
-        ref = f"v{version}"
+        use_default_branch = ref == ""
+        ref = ref if ref is not None else f"v{version}"
         url = _authenticated_url(repo_url)
         tmp = Path(tempfile.mkdtemp(prefix="skills-hub-clone-"))
         clone_dir = tmp / "repo"
+        cmd = ["git", "clone", "--depth", "1"]
+        if not use_default_branch:
+            cmd += ["--branch", ref]
+        cmd += [url, str(clone_dir)]
         try:
             try:
                 subprocess.run(
-                    ["git", "clone", "--depth", "1", "--branch", ref, url, str(clone_dir)],
+                    cmd,
                     check=True,
                     capture_output=True,
                     text=True,
@@ -673,6 +744,8 @@ class SkillInstaller:
         scope: str,
         project: Path | None,
         skill_id: str | None = None,
+        source: str = "hub",
+        repo_url: str | None = None,
     ) -> dict[str, Any]:
         return {
             "slug": slug,
@@ -683,4 +756,6 @@ class SkillInstaller:
             "agent": self._target.name,
             "scope": scope,
             "project": str(project) if project else None,
+            "source": source,  # "hub" | "local-path" | "git-url"
+            "repo_url": repo_url,  # origin для git-url; None у hub/local
         }
