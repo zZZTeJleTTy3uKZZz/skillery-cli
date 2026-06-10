@@ -181,13 +181,26 @@ class HubClient:
         return await self._request("POST", "/companies", json=payload)
 
     async def issue_invite(
-        self, company_id: str, role_id: str, group_ids: list[str]
+        self,
+        company_id: str,
+        role_id: str,
+        email: str | None = None,
+        display_name: str | None = None,
     ) -> dict[str, Any]:
-        return await self._request(
-            "POST",
-            f"/companies/{company_id}/invites",
-            json={"role_id": role_id, "group_ids": group_ids},
-        )
+        """POST /invites (flat, E1).
+
+        nested ``/companies/{cid}/invites`` удалён — backend ждёт плоский
+        ресурс с ``company_id`` в body. Поля ``email``/``display_name``
+        опциональны (pre-emptive создание User(invited)+Membership). Ответ —
+        ``FlatInviteResponse`` (``invite_token``/``invite_url``/``invite_id``/
+        ``expires_at``/``is_new_user``).
+        """
+        body: dict[str, Any] = {"company_id": company_id, "role_id": role_id}
+        if email is not None:
+            body["email"] = email
+        if display_name is not None:
+            body["display_name"] = display_name
+        return await self._request("POST", "/invites", json=body)
 
     async def submit_issue(
         self,

@@ -132,6 +132,47 @@ def _make_refresh_callback(cfg: ClientConfig) -> object:
     return _refresh
 
 
+def _parse_version(raw: str) -> tuple[int, ...] | None:
+    """Парсит semver-подобную строку в кортеж int-сегментов для сравнения.
+
+    Толерантно к:
+    - префиксу ``v``/``V`` (``v1.2.3`` → ``(1, 2, 3)``);
+    - нечисловым хвостам/pre-release (``1.2.0-rc1`` → ``(1, 2, 0)`` — берём
+      только ведущие числовые сегменты);
+    Возвращает ``None``, если ни одного числового сегмента распарсить нельзя
+    (вызывающий код тогда падает на строковое сравнение ``!=``).
+    """
+    s = raw.strip()
+    if s[:1] in ("v", "V"):
+        s = s[1:]
+    parts: list[int] = []
+    for seg in s.split("."):
+        m = re.match(r"\d+", seg.strip())
+        if not m:
+            break  # первый не-числовой сегмент обрывает разбор (хвост игнор)
+        parts.append(int(m.group()))
+    return tuple(parts) if parts else None
+
+
+def _is_newer(candidate: str, current: str) -> bool:
+    """True, только если ``candidate`` СТРОГО новее ``current`` (semver-like).
+
+    Баг B8: раньше апдейт гейтился ``bundle["version"] != current`` — downgrade
+    воспринимался как апдейт. Сравниваем числовые сегменты; недостающие
+    сегменты добиваются нулями (``1.2`` == ``1.2.0``). Если хотя бы одна из
+    версий нераспарсиваема — fallback на строковое ``!=`` (не хуже прежнего
+    поведения, но и не лучше — зато не маскирует баг для валидных версий).
+    """
+    cand = _parse_version(candidate)
+    cur = _parse_version(current)
+    if cand is None or cur is None:
+        return candidate != current
+    width = max(len(cand), len(cur))
+    cand_p = cand + (0,) * (width - len(cand))
+    cur_p = cur + (0,) * (width - len(cur))
+    return cand_p > cur_p
+
+
 def _maybe_auto_update(cfg: ClientConfig) -> None:
     """Тихо обновляет установленные skills до latest published если cooldown прошёл."""
     if not cfg.auto_update or not cfg.is_logged_in():
@@ -164,13 +205,14 @@ def _maybe_auto_update(cfg: ClientConfig) -> None:
     async def _do() -> None:
         client = HubClient(base_url=cfg.base_url, access_token=access, on_token_refresh=_make_refresh_callback(cfg))
         try:
-            updated_any = False
             for slug, current in installed:
                 try:
                     bundle = await client.install_bundle(slug)
                 except Exception:
                     continue
-                if bundle["version"] != current:
+                # B8: апдейтим ТОЛЬКО если опубликованная версия строго новее
+                # установленной — downgrade/равные пропускаем.
+                if _is_newer(bundle["version"], current):
                     installer = SkillInstaller(target, cfg.effective_store_dir())
                     installer.install(
                         slug=slug,
@@ -182,10 +224,11 @@ def _maybe_auto_update(cfg: ClientConfig) -> None:
                     console.print(
                         f"[dim cyan]↑ auto-update[/] {slug}: {current} → {bundle['version']}"
                     )
-                    updated_any = True
-            if updated_any or True:
-                cfg.last_auto_update_at = datetime.now(UTC).isoformat()
-                cfg.save()
+            # Cooldown-таймстамп двигаем всегда после успешного прохода (даже
+            # если ничего не обновилось) — иначе фон-проверка зациклится без
+            # учёта cooldown. Раньше это маскировал мёртвый `if … or True`.
+            cfg.last_auto_update_at = datetime.now(UTC).isoformat()
+            cfg.save()
         finally:
             await client.close()
 
@@ -1657,11 +1700,14 @@ def cmd_admin_sync(
 
 
 def cmd_admin_company_create(
-    slug: str,
     name: str = typer.Option(...),
     owner_email: str = typer.Option(..., "--owner-email"),
     owner_name: str = typer.Option(..., "--owner-name"),
-    max_users: int = typer.Option(5, "--max-users"),
+    slug: Optional[str] = typer.Option(
+        None,
+        "--slug",
+        help="Slug компании (требует hub.slug_manage; опусти → backend создаст slug-less)",
+    ),
 ) -> None:
     """[hub.company_create] Создать новую компанию + invite owner'у."""
     cfg = ClientConfig.load()
@@ -1673,19 +1719,21 @@ def cmd_admin_company_create(
             access_token=access,
             on_token_refresh=_make_refresh_callback(cfg),
         )
+        payload: dict[str, object] = {
+            "name": name,
+            "owner_email": owner_email,
+            "owner_display_name": owner_name,
+        }
+        if slug:
+            payload["slug"] = slug  # пустой slug не шлём → backend сделает slug-less
         try:
-            r = await client.create_company(
-                {
-                    "slug": slug, "name": name,
-                    "owner_email": owner_email, "owner_display_name": owner_name,
-                    "max_users": max_users,
-                }
-            )
+            r = await client.create_company(payload)
         finally:
             await client.close()
 
         def _render(p: dict) -> None:
-            console.print(f"[green]✓[/] Компания {slug} (id={p['company_id']})")
+            label = slug or p.get("company_id")
+            console.print(f"[green]✓[/] Компания {label} (id={p['company_id']})")
             console.print(f"  Owner invite: {p['owner_invite_token']}")
             console.print(f"  URL:          {p['owner_invite_url']}")
 
@@ -1697,14 +1745,21 @@ def cmd_admin_company_create(
 def cmd_admin_invite(
     company_id: str = typer.Option(..., "--company-id"),
     role_id: str = typer.Option(..., "--role-id"),
-    group_ids: Optional[str] = typer.Option(None, "--groups"),
+    email: Optional[str] = typer.Option(
+        None, "--email", help="Email приглашаемого (pre-emptive User+Membership)"
+    ),
+    name: Optional[str] = typer.Option(
+        None, "--name", help="Display-name приглашаемого (вместе с --email)"
+    ),
 ) -> None:
-    """[invite.manage] Выдать invite member/manager'у в свою компанию."""
+    """[invite.manage] Выдать invite member/manager'у в свою компанию.
+
+    Flat POST /invites (E1): nested /companies/{id}/invites удалён. ``--email``
+    + ``--name`` опциональны — если заданы, backend сразу заводит
+    User(invited)+Membership (invitee виден в списке пользователей).
+    """
     cfg = ClientConfig.load()
     access = _get_access_token()
-    groups_list = (
-        [g.strip() for g in group_ids.split(",") if g.strip()] if group_ids else []
-    )
 
     async def _do() -> None:
         client = HubClient(
@@ -1713,12 +1768,14 @@ def cmd_admin_invite(
             on_token_refresh=_make_refresh_callback(cfg),
         )
         try:
-            r = await client.issue_invite(company_id, role_id, groups_list)
+            r = await client.issue_invite(
+                company_id, role_id, email=email, display_name=name
+            )
         finally:
             await client.close()
 
         def _render(p: dict) -> None:
-            console.print(f"[green]✓[/] Invite: {p['token']}")
+            console.print(f"[green]✓[/] Invite: {p['invite_token']}")
             console.print(f"  URL: {p['invite_url']}")
 
         emit_data(r, text_renderer=_render)
