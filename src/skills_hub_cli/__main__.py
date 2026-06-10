@@ -74,10 +74,30 @@ init_output_mode(
 
 # ---------- helpers ----------
 def _run(coro) -> None:  # noqa: ANN001
+    """Запуск async-команды с ЕДИНЫМ контрактом ошибок.
+
+    json-режим: ожидаемые ошибки (ApiError / RuntimeError) → emit_error =
+    {"event":"error","code":...,"message":...} одной JSON-строкой в stderr,
+    stdout не засоряется plain-текстом, traceback не печатается.
+    text-режим: прежнее читабельное «Ошибка API: ...» (ApiError) /
+    «RUNTIME: ...» (RuntimeError). В обоих случаях exit 1.
+    """
     try:
         asyncio.run(coro)
     except ApiError as e:
-        console.print(f"[red]Ошибка API:[/] {e}")
+        if is_json():
+            emit_error(e.code or "API", e.message or str(e), status_code=e.status_code)
+        else:
+            console.print(f"[red]Ошибка API:[/] {e}")
+        sys.exit(1)
+    except (typer.Exit, typer.Abort):
+        # click.exceptions.Exit/Abort наследуют RuntimeError — это штатное
+        # завершение команды (emit_error уже сделан), пропускаем насквозь.
+        raise
+    except RuntimeError as e:
+        # Например installer._clone_version: RuntimeError('git clone failed: ...')
+        # — короткое сообщение вместо многоэкранного Rich-traceback.
+        emit_error("RUNTIME", str(e))
         sys.exit(1)
 
 

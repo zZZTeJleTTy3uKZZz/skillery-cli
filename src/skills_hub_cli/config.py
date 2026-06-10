@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import os
+import sys
 import tomllib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -242,22 +244,86 @@ def _try_keyring() -> object | None:
         return None
 
 
+def _tokens_file_path() -> Path:
+    return _default_config_dir() / "tokens.toml"
+
+
+def _write_tokens_file(user_email: str, access: str, refresh: str) -> None:
+    """File-fallback хранения токенов: tokens.toml + chmod 600 (best-effort)."""
+    path = _tokens_file_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        tomli_w.dumps({"user_email": user_email, "access": access, "refresh": refresh}),
+        encoding="utf-8",
+    )
+    with contextlib.suppress(Exception):
+        os.chmod(path, 0o600)
+
+
+def _read_tokens_file() -> tuple[str | None, str | None]:
+    path = _tokens_file_path()
+    if not path.exists():
+        return None, None
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
+    except Exception:
+        return None, None
+    return data.get("access"), data.get("refresh")
+
+
+def _warn_stderr(message: str) -> None:
+    """Один аккуратный warning в stderr (НЕ traceback).
+
+    В json-режиме stderr — это JSON Lines (контракт output.py), поэтому
+    предупреждение оборачивается в {"event":"warn",...}; в text — плоская
+    строка. Импорт output — лениво и в try/except, чтобы config оставался
+    автономным (используется и до инициализации output).
+    """
+    one_line = " ".join(message.split())
+    json_mode = False
+    try:
+        from skills_hub_cli.output import is_json
+
+        json_mode = is_json()
+    except Exception:
+        pass
+    if json_mode:
+        print(
+            json.dumps({"event": "warn", "message": one_line}, ensure_ascii=False),
+            file=sys.stderr,
+        )
+    else:
+        print(f"! {one_line}", file=sys.stderr)
+
+
 def save_tokens(user_email: str, access: str, refresh: str) -> None:
     kr = _try_keyring()
     if kr is None:
-        path = _default_config_dir() / "tokens.toml"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            tomli_w.dumps({"user_email": user_email, "access": access, "refresh": refresh}),
-            encoding="utf-8",
-        )
-        try:
-            os.chmod(path, 0o600)
-        except Exception:
-            pass
+        _write_tokens_file(user_email, access, refresh)
         return
-    kr.set_password(_keyring_namespace(), f"{user_email}:access", access)  # type: ignore[attr-defined]
-    kr.set_password(_keyring_namespace(), f"{user_email}:refresh", refresh)  # type: ignore[attr-defined]
+    ns = _keyring_namespace()
+    try:
+        kr.set_password(ns, f"{user_email}:access", access)  # type: ignore[attr-defined]
+        kr.set_password(ns, f"{user_email}:refresh", refresh)  # type: ignore[attr-defined]
+    except Exception as e:
+        # Windows Credential Manager ограничивает blob 2560 байт (UTF-16 →
+        # ~1280 символов): длинные JWT дают CredWrite WinError 1783. Любая
+        # ошибка записи → file-fallback ОБОИХ токенов. При partial-write
+        # (access записался, refresh упал) НЕ оставляем рассинхрон: возможно
+        # записанные keyring-ключи удаляются best-effort.
+        for key in ("access", "refresh"):
+            with contextlib.suppress(Exception):
+                kr.delete_password(ns, f"{user_email}:{key}")  # type: ignore[attr-defined]
+        _write_tokens_file(user_email, access, refresh)
+        _warn_stderr(
+            f"keyring недоступен для записи токенов ({e.__class__.__name__}: {e}); "
+            f"токены сохранены в файл {_tokens_file_path()}"
+        )
+        return
+    # Запись в keyring успешна — подчищаем устаревший file-fallback, чтобы
+    # load_tokens при недоступном keyring не вернул СТАРУЮ пару токенов.
+    with contextlib.suppress(Exception):
+        _tokens_file_path().unlink(missing_ok=True)
 
 
 def load_tokens(user_email: str) -> tuple[str | None, str | None]:
@@ -267,23 +333,29 @@ def load_tokens(user_email: str) -> tuple[str | None, str | None]:
 
     kr = _try_keyring()
     if kr is None:
-        path = _default_config_dir() / "tokens.toml"
-        if not path.exists():
-            return None, None
-        data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
-        return data.get("access"), data.get("refresh")
-    access = kr.get_password(_keyring_namespace(), f"{user_email}:access")  # type: ignore[attr-defined]
-    refresh = kr.get_password(_keyring_namespace(), f"{user_email}:refresh")  # type: ignore[attr-defined]
+        return _read_tokens_file()
+    access: str | None = None
+    refresh: str | None = None
+    try:
+        access = kr.get_password(_keyring_namespace(), f"{user_email}:access")  # type: ignore[attr-defined]
+        refresh = kr.get_password(_keyring_namespace(), f"{user_email}:refresh")  # type: ignore[attr-defined]
+    except Exception:
+        access, refresh = None, None
+    if access is None or refresh is None:
+        # keyring установлен, но запись могла уйти в file-fallback (например
+        # CredWrite WinError 1783 на длинных JWT) — дочитываем tokens.toml.
+        file_access, file_refresh = _read_tokens_file()
+        access = access if access is not None else file_access
+        refresh = refresh if refresh is not None else file_refresh
     return access, refresh
 
 
 def clear_tokens(user_email: str) -> None:
+    """Чистит ОБА хранилища best-effort: keyring-ключи и file-fallback."""
     kr = _try_keyring()
-    if kr is None:
-        (_default_config_dir() / "tokens.toml").unlink(missing_ok=True)
-        return
-    for key in ("access", "refresh"):
-        try:
-            kr.delete_password(_keyring_namespace(), f"{user_email}:{key}")  # type: ignore[attr-defined]
-        except Exception:
-            pass
+    if kr is not None:
+        for key in ("access", "refresh"):
+            with contextlib.suppress(Exception):
+                kr.delete_password(_keyring_namespace(), f"{user_email}:{key}")  # type: ignore[attr-defined]
+    with contextlib.suppress(Exception):
+        _tokens_file_path().unlink(missing_ok=True)
