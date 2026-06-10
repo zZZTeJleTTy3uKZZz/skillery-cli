@@ -1622,6 +1622,24 @@ def cmd_update(
                     manifest=bundle["manifest"],
                     project=proj,
                 )
+                if up.skipped:
+                    # Stub-guard: installer отказался затирать живой контент —
+                    # честно рапортуем пропуск, событие skill.update не шлём.
+                    results.append(
+                        {
+                            "slug": meta_slug,
+                            "skill_id": up.skill_id or meta_skill_id,
+                            "ref": ref,
+                            "scope": scope_label,
+                            "project": str(proj) if proj else None,
+                            "from": current_version,
+                            "to": current_version,
+                            "updated": False,
+                            "skipped": True,
+                            "skip_reason": up.skip_reason,
+                        }
+                    )
+                    continue
                 results.append(
                     {
                         "slug": meta_slug,
@@ -1651,7 +1669,12 @@ def cmd_update(
             for r in rows:
                 # slug может быть None у slug-less skill — показываем ref (id).
                 label = r.get("slug") or r.get("ref")
-                if r["updated"]:
+                if r.get("skipped"):
+                    console.print(
+                        f"[yellow]⚠ {label} ({r['scope']}): обновление пропущено "
+                        f"({r.get('skip_reason')})[/]"
+                    )
+                elif r["updated"]:
                     d = r.get("diff")
                     diff_suffix = ""
                     if d:
