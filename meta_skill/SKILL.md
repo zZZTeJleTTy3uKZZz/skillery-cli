@@ -175,7 +175,7 @@ skills-hub update --all                          # global + project одной �
 | `skills-hub tickets list [--status ...] [--kind ...] [--priority ...] [--skill <id-или-slug>] [--page N] [--page-size N]` | Список тикетов в твоём scope (RBAC: hub-admin → все; company-admin → company; skill-creator → свои назначения; user → свои создания) |
 | `skills-hub ticket show <tkt_id>`                      | Тикет + thread сообщений                  |
 | `skills-hub ticket reply <tkt_id> "<body>" [--screenshot path]` | Добавить ответ в thread             |
-| `skills-hub ticket status <tkt_id> <open\|in_progress\|resolved\|closed\|reopened>` | Сменить статус (assignee / hub-admin) |
+| `skills-hub ticket status <tkt_id> <new\|in_progress\|scheduled\|done\|rejected>` | Сменить статус (assignee / hub-admin) |
 
 > **Планируется** (пока НЕ реализовано): `ticket assign <tkt_id> <user_id>`
 > (назначение ответственного вручную) и фильтры `tickets list --mine /

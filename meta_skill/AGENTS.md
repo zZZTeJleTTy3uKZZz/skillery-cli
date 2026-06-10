@@ -210,7 +210,7 @@ skills-hub ticket reply tkt_xyz789 "Попробуйте включить debug 
 
 # Сменить статус (assignee / hub-admin)
 skills-hub ticket status tkt_xyz789 in_progress
-skills-hub ticket status tkt_xyz789 resolved
+skills-hub ticket status tkt_xyz789 done
 ```
 
 Команда листинга — `tickets list` (под-app `tickets`). Видимость задаётся
