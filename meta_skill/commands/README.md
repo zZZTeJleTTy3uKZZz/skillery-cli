@@ -24,6 +24,10 @@ Claude Code новее `2025-03` — положи эти файлы в
 | `/skills-hub-ticket <subj>`    | Создать тикет тех-поддержки                      |
 | `/skills-hub-issue <descr>`    | Legacy alias: `report --kind bug`                |
 | `/skills-hub-collections`      | `skills-hub collections list` — список (+ подсказка `collection install`) |
+| `/skills-hub-collections-local` | `skills-hub collection *-local` — локальные коллекции (оффлайн, без хаба) |
+| `/skills-hub-onboard`          | `skills-hub onboard` — детект стека проекта → подбор навыков → `--yes` |
+| `/skills-hub-company`          | `skills-hub company *` — создать компанию, invite-links, granted-каталог |
+| `/skills-hub-member`           | `skills-hub member *` / `members` / `roles` — участники компании |
 | `/skills-hub-self-update`      | Перепоставить CLI из исходников (pipx/pip из `client/`) |
 
 ## Установка

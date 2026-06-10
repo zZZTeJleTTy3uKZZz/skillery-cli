@@ -42,8 +42,12 @@
                                            list / install / rate / comment /
                                            ticket / collections / events
 
-Примечание: `install --path` / `install --from-git` (автономно, без хаба)
-работают и в состоянии «logged out» — логин для них не требуется.
+Примечание: в состоянии «logged out» работает не только login. Always-on
+зона: `register` / `join` (самостоятельный онбординг аккаунта),
+`install --path` / `install --from-git` (автономно, без хаба),
+`enable` / `disable` / `remove` / `sync` / `migrate` / `store *`
+(lifecycle локального стора), `collection *-local` (локальные коллекции),
+`onboard` (по локальному стору; hub-поиск подключится после login).
 ```
 
 ## Шаг 0 — детектировать состояние
@@ -83,6 +87,25 @@ skills-hub login --email <user@x.io>
 ```
 
 В JSON-режиме `--password` обязателен (нет TTY для prompt'а).
+
+### Нет аккаунта вовсе — register / join (P1, always-on)
+
+Если у пользователя нет ни инвайта, ни пароля — он может зарегистрироваться
+сам, ДО login (см. сценарий «Первый запуск без аккаунта» ниже):
+
+```bash
+# Без инвайта (юзер без компании, доступ к публичным навыкам):
+skills-hub --json register --email <user@x.io> --password '<pw>' [--name "Имя"]
+
+# По переиспользуемой пригласительной ссылке компании (URL или голый токен):
+skills-hub --json join 'https://hub.example.com/join/<token>' \
+    --email <user@x.io> --password '<pw>' [--name "Имя"]
+```
+
+Правила: пароль ≥ 8 символов; display-name по умолчанию — часть email до
+`@` (`--name` переопределяет); в JSON-режиме `--email`/`--password`
+обязательны флагами. Обе команды сохраняют сессию (токены в keyring) — отдельный
+`login` после них не нужен.
 
 ## Шаг 2 — установить нужный skill
 
@@ -241,7 +264,34 @@ skills-hub --json collection install <slug>          # массовый install 
 Полезно при onboarding нового клиента: `collection install bitrix-starter`
 ставит сразу `bitrix24` + `bitrix-1c-partners-cli` + `bitrix24-stats`.
 
-Создание/редактирование коллекций из CLI не поддержано — только Web UI.
+Создание/редактирование **серверных** коллекций из CLI не поддержано —
+только Web UI.
+
+### Локальные коллекции (P1) — оффлайн, без хаба и логина
+
+Личные наборы слагов в `<config_dir>/collections.toml` (по умолчанию
+`~/.skills-hub/collections.toml`; уважает `SKILLS_HUB_CONFIG_DIR` и
+`--profile`). Web UI их не видит, сеть не нужна:
+
+```bash
+skills-hub collection create-local my-stack --title "Мой стек"
+skills-hub collection add-local my-stack bitrix24       # слаг или числовой id
+skills-hub collection add-local my-stack wb-api         # нет в сторе → warning, но добавится
+skills-hub --json collection list-local                 # имя / размер / чего нет в сторе
+skills-hub --json collection install-local my-stack     # установить весь набор
+skills-hub collection remove-local my-stack wb-api      # убрать из коллекции (диск цел)
+skills-hub collection delete-local my-stack             # удалить коллекцию (навыки на диске целы)
+```
+
+`install-local` для каждого слага: есть в сторе → линк в scope (как
+`enable`, БЕЗ сети); нет в сторе и залогинен → докачка из хаба
+(`--channel`, default `published`); нет и НЕ залогинен → skip с подсказкой —
+команда не падает. JSON-итог: `{installed, linked, skipped}` (+`hint`, если
+пропуски из-за отсутствия логина). Флаги как у `install`: `--scope
+global|project`, `--project P`, `--force`, `--agent A`.
+
+Используй локальные коллекции, когда пользователь хочет повторяемый личный
+набор навыков для новых машин/проектов без публикации коллекции в хаб.
 
 ## Шаг 8 — event tracking + daemon (E23)
 
@@ -306,29 +356,143 @@ Backend выдаёт `code`, привязанный к JWT текущей CLI-с
 обменивает его на свою cookie-сессию через `/auth/exchange/redeem`. Не
 надо отдельно логиниться в Web.
 
+## Сценарии P1 — аккаунт, компания, проект
+
+Три типовых конвейера поверх шагов выше. Везде используй `--json` и парсь
+поле `event`.
+
+### Сценарий 1 — первый запуск без аккаунта
+
+```bash
+skills-hub --json status                       # logged_in=false → аккаунта/сессии нет
+```
+
+**Есть пригласительная ссылка компании** (`…/join/<token>` или голый токен):
+
+```bash
+skills-hub --json join 'https://hub.example.com/join/<token>' \
+    --email user@x.io --password '<pw ≥8>' --name "Имя"
+# event=joined, method=register_with_link → юзер + membership + сессия
+```
+
+**Ссылки нет** — регистрация без компании (доступ к публичным навыкам):
+
+```bash
+skills-hub --json register --email user@x.io --password '<pw ≥8>'
+# event=registered → сессия сохранена; в компанию можно вступить позже: join <ссылка>
+```
+
+Нюансы:
+
+- Пользователь **уже залогинен** и даёт ссылку → `join <ссылка>` вступает
+  ТЕКУЩИМ аккаунтом (`--email`/`--password` игнорируются). Нужен второй
+  аккаунт → сначала `skills-hub logout`.
+- `join` у залогиненного **не меняет активную компанию** в токене. Чтобы
+  работать в новой компании: `skills-hub company switch <company_id>`
+  (перевыпустит токены; новая пара сохранится автоматически, набор команд
+  в `--help` может измениться).
+- Display-name по умолчанию — часть email до `@`; пароль ≥ 8 символов.
+
+### Сценарий 2 — корпоративный онбординг (компания → ссылки → люди → каталог)
+
+```bash
+# 1. Создать компанию + invite owner'у (право hub.company_create;
+#    --slug требует hub.slug_manage — без него slug-less компания)
+skills-hub --json company create --name "Acme" \
+    --owner-email owner@acme.io --owner-name "Owner"
+# → owner_invite_token + owner_invite_url — передай владельцу (вход через login <token>)
+
+# 2. Владелец: переиспользуемая join-ссылка для всей команды
+#    (право company.manage | role.manage; kind=manager — только владелец)
+skills-hub --json company invite-links create \
+    --kind member --max-uses 50 --expires-in-days 30
+# → join_url ГОТОВЫЙ (<web-ui>/join/<token>) — токен показывается ОДИН раз,
+#   сразу передай команде; список/отзыв: invite-links list / revoke <link_id>
+
+# 3. Адресный инвайт конкретного участника (право user.invite)
+skills-hub --json roles                                  # выбрать role-id
+skills-hub --json member invite --email dev@acme.io --role-id <role_id>
+# → invite_token + invite_url; приглашённый сразу виден в `members` (invited)
+
+# 4. Выдать компании навыки / коллекции (право catalog.manage)
+skills-hub --json company catalog grant bitrix24          # ref = slug или id
+skills-hub --json company catalog grant starter --collection
+skills-hub --json company catalog list                    # навыки + коллекции + effective
+```
+
+Дальше по жизни: `members --q <строка>` (поиск), `member change-role
+<user_id> <role_id>` (право role.manage), `member lock/unlock <user_id>`
+(user.lock), `member remove <user_id>` (user.remove), `member
+reset-password <user_id>` (company.manage) — одноразовый пароль показывается
+**ОДИН раз**; в `--json` он приходит в stdout (`temp_password`) — передай
+пользователю и **не логируй**. `--company <id>` везде опционален (default —
+активная компания из JWT).
+
+### Сценарий 3 — новый проект (onboard → подтверждение → enable)
+
+```bash
+cd /path/to/project
+skills-hub --json onboard            # детект стека → {signals, suggestions}
+```
+
+1. Покажи пользователю таблицу предложений: `slug`, `source`
+   (local | hub | both), `signals` (чем заматчился), пометка `already`
+   (уже включён в проект). Сигналы детектятся по маркер-файлам: python /
+   nodejs (+nextjs, react) / docker / terraform / go / rust / claude-code.
+2. Спроси подтверждение. Согласен на всё:
+
+```bash
+skills-hub --json onboard --yes      # включить каждый не-already кандидат
+# applied: {linked (из стора), installed (докачаны из хаба), already, skipped}
+```
+
+3. Согласен точечно — включай выбранные навыки по одному:
+
+```bash
+skills-hub --json enable <slug>
+```
+
+Нюансы: без логина onboard работает только по локальному стору (hub-кандидаты
+и докачка появятся после login — навыки не из стора попадут в `skipped` с
+`reason=not_logged_in`); `--limit N` — сколько кандидатов тянуть с хаба на
+сигнал (капится 20); повторный запуск идемпотентен (`already`).
+
 ## RBAC permissions, которые могут понадобиться
 
 | Permission              | Что разрешает                                       |
 | ----------------------- | --------------------------------------------------- |
-| `skill.read`            | `list`, `show`, `comments`, `contributors`, `rating-summary`, `collections list` / `collection show` / `collection install` |
-| `skill.install`         | `install`, `update`, `remove`, `enable`, `disable`, `sync`, `migrate`, `store *` |
+| `skill.read`            | `list`, `show`, `comments`, `contributors`, `rating-summary`, `collections list` / `collection show` |
+| `skill.install`         | `install` из хаба, `update`, `collection install`   |
 | `skill.rate`            | `rate`, `rating-summary`                            |
-| `comment.post`          | `comment`, `comment-edit`, `comment-delete`         |
+| `comment.post`          | `comment` (создать / ответить)                      |
+| `comment.edit_own`      | `comment-edit`                                      |
+| `comment.delete_own`    | `comment-delete`                                    |
 | `skill.publish`         | `publish` (creator)                                 |
 | `skill.report_issue`    | legacy `report`                                     |
 | `ticket.create`         | `ticket create`, `ticket reply`                     |
 | `ticket.read`           | `tickets list`, `ticket show`                       |
+| `ticket.update_status`  | `ticket status`                                     |
 | `events.send`           | реальная отправка events на backend (daemon/flush)  |
-| `hub.admin`             | `admin sync-skill`                                  |
-| `hub.company_create`    | `admin company-create`                              |
+| `user.invite`           | `member invite`                                     |
+| `user.remove`           | `member remove`                                     |
+| `role.manage`           | `member change-role`; также открывает `company invite-links *` |
+| `user.lock`             | `member lock` / `member unlock`                     |
+| `company.manage`        | `company edit`, `member reset-password`; также открывает `company invite-links *` |
+| `catalog.manage`        | `company catalog list / grant / revoke`             |
+| `catalog.view_all`      | `company catalog list` (read-only)                  |
+| `hub.admin`             | `company list`, `admin sync-skill` (+hub-admin bypass: проходит все permission-гейты CLI) |
+| `hub.company_create`    | `company create`, legacy `admin company-create`     |
 | `invite.manage`         | `admin invite`                                      |
 
-> `ticket reply` / `ticket status`, `comment-edit` / `comment-delete`,
-> `collection install`, `daemon uninstall`, `install --path` / `--from-git` —
-> новые команды; их точные permission-гейты определяются backend'ом. Коллекции
-> и rating-summary видны при `skill.read` (отдельного `collection.*` permission
-> нет). Команды `ticket assign` и `collection create/delete/add-*` из CLI
-> **не реализованы**.
+> **Always-on** (без логина и без прав): `register`, `join`,
+> `install --path` / `--from-git`, `enable` / `disable` / `remove` / `sync` /
+> `migrate` / `store *`, `collection *-local`, `onboard`. **Любой
+> залогиненный** (без отдельного права): `members`, `roles`, `company show`,
+> `company switch`, `passwd` — backend сам сужает выдачу tenant-изоляцией
+> (member без admin-прав в `members` видит только себя). Коллекции и
+> rating-summary видны при `skill.read` (отдельного `collection.*` permission
+> нет). Команды `ticket assign` и серверные `collection create/delete/add-*`
+> из CLI **не реализованы** (локальные `collection *-local` — реализованы).
 
 CLI скрывает в `--help` все команды, на которые нет permission, — это
 управляется build_app() при запуске.

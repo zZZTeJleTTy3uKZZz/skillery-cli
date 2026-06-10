@@ -135,6 +135,34 @@ CLI автодетектит установленного агента (Claude C
 skills-hub install bitrix24 --agent codex
 ```
 
+## Что нового в v0.3 (P0 автономность + P1 паритет с Web)
+
+- **P0 — автономный install без хаба**: `install --path ./skill` и
+  `install --from-git <url> [--ref <tag>]` кладут навык в стор без логина и
+  backend'а. Lifecycle локального стора (`enable` / `disable` / `remove` /
+  `sync` / `migrate` / `store *`) теперь **always-on** — работает без login.
+- **P1 — самостоятельный онбординг аккаунта**: `register` (без инвайта, юзер
+  без компании) и `join <ссылка-или-токен>` (вступление в компанию по
+  переиспользуемой ссылке `…/join/<token>`); обе работают до login и сразу
+  сохраняют сессию. `join` у залогиненного вступает текущим аккаунтом и не
+  меняет активную компанию (дальше `company switch`).
+- **P1 — компании из CLI**: sub-app `company` — `list / show / create /
+  edit / switch` (switch перевыпускает токены), `invite-links
+  list / create / revoke` (create печатает готовый join-URL; токен виден один
+  раз), granted-каталог `catalog list / grant / revoke` (`--collection` для
+  коллекций; slug резолвится автоматически).
+- **P1 — участники**: `members`, `roles`, `member invite / remove /
+  change-role / lock / unlock / reset-password` (одноразовый пароль
+  показывается один раз). Гейты зеркалят backend-права (`user.invite`,
+  `role.manage`, …).
+- **P1 — локальные коллекции**: `collection create-local / add-local /
+  remove-local / list-local / install-local / delete-local` — личные наборы
+  в `~/.skills-hub/collections.toml`, полностью оффлайн; `install-local`
+  линкует из стора и докачивает недостающее из хаба при логине.
+- **P1 — онбординг проекта**: `onboard [--yes]` — детект стека
+  (python / nodejs / nextjs / react / docker / terraform / go / rust /
+  claude-code) → подбор навыков из стора + хаба → `--yes` включает в проект.
+
 ## Что нового в v0.2 (E1..E26 marathon)
 
 - **E7 — оценки и комментарии**: `rate`, `rating-summary`, `comment`,

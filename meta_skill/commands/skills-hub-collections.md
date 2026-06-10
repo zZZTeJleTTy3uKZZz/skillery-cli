@@ -20,3 +20,7 @@ skills-hub --json collections list
 Если пользователь спросил, что есть в hub'е — предпочитай `collections list`
 перед плоским `list`, потому что они тематически сгруппированы. А если он
 хочет «поставь мне набор для X» — `collection install <id-или-slug>`.
+
+Если пользователь хочет **личный** набор (оффлайн, без публикации в хаб) —
+это локальные коллекции: `/skills-hub-collections-local`
+(`collection create-local / add-local / install-local …`).

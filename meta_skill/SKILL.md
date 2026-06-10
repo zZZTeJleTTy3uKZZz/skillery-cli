@@ -2,19 +2,32 @@
 name: skills-hub
 description: |
   Bootstrap-навык Skills Hub: ставит `skills-hub` CLI у клиента, регистрирует
-  агента по invite-токену, устанавливает / обновляет приватные навыки команды
+  агента по invite-токену ИЛИ самостоятельно (register без инвайта / join по
+  пригласительной ссылке), устанавливает / обновляет приватные навыки команды
   Дмитрия, а также управляет оценками (E7), комментариями (E7), тикетами тех-
-  поддержки (E8), коллекциями (E10) и event-tracking daemon (E23).
+  поддержки (E8), коллекциями (E10) — включая локальные оффлайн-коллекции,
+  компаниями и участниками из CLI (P1: company create / invite-links /
+  catalog grant, member invite / change-role), онбордингом проекта (onboard:
+  детект стека → подбор навыков) и event-tracking daemon (E23).
   Используй когда пользователь говорит: «поставь skills-hub», «залогинься
-  в skills-hub», «обнови мои навыки hub», «skills-hub install <slug>», «что
+  в skills-hub», «зарегистрируйся в hub», «вступи в компанию по ссылке»,
+  «обнови мои навыки hub», «skills-hub install <slug>», «что
   есть в каталоге skills-hub», «оцени skill X», «оставь коммент к skill»,
-  «отправь тикет в поддержку», «покажи коллекции», «включи телеметрию
-  skills-hub». EN triggers: install skills-hub, login to skills hub, update
-  hub skills, list hub skills, rate a hub skill, comment on a hub skill,
-  open a support ticket, list hub collections, start skills-hub daemon.
-  RU triggers: поставь skills-hub, залогинь меня в hub, обнови навыки,
-  список навыков hub, оцени навык, прокомментируй навык, тикет в поддержку,
-  список коллекций hub, запусти телеметрию hub.
+  «отправь тикет в поддержку», «покажи коллекции», «создай локальную
+  коллекцию», «создай компанию из CLI», «пригласи участника в компанию»,
+  «выдай компании навык», «подбери навыки под проект», «включи телеметрию
+  skills-hub». EN triggers: install skills-hub, login to skills hub, register
+  in skills hub, join a company by invite link, update hub skills, list hub
+  skills, rate a hub skill, comment on a hub skill, open a support ticket,
+  list hub collections, create a local skill collection, create a company
+  from CLI, invite a member, grant a skill to a company, onboard a project,
+  suggest skills for this project, start skills-hub daemon.
+  RU triggers: поставь skills-hub, залогинь меня в hub, зарегистрируй меня в
+  hub, вступи в компанию по ссылке, обнови навыки, список навыков hub, оцени
+  навык, прокомментируй навык, тикет в поддержку, список коллекций hub,
+  локальная коллекция навыков, создай компанию, пригласи участника, выдай
+  навык компании, онбординг проекта, подбери навыки под стек, запусти
+  телеметрию hub.
 ---
 
 # Skills Hub bootstrap-skill
@@ -24,7 +37,10 @@ description: |
 
 1. **Поставить CLI** — `python ./scripts/install.py` (ставит из исходников
    монорепо через pipx/pip; см. «Установка CLI» ниже).
-2. **Авторизовать** клиента через invite-токен ИЛИ через email + password.
+2. **Авторизовать** клиента через invite-токен, email + password ИЛИ
+   самостоятельно: `register` (без инвайта, юзер без компании) / `join
+   <ссылка>` (вступление в компанию по переиспользуемой пригласительной
+   ссылке) — обе команды работают до login.
 3. **Перечислить** доступные навыки (RBAC) и **установить** нужные (global
    или per-project scope).
 4. **Ставить навык автономно — без хаба** — из локальной папки
@@ -38,9 +54,18 @@ description: |
 8. **Просматривать и устанавливать коллекции** (E10) — кураторские подборки
    навыков (статические или динамические по тегам); `collection install`
    ставит всю подборку одной командой (главный онбординг-кейс).
-9. **Запускать event-tracking daemon** (E23) — фон-агент шлёт `skill.install`,
-   `skill.update`, `skill.run` в `/events` (opt-in).
-10. **Сообщать о багах** через `skills-hub report` (исторический shortcut
+9. **Вести локальные коллекции** (P1) — личные наборы слагов в
+   `~/.skills-hub/collections.toml`; работают полностью **оффлайн**, без
+   логина и хаба (`collection create-local / add-local / install-local …`).
+10. **Управлять компанией из CLI** (P1) — `company create / edit / switch`,
+    переиспользуемые пригласительные ссылки (`invite-links`), granted-каталог
+    (`catalog grant`), участники (`member invite / change-role / lock …`).
+11. **Онбордить проект** — `skills-hub onboard`: детект стека по
+    маркер-файлам → подбор навыков из стора и хаба → `--yes` включает их в
+    проект.
+12. **Запускать event-tracking daemon** (E23) — фон-агент шлёт `skill.install`,
+    `skill.update`, `skill.run` в `/events` (opt-in).
+13. **Сообщать о багах** через `skills-hub report` (исторический shortcut
     к тикетам).
 
 ## Установка CLI
@@ -133,9 +158,30 @@ skills-hub update --all                          # global + project одной �
 | `skills-hub logout`         | Очистить локальные токены и permissions          |
 | `skills-hub whoami`         | Кто я + permissions + роли                       |
 | `skills-hub status`         | Что установлено (global + project) + agent + login |
-| `skills-hub passwd`         | Сменить (или установить) пароль                  |
+| `skills-hub passwd`         | Сменить (или установить) пароль (требует login)  |
 | `skills-hub config`         | Output format, auto-update, default install scope |
 | `skills-hub web`            | Открыть Web UI с автоматической авторизацией     |
+
+### Аккаунт и вступление — P1 (always-on, работают ДО login)
+
+| Команда                                                | Назначение                                |
+| ------------------------------------------------------ | ----------------------------------------- |
+| `skills-hub register --email E --password P [--name N]` | Самостоятельная регистрация **без инвайта**: создаёт юзера без компании (доступ к публичным навыкам) + локальную сессию. Пароль ≥ 8 символов. Display-name по умолчанию — часть email до `@`, `--name` переопределяет |
+| `skills-hub join <токен-или-URL> [--email E --password P [--name N]]` | Вступить в компанию по переиспользуемой пригласительной ссылке. Принимает и готовый URL (`…/join/<token>`), и голый токен |
+
+Семантика `join` зависит от состояния сессии:
+
+- **Залогинен** → вступление ТЕКУЩИМ аккаунтом (`--email`/`--password`
+  игнорируются). Чтобы вступить вторым аккаунтом — сначала
+  `skills-hub logout`.
+- `join` у залогиненного **НЕ меняет активную компанию** в токене — после
+  вступления переключись: `skills-hub company switch <id>`.
+- **Не залогинен** → регистрация по ссылке: обязательны `--email` и
+  `--password` (≥ 8 символов; +опц. `--name`) → создаётся юзер + membership +
+  локальная сессия.
+
+В `--json`-режиме `--email`/`--password` обязательны флагами (интерактивного
+prompt'а нет).
 
 ### Каталог и установка (`skill.read`, `skill.install`)
 
@@ -154,6 +200,13 @@ skills-hub update --all                          # global + project одной �
 | `skills-hub migrate [--scope all\|global\|project] [--dry-run]` | Перевести старые copy-установки в стор+ссылки |
 | `skills-hub store list / path / gc`                    | Содержимое стора / путь / сборка мусора |
 | `skills-hub remove <id-или-slug> [--purge]`            | Снять ссылку (с `--purge` — и из стора) |
+
+> **Always-on:** `install` (автономные `--path` / `--from-git`), `enable`,
+> `disable`, `remove`, `sync`, `migrate`, `store *` работают с локальным
+> стором **без login** — сеть нужна только hub-веткам (sync-докачка,
+> hub-enable), которые сами попросят авторизацию. Гейты `skill.read` /
+> `skill.install` касаются hub-операций: `list`, `show`, `install` из хаба,
+> `update`.
 
 ### Оценки и комментарии — E7 (`skill.rate`, `comment.post`)
 
@@ -193,9 +246,59 @@ skills-hub update --all                          # global + project одной �
 | `skills-hub collection show <id-или-slug>`             | Детали + развёрнутый список skills        |
 | `skills-hub collection install <id-или-slug>`          | Поставить все skills из коллекции одной командой (главный онбординг-кейс) |
 
-> Создание/редактирование коллекций (`create` / `add-skill` / `add-tag` /
-> `delete`) из CLI **не реализовано** — это делается в Web UI. CLI работает с
-> коллекциями в режиме read-only + `collection install`.
+> Создание/редактирование **серверных** коллекций (`create` / `add-skill` /
+> `add-tag` / `delete`) из CLI **не реализовано** — это делается в Web UI. С
+> серверными коллекциями CLI работает в режиме read-only + `collection
+> install`. Зато **локальные** коллекции (см. следующий раздел) полностью
+> управляются из CLI и работают оффлайн.
+
+### Локальные коллекции — P1 (always-on, оффлайн, без хаба)
+
+Личные наборы слагов в `~/.skills-hub/collections.toml` (точнее —
+`<config_dir>/collections.toml`: уважает `SKILLS_HUB_CONFIG_DIR` и
+`--profile`). Не требуют ни логина, ни сети — Web UI их не видит.
+
+| Команда                                                | Назначение                                |
+| ------------------------------------------------------ | ----------------------------------------- |
+| `skills-hub collection create-local <name> [--title T]` | Создать локальную коллекцию (имя: буквы/цифры/`-`/`_`; `--title` — человекочитаемый заголовок) |
+| `skills-hub collection add-local <name> <skill-slug>`  | Добавить навык. Слага нет в сторе → warning, но слаг добавится — `install-local` докачает его из хаба при логине |
+| `skills-hub collection remove-local <name> <skill-slug>` | Убрать навык из коллекции (диск/стор не трогаются) |
+| `skills-hub collection list-local`                     | Список: имя, размер, какие слаги отсутствуют в сторе |
+| `skills-hub collection install-local <name> [--scope global\|project] [--project P] [--channel C] [--force] [--agent A]` | Установить коллекцию (см. ниже) |
+| `skills-hub collection delete-local <name>`            | Удалить коллекцию (установленные навыки на диске не трогаются) |
+
+`install-local` для каждого слага коллекции:
+
+- **есть в сторе** → локальный линк в scope (как `enable`, БЕЗ сети);
+- **нет в сторе + залогинен** → докачка из хаба (`--channel` задаёт канал);
+- **нет в сторе + НЕ залогинен** → skip с подсказкой — команда не падает.
+
+Итог в `--json`: `{installed: [...], linked: [...], skipped: [...]}`.
+
+### Онбординг проекта — P1 (always-on)
+
+| Команда                                                | Назначение                                |
+| ------------------------------------------------------ | ----------------------------------------- |
+| `skills-hub onboard [--project P] [--yes] [--limit N] [--agent A]` | Детект стека проекта → подбор навыков (стор + хаб) → `--yes` включает их в проект |
+
+Конвейер:
+
+1. **Детект сигналов** по маркер-файлам корня проекта: `python`
+   (pyproject.toml / requirements.txt), `nodejs` (+`nextjs`/`react` по
+   dependencies в package.json), `docker` (Dockerfile / docker-compose*),
+   `terraform` (*.tf), `go` (go.mod), `rust` (Cargo.toml), `claude-code`
+   (папка .claude/).
+2. **Кандидаты**: локальный стор (матч сигнала по tags / slug / description)
+   + bounded hub-поиск (`GET /skills?q=…`, только если залогинен; `--limit`
+   кандидатов на сигнал, капится 20).
+3. **Без `--yes`** — только таблица предложений (`--json` отдаёт
+   `{signals, suggestions}`); уже включённые в проект помечаются `already`
+   и повторно не трогаются (идемпотентность).
+4. **`--yes`** включает каждый не-`already` кандидат: есть в сторе → линк +
+   манифест проекта; нет в сторе → докачка из хаба (нужен login, иначе skip).
+
+Без логина команда штатно работает только по локальному стору — это не
+ошибка, hub-ветка просто не включается.
 
 ### Event tracking + daemon — E23 (`events.send`)
 
@@ -224,23 +327,62 @@ flush`. Daemon кладёт events в `~/.skills-hub/events.queue.json` и шл�
 | ------------------------------------------------------ | ----------------------------------------- |
 | `skills-hub publish <id-или-slug> --tag v0.1.0 [--dry-run]` | Опубликовать новую версию из локальной папки (slug при создании задаёт hub-admin) |
 
+### Компании — P1 (sub-app `company`, гейты по правам)
+
+`--company` в подкомандах опционален — по умолчанию берётся активная
+компания из JWT (нет ни флага, ни company_id в токене → внятная ошибка
+`NO_COMPANY`).
+
+| Команда                                                | Право                  | Назначение |
+| ------------------------------------------------------ | ---------------------- | ----------- |
+| `skills-hub company show <id>`                         | любой залогиненный     | Детали компании (бэк режет tenant-изоляцией) |
+| `skills-hub company switch <id>`                       | любой залогиненный (нужен membership) | Переключить активную компанию: **перевыпускает токены** — новая пара сохраняется автоматически, набор команд в `--help` может измениться |
+| `skills-hub company list [--q S] [--page N] [--size N]` | `hub.admin`           | Список компаний (server-side пагинация) |
+| `skills-hub company create --name N --owner-email E --owner-name O [--slug S]` | `hub.company_create` | Создать компанию + invite owner'у (печатает owner-invite token и URL). `--slug` требует `hub.slug_manage`; без него — slug-less компания |
+| `skills-hub company edit <id> [--name N] [--owner-id U]` | `company.manage`      | Изменить компанию (merge-patch) |
+| `skills-hub company invite-links list [--company ID]`  | `company.manage` \| `role.manage` | Список переиспользуемых пригласительных ссылок |
+| `skills-hub company invite-links create [--kind member\|manager] [--max-uses N] [--expires-in-days 1..365] [--company ID]` | `company.manage` \| `role.manage` | Создать ссылку — печатает **ГОТОВЫЙ join-URL** (`<web-ui>/join/<token>`); токен показывается **ОДИН раз**. `--kind manager` — только владелец компании |
+| `skills-hub company invite-links revoke <link_id> [--company ID]` | `company.manage` \| `role.manage` | Отозвать ссылку |
+| `skills-hub company catalog list [--company ID]`       | `catalog.manage` \| `catalog.view_all` | Granted-каталог компании: навыки + коллекции + effective skills |
+| `skills-hub company catalog grant <id-или-slug> [--collection] [--company ID]` | `catalog.manage` | Выдать компании навык (или коллекцию при `--collection`). Ref = slug или id — slug резолвится автоматически |
+| `skills-hub company catalog revoke <id-или-slug> [--collection] [--company ID]` | `catalog.manage` | Отозвать навык / коллекцию |
+
+### Участники — P1 (`members` / `member` / `roles`)
+
+| Команда                                                | Право                  | Назначение |
+| ------------------------------------------------------ | ---------------------- | ----------- |
+| `skills-hub members [--company ID] [--q S] [--page N] [--size N]` | любой залогиненный | Участники компании (серверная пагинация). Без admin-прав бэк показывает только вас; hub-admin без `--company` видит всех пользователей хаба |
+| `skills-hub roles`                                     | любой залогиненный     | Глобальный каталог ролей — для выбора `role-id` |
+| `skills-hub member invite --email E --role-id R [--name N] [--company ID]` | `user.invite` | Пригласить участника (печатает invite-token + URL). Display-name по умолчанию — часть email до `@`. Приглашённый сразу виден в `members` (статус invited) |
+| `skills-hub member remove <user_id> [--company ID]`    | `user.remove`          | Убрать из компании (сессии удалённого отзываются) |
+| `skills-hub member change-role <user_id> <role_id> [--company ID]` | `role.manage` | Сменить роль. Не-assignable роль для company-admin отклоняется backend'ом (422) |
+| `skills-hub member lock <user_id> [--reason R]`        | `user.lock`            | Заблокировать вход (сессии отзываются; self-lock запрещён) |
+| `skills-hub member unlock <user_id>`                   | `user.lock`            | Снять блокировку |
+| `skills-hub member reset-password <user_id>`           | `company.manage`       | Одноразовый пароль: показывается **ОДИН раз** (backend хранит лишь хэш). В `--json` пароль уходит в stdout — **агенту: не логировать**. Сессии пользователя отзываются |
+
 ### Админка (только hub-admin / company-admin)
 
 | Команда                                       | Назначение                                       |
 | --------------------------------------------- | ------------------------------------------------ |
 | `skills-hub admin sync-skill <id-или-slug>`   | Подтянуть новые GitLab tags                      |
-| `skills-hub admin company-create <slug> ...`  | Создать новую компанию + invite owner'у (slug компании задаёт hub-admin) |
-| `skills-hub admin invite --company-id ... --role-id ...` | Выдать invite member'у                |
+| `skills-hub admin company-create <slug> ...`  | Создать новую компанию + invite owner'у (slug компании задаёт hub-admin). Legacy-локация — каноничная P1-команда: `company create` |
+| `skills-hub admin invite --company-id ... --role-id ...` | Выдать invite member'у (P1-аналог: `member invite`) |
 
 `skills-hub --help` после login показывает только те команды, на которые у
 пользователя есть permission в JWT — это управляется backend'ом в момент
-выдачи токенов.
+выдачи токенов. **Always-on** (видны и работают без login): `login`,
+`register`, `join`, `status`, `logout`, `whoami`, `config`, `web`,
+`install` (автономные источники), `enable`, `disable`, `remove`, `sync`,
+`migrate`, `store *`, `collection *-local`, `onboard`.
 
 ## Алгоритм для AI-агента
 
 1. **Первый запуск в сессии** — `skills-hub status`. Если `logged_in=false` →
    попросить у пользователя invite-token или email+password (через
-   `skills-hub login`).
+   `skills-hub login`). Если аккаунта нет вовсе: есть пригласительная ссылка
+   компании → `skills-hub join <ссылка> --email … --password …`; нет ссылки →
+   `skills-hub register --email … --password …` (без инвайта; детали и
+   сценарии — в AGENTS.md).
 2. **Установка нужного навыка** — если пользователь упомянул id-или-slug,
    который не установлен, выполни `skills-hub install <id-или-slug>`. Если
    навыка нет в каталоге, но есть его папка/git — поставь автономно:
@@ -265,6 +407,14 @@ flush`. Daemon кладёт events в `~/.skills-hub/events.queue.json` и шл�
    сгруппированы), а уже потом `skills-hub list` (плоский). Для быстрого
    старта новому клиенту — `skills-hub collection install <id-или-slug>`
    ставит сразу всю подборку.
+8. **Новый проект** — `skills-hub onboard` в корне проекта: покажи
+   пользователю таблицу предложений (сигналы стека + кандидаты из стора и
+   хаба), после подтверждения — `skills-hub onboard --yes`. Точечно вместо
+   `--yes` — `skills-hub enable <slug>` по выбранным.
+9. **Свой повторяемый набор** — оформи как локальную коллекцию:
+   `collection create-local`, `add-local`, затем на любой машине
+   `collection install-local <name>` (оффлайн из стора; недостающее
+   докачается из хаба при логине).
 
 ## Manifest skill.json — опциональные поля
 
