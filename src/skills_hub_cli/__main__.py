@@ -2297,6 +2297,13 @@ def build_app() -> typer.Typer:
         can_install=cfg.has_permission("skill.install"),
     )
 
+    # --- P1 onboard ---
+    # Онбординг проекта (E11) — ALWAYS-ON: без логина работает по локальному
+    # стору; hub-поиск и докачка отсутствующих включаются только при сессии.
+    from skills_hub_cli.commands import onboard as _onboard_mod
+
+    _onboard_mod.register(app)
+
     if not is_logged_in:
         return app
 
