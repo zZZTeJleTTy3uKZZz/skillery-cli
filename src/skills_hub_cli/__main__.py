@@ -2307,12 +2307,11 @@ def build_app() -> typer.Typer:
     store_app.command("path")(cmd_store_path)
     store_app.command("gc")(cmd_store_gc)
     # --- P1 local-collections ---
-    # collection sub-app — ALWAYS-ON: локальные коллекции (create-local /
-    # add-local / remove-local / list-local / install-local / delete-local)
-    # живут оффлайн без логина. Серверные команды (collections list /
-    # collection show / collection install) гейтятся ВНУТРИ модуля флагами
-    # server_enabled (skill.read) / can_install (skill.install) — регистрация
-    # перенесена сюда из gated-блока skill.read ниже.
+    # Единый collection sub-app — ALWAYS-ON: все глаголы (list/show/install/
+    # create/add/remove/delete) регистрируются всегда, у каждого есть локальный
+    # режим через флаг --local (оффлайн, без логина). Серверный режим (без
+    # --local) гейтится ВНУТРИ модуля флагами server_enabled (skill.read) /
+    # can_install (skill.install) — проверяются в рантайме команд.
     from skills_hub_cli.commands import collection as _coll_mod
 
     _coll_mod.register(

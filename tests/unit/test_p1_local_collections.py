@@ -1,16 +1,15 @@
-"""Тесты P1 C4 — локальные коллекции БЕЗ хаба (E10).
+"""Тесты P1 C4 — локальные коллекции БЕЗ хаба (E10), единый ``--local`` API.
 
 Покрытие:
 - core/local_collections.py: CRUD поверх <config_dir>/collections.toml
   (уважает SKILLS_HUB_CONFIG_DIR), идемпотентность add/remove, валидация имён;
-- commands/collection.py: cmd_collection_*_local — оффлайн CRUD без логина,
-  warning при добавлении слага, которого нет в сторе;
-- install-local: чисто-сторовый сценарий БЕЗ сети (store → link, hub не
-  дёргается), отсутствующий слаг без логина → skipped (команда не падает),
-  hub-докачка через общий _install_chain когда залогинен;
-- build_app: локальные подкоманды ALWAYS-ON (без логина), серверные
-  (collections list / collection show / collection install) остаются
-  гейтнутыми skill.read / skill.install.
+- commands/collection.py: единый sub-app ``collection`` с глаголами
+  list/show/install/create/add/remove/delete + флаг ``--local``;
+- ``--local`` режим — оффлайн CRUD без логина, warning при добавлении слага,
+  которого нет в сторе; install --local: store → link без сети, отсутствующий
+  слаг без логина → skipped (команда не падает), hub-докачка когда залогинен;
+- гейтинг: create/add/remove/delete без ``--local`` → ошибка USE_LOCAL_FLAG;
+  list/show/install без ``--local`` и без skill.read → ошибка NOT_AVAILABLE.
 """
 from __future__ import annotations
 
@@ -20,10 +19,6 @@ from pathlib import Path
 import pytest
 import typer
 
-# Импорт __main__ на уровне модуля (как в test_p0fix_lifecycle_no_login):
-# его module-level init_output_mode() сбрасывает output-режим — если оставить
-# импорт ленивым (через _ensure_install_helpers внутри команды), он перетёр
-# бы monkeypatch json-режима ПОСРЕДИ первого install-local теста.
 import skills_hub_cli.__main__ as main_mod
 import skills_hub_cli.config as config_module
 from skills_hub_cli import output as out_mod
@@ -54,9 +49,7 @@ def _last_json(out: str) -> dict | list:
     return json.loads(out.strip().splitlines()[-1])
 
 
-def _offline_cfg(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> ClientConfig:
+def _offline_cfg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ClientConfig:
     """Незалогиненный конфиг со стором в tmp."""
     cfg = ClientConfig(store_dir=str(tmp_path / "store"))
     assert cfg.is_logged_in() is False
@@ -64,9 +57,7 @@ def _offline_cfg(
     return cfg
 
 
-def _logged_in_cfg(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> ClientConfig:
+def _logged_in_cfg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ClientConfig:
     cfg = ClientConfig(
         base_url="http://localhost:8000",
         user_email="u@example.com",
@@ -84,7 +75,6 @@ def _logged_in_cfg(
 def test_create_and_roundtrip(cfg_dir: Path) -> None:
     coll = local_collections.create("web-pack", title="Web навыки")
     assert coll == {"title": "Web навыки", "skills": []}
-    # Файл лёг в config-dir (уважает SKILLS_HUB_CONFIG_DIR).
     path = local_collections.collections_path()
     assert path == cfg_dir / "collections.toml"
     assert path.exists()
@@ -94,8 +84,7 @@ def test_create_and_roundtrip(cfg_dir: Path) -> None:
 
 
 def test_create_default_title_is_name(cfg_dir: Path) -> None:
-    coll = local_collections.create("pack")
-    assert coll["title"] == "pack"
+    assert local_collections.create("pack")["title"] == "pack"
 
 
 def test_create_duplicate_raises(cfg_dir: Path) -> None:
@@ -116,7 +105,6 @@ def test_add_remove_skill_idempotent(cfg_dir: Path) -> None:
     coll, added = local_collections.add_skill("pack", "demo")
     assert added is True
     assert coll["skills"] == ["demo"]
-    # Повторное добавление — идемпотентно (без дубля).
     coll, added = local_collections.add_skill("pack", "demo")
     assert added is False
     assert coll["skills"] == ["demo"]
@@ -145,30 +133,27 @@ def test_delete_collection(cfg_dir: Path) -> None:
 def test_missing_in_store(cfg_dir: Path, tmp_path: Path) -> None:
     store = tmp_path / "store"
     (store / "have").mkdir(parents=True)
-    missing = local_collections.missing_in_store(["have", "ghost"], store)
-    assert missing == ["ghost"]
+    assert local_collections.missing_in_store(["have", "ghost"], store) == ["ghost"]
 
 
 # ======================================================
-#  Команды CRUD — оффлайн, без логина и сети
+#  Команды --local — оффлайн, без логина и сети
 # ======================================================
 def test_cmd_crud_local_offline(
-    cfg_dir: Path,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    cfg_dir: Path, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
     _json_mode(monkeypatch)
     _offline_cfg(tmp_path, monkeypatch)
 
-    coll_mod.cmd_collection_create_local(name="pack", title="Мой набор")
+    coll_mod.cmd_collection_create(name="pack", local=True, title="Мой набор")
     payload = _last_json(capsys.readouterr().out)
     assert payload["event"] == "local_collection_created"
     assert payload["name"] == "pack"
     assert payload["title"] == "Мой набор"
 
-    # add-local: слага нет в сторе → warning в stderr, но добавлен всё равно.
-    coll_mod.cmd_collection_add_local(name="pack", skill_slug="demo")
+    # add --local: слага нет в сторе → warning в stderr, но добавлен всё равно.
+    coll_mod.cmd_collection_add(name="pack", skill_slug="demo", local=True)
     captured = capsys.readouterr()
     payload = _last_json(captured.out)
     assert payload["added"] is True
@@ -176,44 +161,46 @@ def test_cmd_crud_local_offline(
     assert payload["skills"] == ["demo"]
     assert '"warn"' in captured.err
 
-    # list-local: count + missing_in_store.
-    coll_mod.cmd_collection_list_local()
+    # list --local: count + missing_in_store.
+    coll_mod.cmd_collection_list(local=True)
     rows = _last_json(capsys.readouterr().out)
     assert rows == [
         {
-            "name": "pack",
-            "title": "Мой набор",
-            "skills_count": 1,
-            "skills": ["demo"],
-            "missing_in_store": ["demo"],
+            "name": "pack", "title": "Мой набор", "skills_count": 1,
+            "skills": ["demo"], "missing_in_store": ["demo"],
         }
     ]
 
-    # remove-local.
-    coll_mod.cmd_collection_remove_local(name="pack", skill_slug="demo")
+    # show --local: детали одной локальной коллекции.
+    coll_mod.cmd_collection_show(ref="pack", local=True)
+    payload = _last_json(capsys.readouterr().out)
+    assert payload["name"] == "pack"
+    assert payload["skills"] == ["demo"]
+    assert payload["missing_in_store"] == ["demo"]
+
+    # remove --local.
+    coll_mod.cmd_collection_remove(name="pack", skill_slug="demo", local=True)
     payload = _last_json(capsys.readouterr().out)
     assert payload["removed"] is True
     assert payload["skills"] == []
 
-    # delete-local.
-    coll_mod.cmd_collection_delete_local(name="pack")
+    # delete --local.
+    coll_mod.cmd_collection_delete(name="pack", local=True)
     payload = _last_json(capsys.readouterr().out)
     assert payload["event"] == "local_collection_deleted"
     assert local_collections.load_all() == {}
 
 
 def test_cmd_add_local_no_warning_when_in_store(
-    cfg_dir: Path,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    cfg_dir: Path, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
     _json_mode(monkeypatch)
     cfg = _offline_cfg(tmp_path, monkeypatch)
     (cfg.effective_store_dir() / "demo").mkdir(parents=True)
     local_collections.create("pack")
 
-    coll_mod.cmd_collection_add_local(name="pack", skill_slug="demo")
+    coll_mod.cmd_collection_add(name="pack", skill_slug="demo", local=True)
     captured = capsys.readouterr()
     payload = _last_json(captured.out)
     assert payload["in_store"] is True
@@ -225,9 +212,9 @@ def test_cmd_create_local_duplicate_exit1(
 ) -> None:
     _json_mode(monkeypatch)
     _offline_cfg(tmp_path, monkeypatch)
-    coll_mod.cmd_collection_create_local(name="pack", title=None)
+    coll_mod.cmd_collection_create(name="pack", local=True, title=None)
     with pytest.raises(typer.Exit):
-        coll_mod.cmd_collection_create_local(name="pack", title=None)
+        coll_mod.cmd_collection_create(name="pack", local=True, title=None)
 
 
 def test_cmd_delete_local_not_found_exit1(
@@ -236,35 +223,86 @@ def test_cmd_delete_local_not_found_exit1(
     _json_mode(monkeypatch)
     _offline_cfg(tmp_path, monkeypatch)
     with pytest.raises(typer.Exit):
-        coll_mod.cmd_collection_delete_local(name="ghost")
+        coll_mod.cmd_collection_delete(name="ghost", local=True)
 
 
 # ======================================================
-#  install-local
+#  Гейтинг флага --local
+# ======================================================
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: coll_mod.cmd_collection_create(name="x", local=False, title=None),
+        lambda: coll_mod.cmd_collection_delete(name="x", local=False),
+        lambda: coll_mod.cmd_collection_add(name="x", skill_slug="s", local=False),
+        lambda: coll_mod.cmd_collection_remove(name="x", skill_slug="s", local=False),
+    ],
+)
+def test_crud_without_local_flag_errors(
+    cfg_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str], call,  # noqa: ANN001
+) -> None:
+    """create/add/remove/delete без --local → USE_LOCAL_FLAG (серверных нет в CLI)."""
+    _json_mode(monkeypatch)
+    _offline_cfg(tmp_path, monkeypatch)
+    with pytest.raises(typer.Exit):
+        call()
+    evt = _last_json(capsys.readouterr().err)
+    assert evt["code"] == "USE_LOCAL_FLAG"
+
+
+def test_list_server_verb_without_login_errors(
+    cfg_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """list без --local при выключенном серверном режиме → NOT_AVAILABLE."""
+    _json_mode(monkeypatch)
+    _offline_cfg(tmp_path, monkeypatch)
+    monkeypatch.setattr(coll_mod, "_SERVER_ENABLED", False)
+    with pytest.raises(typer.Exit):
+        coll_mod.cmd_collection_list(local=False)
+    evt = _last_json(capsys.readouterr().err)
+    assert evt["code"] == "NOT_AVAILABLE"
+
+
+def test_install_server_verb_without_install_perm_errors(
+    cfg_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """install без --local при skill.read но без skill.install → NOT_AVAILABLE."""
+    _json_mode(monkeypatch)
+    _offline_cfg(tmp_path, monkeypatch)
+    monkeypatch.setattr(coll_mod, "_SERVER_ENABLED", True)
+    monkeypatch.setattr(coll_mod, "_CAN_INSTALL", False)
+    with pytest.raises(typer.Exit):
+        coll_mod.cmd_collection_install(
+            ref="x", local=False, scope=None, project=None,
+            channel="published", force=False, agent=None,
+        )
+    evt = _last_json(capsys.readouterr().err)
+    assert evt["code"] == "NOT_AVAILABLE"
+
+
+# ======================================================
+#  install --local
 # ======================================================
 def test_install_local_store_only_no_network(
-    cfg_dir: Path,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    cfg_dir: Path, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Чисто-сторовый сценарий: всё в сторе → линк, hub НЕ дёргается вовсе."""
     _json_mode(monkeypatch)
     cfg = _logged_in_cfg(tmp_path, monkeypatch)
     target = ClaudeCodeTarget(root=tmp_path / ".claude")
-    monkeypatch.setattr(
-        "skills_hub_cli.core.agents.get_target", lambda name: target
-    )
+    monkeypatch.setattr("skills_hub_cli.core.agents.get_target", lambda name: target)
     project = tmp_path / "proj"
     project.mkdir()
 
-    # Материализуем навык в стор (stub-источник — без сети).
     inst = SkillInstaller(target, store_dir=cfg.effective_store_dir())
     inst.install(
         slug="demo", version="1.0.0", commit_sha="a1",
         repo_url=None, manifest=_MANIFEST,
     )
-
     local_collections.create("pack")
     local_collections.add_skill("pack", "demo")
 
@@ -276,8 +314,8 @@ def test_install_local_store_only_no_network(
 
     monkeypatch.setattr(coll_mod, "_install_chain", _fake_install_chain)
 
-    coll_mod.cmd_collection_install_local(
-        name="pack", scope="project", project=project,
+    coll_mod.cmd_collection_install(
+        ref="pack", local=True, scope="project", project=project,
         force=False, channel="published", agent=None,
     )
     payload = _last_json(capsys.readouterr().out)
@@ -285,32 +323,27 @@ def test_install_local_store_only_no_network(
     assert payload["skipped"] == []
     assert [it["slug"] for it in payload["linked"]] == ["demo"]
     assert hub_calls == []  # сеть/hub не дёргались
-    # Реальный линк в project scope + манифест проекта.
     assert linker.is_link(target.slug_dir("demo", project=project))
     assert "demo" in project_manifest.load(project)
 
 
 def test_install_local_missing_not_logged_in_skipped(
-    cfg_dir: Path,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    cfg_dir: Path, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Слага нет в сторе и не залогинен → skipped с подсказкой, команда НЕ падает."""
     _json_mode(monkeypatch)
     _offline_cfg(tmp_path, monkeypatch)
     target = ClaudeCodeTarget(root=tmp_path / ".claude")
-    monkeypatch.setattr(
-        "skills_hub_cli.core.agents.get_target", lambda name: target
-    )
+    monkeypatch.setattr("skills_hub_cli.core.agents.get_target", lambda name: target)
     project = tmp_path / "proj"
     project.mkdir()
 
     local_collections.create("pack")
     local_collections.add_skill("pack", "ghost")
 
-    coll_mod.cmd_collection_install_local(
-        name="pack", scope="project", project=project,
+    coll_mod.cmd_collection_install(
+        ref="pack", local=True, scope="project", project=project,
         force=False, channel="published", agent=None,
     )
     payload = _last_json(capsys.readouterr().out)
@@ -323,18 +356,14 @@ def test_install_local_missing_not_logged_in_skipped(
 
 
 def test_install_local_hub_fallback_when_logged_in(
-    cfg_dir: Path,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    cfg_dir: Path, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Слага нет в сторе, залогинен → докачка через общий _install_chain."""
     _json_mode(monkeypatch)
     _logged_in_cfg(tmp_path, monkeypatch)
     target = ClaudeCodeTarget(root=tmp_path / ".claude")
-    monkeypatch.setattr(
-        "skills_hub_cli.core.agents.get_target", lambda name: target
-    )
+    monkeypatch.setattr("skills_hub_cli.core.agents.get_target", lambda name: target)
     project = tmp_path / "proj"
     project.mkdir()
 
@@ -355,8 +384,8 @@ def test_install_local_hub_fallback_when_logged_in(
 
     monkeypatch.setattr(coll_mod, "_install_chain", _fake_install_chain)
 
-    coll_mod.cmd_collection_install_local(
-        name="pack", scope="project", project=project,
+    coll_mod.cmd_collection_install(
+        ref="pack", local=True, scope="project", project=project,
         force=False, channel="published", agent=None,
     )
     payload = _last_json(capsys.readouterr().out)
@@ -373,19 +402,16 @@ def test_install_local_unknown_collection_exit1(
     _json_mode(monkeypatch)
     _offline_cfg(tmp_path, monkeypatch)
     with pytest.raises(typer.Exit):
-        coll_mod.cmd_collection_install_local(
-            name="ghost", scope=None, project=None,
+        coll_mod.cmd_collection_install(
+            ref="ghost", local=True, scope=None, project=None,
             force=False, channel="published", agent=None,
         )
 
 
 # ======================================================
-#  Регистрация: локальные ALWAYS-ON, серверные под гейтом
+#  Регистрация: единый sub-app collection, 7 глаголов, без plural
 # ======================================================
-_LOCAL_CMDS = {
-    "create-local", "delete-local", "add-local",
-    "remove-local", "list-local", "install-local",
-}
+_VERBS = {"list", "show", "install", "create", "add", "remove", "delete"}
 
 
 def _collection_cmd_names(app: typer.Typer) -> set[str]:
@@ -393,35 +419,26 @@ def _collection_cmd_names(app: typer.Typer) -> set[str]:
     return {c.name for c in group.typer_instance.registered_commands}
 
 
-def test_local_commands_registered_without_login(
+def test_single_collection_subapp_all_verbs_no_login(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Без логина: collection sub-app есть (локальные), серверных команд нет."""
+    """Без логина: единый collection sub-app со всеми 7 глаголами; нет plural."""
     _offline_cfg(tmp_path, monkeypatch)
     app = main_mod.build_app()
     group_names = {g.name for g in app.registered_groups}
     assert "collection" in group_names
-    assert "collections" not in group_names  # серверный list — только при skill.read
-    names = _collection_cmd_names(app)
-    assert _LOCAL_CMDS <= names
-    assert "show" not in names
-    assert "install" not in names
+    assert "collections" not in group_names  # plural убран — единый глагол list
+    assert _collection_cmd_names(app) == _VERBS
 
 
-def test_server_commands_still_gated(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """skill.read без skill.install: show есть, install нет, локальные есть."""
-    cfg = ClientConfig(
-        base_url="http://localhost:8000",
-        user_email="u@example.com",
-        permissions=["skill.read"],
-    )
-    monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
-    app = main_mod.build_app()
-    group_names = {g.name for g in app.registered_groups}
-    assert "collections" in group_names
-    names = _collection_cmd_names(app)
-    assert _LOCAL_CMDS <= names
-    assert "show" in names
-    assert "install" not in names
+def test_register_sets_server_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    """register прокидывает RBAC в модульные флаги серверного режима."""
+    monkeypatch.setattr(coll_mod, "_SERVER_ENABLED", False)
+    monkeypatch.setattr(coll_mod, "_CAN_INSTALL", False)
+    app = typer.Typer()
+    coll_mod.register(app, server_enabled=True, can_install=True)
+    assert coll_mod._SERVER_ENABLED is True
+    assert coll_mod._CAN_INSTALL is True
+    # И обратно — без прав серверный режим выключен.
+    coll_mod.register(typer.Typer(), server_enabled=False, can_install=False)
+    assert coll_mod._SERVER_ENABLED is False

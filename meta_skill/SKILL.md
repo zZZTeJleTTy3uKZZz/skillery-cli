@@ -56,7 +56,7 @@ description: |
    ставит всю подборку одной командой (главный онбординг-кейс).
 9. **Вести локальные коллекции** (P1) — личные наборы слагов в
    `~/.skills-hub/collections.toml`; работают полностью **оффлайн**, без
-   логина и хаба (`collection create-local / add-local / install-local …`).
+   логина и хаба (`collection create / add / install … --local`).
 10. **Управлять компанией из CLI** (P1) — `company create / edit / switch`,
     переиспользуемые пригласительные ссылки (`invite-links`), granted-каталог
     (`catalog grant`), участники (`member invite / change-role / lock …`).
@@ -238,36 +238,47 @@ prompt'а нет).
 `skills-hub report` (legacy) → внутри транслируется в `ticket create
 --skill <id-или-slug> --kind bug`.
 
-### Коллекции — E10 (`skill.read`)
+### Коллекции — E10 + P1 (единый sub-app `collection`)
+
+Единый sub-app `collection` с 7 глаголами: `list / show / install / create /
+add / remove / delete` (все always-on в `--help`). Флаг **`--local`**
+переключает источник: без него — **серверная** коллекция хаба (gate по правам
+JWT), с ним — **локальная** оффлайн-коллекция в `collections.toml`. Plural
+`collections` убран.
+
+#### Серверные (хаб) — default, read-only + install (`skill.read` / `skill.install`)
 
 | Команда                                                | Назначение                                |
 | ------------------------------------------------------ | ----------------------------------------- |
-| `skills-hub collections list [--type static\|dynamic] [--company C] [--owner O] [--no-global]` | Список коллекций (static + dynamic) |
-| `skills-hub collection show <id-или-slug>`             | Детали + развёрнутый список skills        |
-| `skills-hub collection install <id-или-slug>`          | Поставить все skills из коллекции одной командой (главный онбординг-кейс) |
+| `skills-hub collection list [--type static\|dynamic] [--company C] [--owner O] [--no-global]` | Список серверных коллекций (static + dynamic). Gate `skill.read` |
+| `skills-hub collection show <id-или-slug>`             | Детали + развёрнутый список skills. Gate `skill.read` |
+| `skills-hub collection install <id-или-slug>`          | Поставить все skills из коллекции одной командой (главный онбординг-кейс). Gate `skill.install` |
 
-> Создание/редактирование **серверных** коллекций (`create` / `add-skill` /
-> `add-tag` / `delete`) из CLI **не реализовано** — это делается в Web UI. С
-> серверными коллекциями CLI работает в режиме read-only + `collection
-> install`. Зато **локальные** коллекции (см. следующий раздел) полностью
-> управляются из CLI и работают оффлайн.
+> Серверный режим гейтится в рантайме: без `skill.read` — `list`/`show`
+> отвечают `NOT_AVAILABLE` с подсказкой добавить `--local`; `install` без
+> `skill.install` — то же. Создание/редактирование **серверных** коллекций
+> (`create` / `add` / `remove` / `delete`) из CLI **не реализовано** — это
+> делается в Web UI; в CLI эти глаголы работают только локально (см. ниже).
 
-### Локальные коллекции — P1 (always-on, оффлайн, без хаба)
+#### Локальные (`--local`) — оффлайн, без хаба и логина (always-on)
 
 Личные наборы слагов в `~/.skills-hub/collections.toml` (точнее —
 `<config_dir>/collections.toml`: уважает `SKILLS_HUB_CONFIG_DIR` и
-`--profile`). Не требуют ни логина, ни сети — Web UI их не видит.
+`--profile`). Не требуют ни логина, ни сети — Web UI их не видит. Для
+`create / add / remove / delete` флаг `--local` **обязателен** (без него —
+ошибка `USE_LOCAL_FLAG`).
 
 | Команда                                                | Назначение                                |
 | ------------------------------------------------------ | ----------------------------------------- |
-| `skills-hub collection create-local <name> [--title T]` | Создать локальную коллекцию (имя: буквы/цифры/`-`/`_`; `--title` — человекочитаемый заголовок) |
-| `skills-hub collection add-local <name> <skill-slug>`  | Добавить навык. Слага нет в сторе → warning, но слаг добавится — `install-local` докачает его из хаба при логине |
-| `skills-hub collection remove-local <name> <skill-slug>` | Убрать навык из коллекции (диск/стор не трогаются) |
-| `skills-hub collection list-local`                     | Список: имя, размер, какие слаги отсутствуют в сторе |
-| `skills-hub collection install-local <name> [--scope global\|project] [--project P] [--channel C] [--force] [--agent A]` | Установить коллекцию (см. ниже) |
-| `skills-hub collection delete-local <name>`            | Удалить коллекцию (установленные навыки на диске не трогаются) |
+| `skills-hub collection create <name> --local [--title T]` | Создать локальную коллекцию (имя: буквы/цифры/`-`/`_`; `--title` — человекочитаемый заголовок) |
+| `skills-hub collection add <name> <skill-slug> --local`  | Добавить навык. Слага нет в сторе → warning, но слаг добавится — `install … --local` докачает его из хаба при логине |
+| `skills-hub collection remove <name> <skill-slug> --local` | Убрать навык из коллекции (диск/стор не трогаются) |
+| `skills-hub collection list --local`                   | Список: имя, размер, какие слаги отсутствуют в сторе |
+| `skills-hub collection show <name> --local`            | Одна локальная коллекция: состав + чего нет в сторе |
+| `skills-hub collection install <name> --local [--scope global\|project] [--project P] [--channel C] [--force] [--agent A]` | Установить коллекцию (см. ниже) |
+| `skills-hub collection delete <name> --local`          | Удалить коллекцию (установленные навыки на диске не трогаются) |
 
-`install-local` для каждого слага коллекции:
+`install … --local` для каждого слага коллекции:
 
 - **есть в сторе** → локальный линк в scope (как `enable`, БЕЗ сети);
 - **нет в сторе + залогинен** → докачка из хаба (`--channel` задаёт канал);
@@ -373,7 +384,8 @@ flush`. Daemon кладёт events в `~/.skills-hub/events.queue.json` и шл�
 выдачи токенов. **Always-on** (видны и работают без login): `login`,
 `register`, `join`, `status`, `logout`, `whoami`, `config`, `web`,
 `install` (автономные источники), `enable`, `disable`, `remove`, `sync`,
-`migrate`, `store *`, `collection *-local`, `onboard`.
+`migrate`, `store *`, `collection` (все глаголы видны; серверный режим
+гейтится в рантайме, `--local` всегда оффлайн), `onboard`.
 
 ## Алгоритм для AI-агента
 
@@ -403,18 +415,18 @@ flush`. Daemon кладёт events в `~/.skills-hub/events.queue.json` и шл�
    тихонько обновит при следующей команде. Иначе подсказать `skills-hub
    update --all`.
 7. **Коллекции как onboarding** — если пользователь спрашивает «что у вас
-   есть», сначала `skills-hub collections list` (списки тематически
-   сгруппированы), а уже потом `skills-hub list` (плоский). Для быстрого
-   старта новому клиенту — `skills-hub collection install <id-или-slug>`
-   ставит сразу всю подборку.
+   есть», сначала `skills-hub collection list` (серверные коллекции
+   тематически сгруппированы), а уже потом `skills-hub list` (плоский). Для
+   быстрого старта новому клиенту — `skills-hub collection install
+   <id-или-slug>` ставит сразу всю подборку.
 8. **Новый проект** — `skills-hub onboard` в корне проекта: покажи
    пользователю таблицу предложений (сигналы стека + кандидаты из стора и
    хаба), после подтверждения — `skills-hub onboard --yes`. Точечно вместо
    `--yes` — `skills-hub enable <slug>` по выбранным.
 9. **Свой повторяемый набор** — оформи как локальную коллекцию:
-   `collection create-local`, `add-local`, затем на любой машине
-   `collection install-local <name>` (оффлайн из стора; недостающее
-   докачается из хаба при логине).
+   `collection create <name> --local`, `collection add <name> <slug> --local`,
+   затем на любой машине `collection install <name> --local` (оффлайн из
+   стора; недостающее докачается из хаба при логине).
 
 ## Manifest skill.json — опциональные поля
 

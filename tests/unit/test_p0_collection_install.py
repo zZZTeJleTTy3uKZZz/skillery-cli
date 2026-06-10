@@ -1,7 +1,9 @@
-"""Тесты ``skills-hub collection install <ID_ИЛИ_SLUG>`` (массовая установка).
+"""Тесты ``skills-hub collection install <ID_ИЛИ_SLUG>`` (серверная массовая установка).
 
-Главный онбординг-кейс: ставит ВСЕ effective skills коллекции через
-общий ``_install_chain`` из ``__main__`` (тот же путь что ``install``).
+Главный онбординг-кейс: ставит ВСЕ effective skills коллекции через общий
+``_install_chain`` из ``__main__`` (тот же путь что ``install``). Серверный режим
+включается RBAC-флагами ``_SERVER_ENABLED`` (skill.read) + ``_CAN_INSTALL``
+(skill.install); локальный — флагом ``--local`` (см. test_p1_local_collections).
 """
 from __future__ import annotations
 
@@ -33,6 +35,9 @@ def _logged_in_cfg(monkeypatch: pytest.MonkeyPatch) -> ClientConfig:
     )
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
     monkeypatch.setattr(_common, "load_tokens", lambda email: ("a", "r"))
+    # Серверный режим коллекций (как выставил бы register по правам JWT).
+    monkeypatch.setattr(coll_mod, "_SERVER_ENABLED", True)
+    monkeypatch.setattr(coll_mod, "_CAN_INSTALL", True)
     return cfg
 
 
@@ -47,11 +52,8 @@ def test_cmd_collection_install_installs_each_skill(
     async def _get(slug: str) -> dict[str, Any]:
         return {
             "collection": {
-                "id": "col_1",
-                "slug": slug,
-                "title": "Onboarding",
-                "type": "static",
-                "skills_count": 2,
+                "id": "col_1", "slug": slug, "title": "Onboarding",
+                "type": "static", "skills_count": 2,
             },
             "skills": [
                 {"id": "10", "slug": "skill-a", "title": "Skill A"},
@@ -71,26 +73,18 @@ def test_cmd_collection_install_installs_each_skill(
 
     async def _fake_install_chain(cfg, access, *, slug, channel, scope, project_path, force, agent_target):  # noqa: ANN001
         installed_slugs.append(slug)
-        return [
-            {
-                "slug": slug,
-                "skill_id": None,
-                "version": "1.0.0",
-                "is_update": False,
-                "target_dir": f"/skills/{slug}",
-                "scope": scope,
-                "linked": True,
-                "link_kind": "symlink",
-            }
-        ]
+        return [{
+            "slug": slug, "skill_id": None, "version": "1.0.0", "is_update": False,
+            "target_dir": f"/skills/{slug}", "scope": scope,
+            "linked": True, "link_kind": "symlink",
+        }]
 
     monkeypatch.setattr(coll_mod, "_install_chain", _fake_install_chain)
 
     coll_mod.cmd_collection_install(
-        slug="onboarding", scope=None, project=None, channel="published", force=False, agent=None
+        ref="onboarding", local=False, scope=None, project=None,
+        channel="published", force=False, agent=None,
     )
-
-    # Оба скилла поставлены, по slug.
     assert installed_slugs == ["skill-a", "skill-b"]
 
 
@@ -106,9 +100,7 @@ def test_cmd_collection_install_uses_id_when_slug_missing(
     async def _get(slug: str) -> dict[str, Any]:
         return {
             "collection": {"id": "col_1", "slug": slug, "title": "C", "type": "static"},
-            "skills": [
-                {"id": "42", "slug": None, "title": "Slugless"},
-            ],
+            "skills": [{"id": "42", "slug": None, "title": "Slugless"}],
             "tags": [],
         }
 
@@ -129,7 +121,8 @@ def test_cmd_collection_install_uses_id_when_slug_missing(
     monkeypatch.setattr(coll_mod, "_install_chain", _fake_install_chain)
 
     coll_mod.cmd_collection_install(
-        slug="c", scope=None, project=None, channel="published", force=False, agent=None
+        ref="c", local=False, scope=None, project=None,
+        channel="published", force=False, agent=None,
     )
     assert refs == ["42"]
 
@@ -167,7 +160,8 @@ def test_cmd_collection_install_respects_scope_project(
     monkeypatch.setattr(coll_mod, "_install_chain", _fake_install_chain)
 
     coll_mod.cmd_collection_install(
-        slug="c", scope="project", channel="published", force=False, project=tmp_path, agent=None
+        ref="c", local=False, scope="project", channel="published",
+        force=False, project=tmp_path, agent=None,
     )
     assert captured_scope["scope"] == "project"
     assert captured_scope["project_path"] is not None
@@ -185,8 +179,7 @@ def test_cmd_collection_install_empty_collection(
     async def _get(slug: str) -> dict[str, Any]:
         return {
             "collection": {"id": "col_1", "slug": slug, "title": "Empty", "type": "static"},
-            "skills": [],
-            "tags": [],
+            "skills": [], "tags": [],
         }
 
     async def _close() -> None:
@@ -205,15 +198,19 @@ def test_cmd_collection_install_empty_collection(
     monkeypatch.setattr(coll_mod, "_install_chain", _fake_install_chain)
 
     coll_mod.cmd_collection_install(
-        slug="empty", scope=None, project=None, channel="published", force=False, agent=None
+        ref="empty", local=False, scope=None, project=None,
+        channel="published", force=False, agent=None,
     )
     assert calls == []  # install_chain не звонился
 
 
-def test_collection_install_registered_with_skill_install(
+def test_collection_install_show_always_registered(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`collection install` появляется только при skill.install."""
+    """Единый sub-app: install/show зарегистрированы ВСЕГДА (есть локальный режим);
+    серверный режим включают флаги _SERVER_ENABLED/_CAN_INSTALL по правам."""
+    monkeypatch.setattr(coll_mod, "_SERVER_ENABLED", False)
+    monkeypatch.setattr(coll_mod, "_CAN_INSTALL", False)
     cfg = ClientConfig(
         base_url="http://localhost:8000",
         user_email="u@example.com",
@@ -227,12 +224,17 @@ def test_collection_install_registered_with_skill_install(
     sub_names = [c.name for c in collection_group.typer_instance.registered_commands]
     assert "install" in sub_names
     assert "show" in sub_names
+    # skill.read + skill.install → серверный режим И установка включены.
+    assert coll_mod._SERVER_ENABLED is True
+    assert coll_mod._CAN_INSTALL is True
 
 
-def test_collection_install_absent_without_skill_install(
+def test_collection_install_gated_without_skill_install(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Без skill.install — install НЕ зарегистрирован (только show)."""
+    """skill.read без skill.install: команда есть, но _CAN_INSTALL=False
+    (серверный install в рантайме даст NOT_AVAILABLE)."""
+    monkeypatch.setattr(coll_mod, "_CAN_INSTALL", True)
     cfg = ClientConfig(
         base_url="http://localhost:8000",
         user_email="u@example.com",
@@ -244,5 +246,6 @@ def test_collection_install_absent_without_skill_install(
     app = build_app()
     collection_group = next(t for t in app.registered_groups if t.name == "collection")
     sub_names = [c.name for c in collection_group.typer_instance.registered_commands]
-    assert "install" not in sub_names
-    assert "show" in sub_names
+    assert "install" in sub_names
+    assert coll_mod._SERVER_ENABLED is True
+    assert coll_mod._CAN_INSTALL is False

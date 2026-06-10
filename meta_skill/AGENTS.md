@@ -40,13 +40,14 @@
                                                                │
                                                                ▼
                                            list / install / rate / comment /
-                                           ticket / collections / events
+                                           ticket / collection / events
 
 Примечание: в состоянии «logged out» работает не только login. Always-on
 зона: `register` / `join` (самостоятельный онбординг аккаунта),
 `install --path` / `install --from-git` (автономно, без хаба),
 `enable` / `disable` / `remove` / `sync` / `migrate` / `store *`
-(lifecycle локального стора), `collection *-local` (локальные коллекции),
+(lifecycle локального стора), `collection … --local` (локальные коллекции;
+все глаголы always-on, серверный режим гейтится в рантайме),
 `onboard` (по локальному стору; hub-поиск подключится после login).
 ```
 
@@ -253,10 +254,21 @@ Auto-assignee:
 - **static** — фиксированный список `[skill_slug, ...]`.
 - **dynamic** — формируется по тегам (любой skill с `tag in [...]` входит).
 
+Единый sub-app `collection` (plural `collections` убран) с 7 глаголами
+`list / show / install / create / add / remove / delete`. Флаг **`--local`**
+переключает источник: без него — серверная коллекция хаба, с ним — локальная
+оффлайн-коллекция. Все 7 глаголов always-on в `--help`; серверный режим
+гейтится в рантайме по правам JWT.
+
+#### Серверные (хаб) — default, read-only + install
+
+`list`/`show` требуют `skill.read`, `install` — `skill.install`. Без прав CLI
+ответит `NOT_AVAILABLE` с подсказкой добавить `--local`.
+
 ```bash
-skills-hub --json collections list                  # все, к которым есть доступ
-skills-hub --json collections list --type dynamic    # фильтр по типу
-skills-hub --json collections list --company <id>    # фильтр по компании
+skills-hub --json collection list                   # все доступные (static + dynamic)
+skills-hub --json collection list --type dynamic     # фильтр по типу
+skills-hub --json collection list --company <id>     # фильтр по компании
 skills-hub --json collection show <slug>             # детали + развёрнутый список skills
 skills-hub --json collection install <slug>          # массовый install всех skills
 ```
@@ -265,25 +277,28 @@ skills-hub --json collection install <slug>          # массовый install 
 ставит сразу `bitrix24` + `bitrix-1c-partners-cli` + `bitrix24-stats`.
 
 Создание/редактирование **серверных** коллекций из CLI не поддержано —
-только Web UI.
+только Web UI. Глаголы `create / add / remove / delete` в CLI работают
+только локально (`--local`); без флага — ошибка `USE_LOCAL_FLAG`.
 
-### Локальные коллекции (P1) — оффлайн, без хаба и логина
+### Локальные коллекции (P1) — оффлайн, без хаба и логина (`--local`)
 
 Личные наборы слагов в `<config_dir>/collections.toml` (по умолчанию
 `~/.skills-hub/collections.toml`; уважает `SKILLS_HUB_CONFIG_DIR` и
-`--profile`). Web UI их не видит, сеть не нужна:
+`--profile`). Web UI их не видит, сеть не нужна. Для
+`create / add / remove / delete` флаг `--local` **обязателен**:
 
 ```bash
-skills-hub collection create-local my-stack --title "Мой стек"
-skills-hub collection add-local my-stack bitrix24       # слаг или числовой id
-skills-hub collection add-local my-stack wb-api         # нет в сторе → warning, но добавится
-skills-hub --json collection list-local                 # имя / размер / чего нет в сторе
-skills-hub --json collection install-local my-stack     # установить весь набор
-skills-hub collection remove-local my-stack wb-api      # убрать из коллекции (диск цел)
-skills-hub collection delete-local my-stack             # удалить коллекцию (навыки на диске целы)
+skills-hub collection create my-stack --local --title "Мой стек"
+skills-hub collection add my-stack bitrix24 --local     # слаг или числовой id
+skills-hub collection add my-stack wb-api --local       # нет в сторе → warning, но добавится
+skills-hub --json collection list --local               # имя / размер / чего нет в сторе
+skills-hub --json collection show my-stack --local      # одна локальная коллекция: состав + чего нет в сторе
+skills-hub --json collection install my-stack --local   # установить весь набор
+skills-hub collection remove my-stack wb-api --local    # убрать из коллекции (диск цел)
+skills-hub collection delete my-stack --local           # удалить коллекцию (навыки на диске целы)
 ```
 
-`install-local` для каждого слага: есть в сторе → линк в scope (как
+`install … --local` для каждого слага: есть в сторе → линк в scope (как
 `enable`, БЕЗ сети); нет в сторе и залогинен → докачка из хаба
 (`--channel`, default `published`); нет и НЕ залогинен → skip с подсказкой —
 команда не падает. JSON-итог: `{installed, linked, skipped}` (+`hint`, если
@@ -461,8 +476,8 @@ skills-hub --json enable <slug>
 
 | Permission              | Что разрешает                                       |
 | ----------------------- | --------------------------------------------------- |
-| `skill.read`            | `list`, `show`, `comments`, `contributors`, `rating-summary`, `collections list` / `collection show` |
-| `skill.install`         | `install` из хаба, `update`, `collection install`   |
+| `skill.read`            | `list`, `show`, `comments`, `contributors`, `rating-summary`, серверные `collection list` / `collection show` |
+| `skill.install`         | `install` из хаба, `update`, серверный `collection install` |
 | `skill.rate`            | `rate`, `rating-summary`                            |
 | `comment.post`          | `comment` (создать / ответить)                      |
 | `comment.edit_own`      | `comment-edit`                                      |
@@ -486,13 +501,16 @@ skills-hub --json enable <slug>
 
 > **Always-on** (без логина и без прав): `register`, `join`,
 > `install --path` / `--from-git`, `enable` / `disable` / `remove` / `sync` /
-> `migrate` / `store *`, `collection *-local`, `onboard`. **Любой
+> `migrate` / `store *`, `collection … --local` (все глаголы always-on;
+> серверный режим гейтится в рантайме), `onboard`. **Любой
 > залогиненный** (без отдельного права): `members`, `roles`, `company show`,
 > `company switch`, `passwd` — backend сам сужает выдачу tenant-изоляцией
 > (member без admin-прав в `members` видит только себя). Коллекции и
 > rating-summary видны при `skill.read` (отдельного `collection.*` permission
-> нет). Команды `ticket assign` и серверные `collection create/delete/add-*`
-> из CLI **не реализованы** (локальные `collection *-local` — реализованы).
+> нет). Команды `ticket assign` и серверный CRUD коллекций
+> (`collection create/add/remove/delete` без `--local`) из CLI **не
+> реализованы** — серверные коллекции редактируются в Web UI; локальные
+> (`collection … --local`) — реализованы полностью.
 
 CLI скрывает в `--help` все команды, на которые нет permission, — это
 управляется build_app() при запуске.

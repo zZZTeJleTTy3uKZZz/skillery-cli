@@ -108,10 +108,11 @@ def test_cmd_collections_list_renders_items(monkeypatch: pytest.MonkeyPatch) -> 
 
     fake_client.list_collections = _list
     fake_client.close = _close
+    monkeypatch.setattr(coll_mod, "_SERVER_ENABLED", True)
     _fake_factory(monkeypatch, fake_client)
 
-    coll_mod.cmd_collections_list(
-        company_id=None, type_=None, owner_id=None, include_global=True
+    coll_mod.cmd_collection_list(
+        local=False, company_id=None, type_=None, owner_id=None, include_global=True
     )
 
 
@@ -154,16 +155,19 @@ def test_cmd_collection_show_renders_detail(monkeypatch: pytest.MonkeyPatch) -> 
 
     fake_client.get_collection = _get
     fake_client.close = _close
+    monkeypatch.setattr(coll_mod, "_SERVER_ENABLED", True)
     _fake_factory(monkeypatch, fake_client)
 
-    coll_mod.cmd_collection_show(slug="my-coll")
+    coll_mod.cmd_collection_show(ref="my-coll", local=False)
     assert captured["slug"] == "my-coll"
 
 
 # ---------------------- registration ----------------------
-def test_collection_subapps_registered_with_skill_read(
+def test_collection_subapp_single_with_skill_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """skill.read → единый collection sub-app, серверный режим включён, plural убран."""
+    monkeypatch.setattr(coll_mod, "_SERVER_ENABLED", False)
     cfg = ClientConfig(
         base_url="http://localhost:8000",
         user_email="u@example.com",
@@ -174,5 +178,8 @@ def test_collection_subapps_registered_with_skill_read(
 
     app = build_app()
     typer_names = [t.name for t in app.registered_groups]
-    assert "collections" in typer_names
     assert "collection" in typer_names
+    assert "collections" not in typer_names  # plural убран — единый глагол list
+    # skill.read включил серверный режим, но не install.
+    assert coll_mod._SERVER_ENABLED is True
+    assert coll_mod._CAN_INSTALL is False
