@@ -295,6 +295,35 @@ class HubClient:
             "GET", f"/skills/{skill_id}/comments", params=params
         )
 
+    async def edit_comment(
+        self, comment_id: str, *, body: str
+    ) -> dict[str, Any]:
+        """PATCH /comments/{id} — отредактировать свой comment.
+
+        Сверено с ``routes/skill_review.py::edit_comment``:
+        ``EditCommentRequest`` = ``{body}``; ответ — **bare** ``SkillCommentDTO``
+        (НЕ обёрнут в ``{"comment": ...}``, в отличие от POST). Permission
+        ``comment.edit_own`` (только автор). Comment адресуется по числовому id.
+        """
+        return await self._request(
+            "PATCH",
+            f"/comments/{comment_id}",
+            json={"body": body},
+        )
+
+    async def delete_comment(self, comment_id: str) -> dict[str, Any]:
+        """DELETE /comments/{id} — soft-delete своего comment'а.
+
+        Сверено с ``routes/skill_review.py::delete_comment``: ответ — **bare**
+        ``SkillCommentDTO`` (``is_deleted=True``, ``body="[deleted]"``).
+        Permission ``comment.delete_own`` (автор) ИЛИ
+        ``comment.delete_any``/``hub.admin``/``skill.manage`` (модератор).
+        """
+        return await self._request(
+            "DELETE",
+            f"/comments/{comment_id}",
+        )
+
     async def list_contributors(
         self, skill_id: str, *, refresh: bool = False
     ) -> dict[str, Any]:
@@ -353,6 +382,85 @@ class HubClient:
     async def get_ticket(self, ticket_id: str) -> dict[str, Any]:
         """GET /support/tickets/{id} — detail."""
         return await self._request("GET", f"/support/tickets/{ticket_id}")
+
+    async def reply_ticket(
+        self,
+        ticket_id: str,
+        *,
+        body: str,
+        parent_id: str | None = None,
+    ) -> dict[str, Any]:
+        """POST /support/tickets/{id}/messages — add message (JSON, без файлов).
+
+        Контракт сверен с ``routes/support_tickets.py::post_message``:
+        ``PostTicketMessageRequest`` = ``{body, parent_id?}``; ответ
+        ``PostTicketMessageResponse`` = ``{"message": {...}}``.
+        Permission ``ticket.create`` (все участники треда).
+        """
+        payload: dict[str, Any] = {"body": body}
+        if parent_id:
+            payload["parent_id"] = parent_id
+        return await self._request(
+            "POST",
+            f"/support/tickets/{ticket_id}/messages",
+            json=payload,
+        )
+
+    async def reply_ticket_multipart(
+        self,
+        ticket_id: str,
+        *,
+        body: str,
+        screenshots: list[tuple[str, bytes]],
+    ) -> dict[str, Any]:
+        """POST /support/tickets/{id}/messages/multipart — body + 0..N файлов.
+
+        Сверено с ``post_message_multipart``: Form ``body`` + ``screenshots[]``
+        файлы. ``parent_id`` в multipart-варианте бэкендом НЕ принимается
+        (только в JSON-варианте) — поэтому отсутствует. ``screenshots``: список
+        ``(filename, content)``.
+        """
+        data: dict[str, str] = {"body": body}
+        files: list[tuple[str, tuple[str, bytes, str]]] = [
+            ("screenshots", (name, content, "application/octet-stream"))
+            for name, content in screenshots
+        ]
+        resp = await self._client.request(
+            "POST",
+            f"/support/tickets/{ticket_id}/messages/multipart",
+            data=data,
+            files=files,
+            headers=self._auth_headers(),
+        )
+        if resp.status_code >= 400:
+            try:
+                d = resp.json()
+            except Exception:
+                d = {"code": "UNKNOWN", "message": resp.text, "details": {}}
+            raise ApiError(
+                status_code=resp.status_code,
+                code=d.get("code", "UNKNOWN"),
+                message=d.get("message", resp.text),
+                details=d.get("details", {}),
+            )
+        return resp.json()
+
+    async def set_ticket_status(
+        self, ticket_id: str, *, status: str
+    ) -> dict[str, Any]:
+        """PATCH /support/tickets/{id} — сменить статус.
+
+        Сверено с ``routes/support_tickets.py::update_ticket`` +
+        доменом ``TicketStatus``: допустимые статусы —
+        ``new | in_progress | scheduled | done | rejected`` (НЕ
+        open/resolved/closed — те значения дают 422). Permission
+        ``ticket.update_status`` (owner/manager). Ответ — ``SupportTicketDTO``.
+        """
+        return await self._request(
+            "PATCH",
+            f"/support/tickets/{ticket_id}",
+            json={"status": status},
+        )
 
     # === E10 — Collections ===
     async def list_collections(
