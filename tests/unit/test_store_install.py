@@ -90,6 +90,18 @@ def test_install_fallback_to_copy_when_link_fails(
     assert (link / "_skill_meta.json").exists()
 
 
+def _local_src(tmp_path: Path) -> Path:
+    """Реальный (не stub) источник: P0-guard запрещает stub'у заменять
+    непустые папки даже под --force, поэтому foreign-семантика проверяется
+    на local-path источнике."""
+    src = tmp_path / "real-src"
+    src.mkdir(exist_ok=True)
+    (src / "SKILL.md").write_text(
+        "---\nname: demo\nversion: 1.0.0\n---\n\n# demo\n", encoding="utf-8"
+    )
+    return src
+
+
 def test_install_refuses_foreign_scope_dir_without_force(tmp_path: Path) -> None:
     inst, target, store = _installer(tmp_path)
     link = target.slug_dir("demo")
@@ -97,7 +109,8 @@ def test_install_refuses_foreign_scope_dir_without_force(tmp_path: Path) -> None
     (link / "hand.txt").write_text("manual", encoding="utf-8")  # чужая папка, нет meta
     with pytest.raises(RuntimeError, match="не управляется skills-hub"):
         inst.install(slug="demo", version="1.0.0", commit_sha="a1",
-                     repo_url=None, manifest=_MANIFEST)
+                     repo_url=None, local_src=_local_src(tmp_path),
+                     manifest=_MANIFEST)
 
 
 def test_install_force_replaces_foreign_scope_dir_with_link(tmp_path: Path) -> None:
@@ -106,9 +119,24 @@ def test_install_force_replaces_foreign_scope_dir_with_link(tmp_path: Path) -> N
     link.mkdir(parents=True)
     (link / "hand.txt").write_text("manual", encoding="utf-8")
     res = inst.install(slug="demo", version="1.0.0", commit_sha="a1",
-                       repo_url=None, manifest=_MANIFEST, force=True)
+                       repo_url=None, local_src=_local_src(tmp_path),
+                       manifest=_MANIFEST, force=True)
     assert res.linked is True
     assert linker.is_link(target.slug_dir("demo"))
+
+
+def test_install_stub_refuses_foreign_scope_dir_even_with_force(tmp_path: Path) -> None:
+    """P0-guard: stub-источник НЕ заменяет непустую чужую папку даже с --force."""
+    inst, target, store = _installer(tmp_path)
+    link = target.slug_dir("demo")
+    link.mkdir(parents=True)
+    (link / "hand.txt").write_text("manual", encoding="utf-8")
+    res = inst.install(slug="demo", version="1.0.0", commit_sha="a1",
+                       repo_url=None, manifest=_MANIFEST, force=True)
+    assert res.skipped is True
+    assert res.skip_reason == "stub-would-clobber"
+    assert (link / "hand.txt").read_text(encoding="utf-8") == "manual"
+    assert not linker.is_link(link)
 
 
 def test_cmd_install_project_writes_manifest(

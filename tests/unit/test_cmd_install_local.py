@@ -203,6 +203,8 @@ def test_install_from_git_local_bare_repo_no_login(
     meta = read_meta(store_dir)
     assert meta["source"] == "git-url"
     assert meta["repo_url"] == bare.as_uri()
+    # Фикс l2: версия из frontmatter клона, а не хардкод '0.0.0-local'.
+    assert meta["version"] == "9.9.9"
     assert pm.load(project) == {"gitskill": "*"}
 
 

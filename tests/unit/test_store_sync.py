@@ -124,6 +124,7 @@ def test_cmd_store_list_and_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 def test_cmd_store_gc_dry_run_lists_orphans(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
 ) -> None:
+    """--dry-run остаётся алиасом дефолта (фикс B9: дефолт тоже не удаляет)."""
     import skills_hub_cli.__main__ as main_mod
     from skills_hub_cli.config import ClientConfig
     from skills_hub_cli import output as out_mod
@@ -140,8 +141,9 @@ def test_cmd_store_gc_dry_run_lists_orphans(
     monkeypatch.setattr(main_mod, "get_target", lambda name: target)
     monkeypatch.setattr(out_mod, "_mode", "json")
 
-    main_mod.cmd_store_gc(dry_run=True)
+    main_mod.cmd_store_gc(dry_run=True, force=False)
     payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert "orphan" in payload["candidates"]
     assert "referenced" not in payload["candidates"]
+    assert payload["deleted"] is False
     assert (store / "orphan").exists()  # dry-run ничего не удалил

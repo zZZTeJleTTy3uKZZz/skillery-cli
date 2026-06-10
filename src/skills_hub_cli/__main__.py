@@ -202,6 +202,11 @@ def _maybe_auto_update(cfg: ClientConfig) -> None:
     if not access:
         return
 
+    # Прогресс auto-update — ТОЛЬКО в stderr: stdout — машинный канал
+    # (--json), его нельзя засорять (живой факт: строка «↑ auto-update»
+    # ломала парсинг JSON-вывода).
+    err_console = Console(stderr=True)
+
     async def _do() -> None:
         client = HubClient(base_url=cfg.base_url, access_token=access, on_token_refresh=_make_refresh_callback(cfg))
         try:
@@ -210,18 +215,25 @@ def _maybe_auto_update(cfg: ClientConfig) -> None:
                     bundle = await client.install_bundle(slug)
                 except Exception:
                     continue
+                # P0: bundle без repo_url = stub-источник — обновлять нечем
+                # (живой инцидент: такой «апдейт» затирал реальный контент
+                # 112-байтовым stub'ом). Пропускаем кандидата целиком.
+                if not bundle.get("repo_url"):
+                    continue
                 # B8: апдейтим ТОЛЬКО если опубликованная версия строго новее
                 # установленной — downgrade/равные пропускаем.
                 if _is_newer(bundle["version"], current):
                     installer = SkillInstaller(target, cfg.effective_store_dir())
-                    installer.install(
+                    res = installer.install(
                         slug=slug,
                         version=bundle["version"],
                         commit_sha=bundle["commit_sha"],
                         repo_url=bundle.get("repo_url"),
                         manifest=bundle["manifest"],
                     )
-                    console.print(
+                    if getattr(res, "skipped", False):
+                        continue  # guard отказал (stub-would-clobber и т.п.)
+                    err_console.print(
                         f"[dim cyan]↑ auto-update[/] {slug}: {current} → {bundle['version']}"
                     )
             # Cooldown-таймстамп двигаем всегда после успешного прохода (даже
@@ -969,17 +981,25 @@ async def _install_chain(
                 manifest=dep_bundle["manifest"], project=project_path,
                 force=force, skill_id=dep_id,
             )
-            installed_chain.append({
+            entry = {
                 "slug": dep_slug, "skill_id": result.skill_id,
                 "version": dep_version, "is_update": result.is_update,
                 "target_dir": str(result.target_dir), "scope": result.scope,
                 "linked": result.linked, "link_kind": result.link_kind,
-            })
-            track_skill_event(
-                "skill.update" if result.is_update else "skill.install",
-                slug=dep_slug or (str(dep_id) if dep_id is not None else ""),
-                version=dep_version, scope=result.scope,
-            )
+            }
+            # Фикс 5в: stub-установка помечается в JSON-ответе явно.
+            if result.content == "stub":
+                entry["content"] = "stub"
+            if result.skipped:
+                entry["skipped"] = True
+                entry["skip_reason"] = result.skip_reason
+            installed_chain.append(entry)
+            if not result.skipped:
+                track_skill_event(
+                    "skill.update" if result.is_update else "skill.install",
+                    slug=dep_slug or (str(dep_id) if dep_id is not None else ""),
+                    version=dep_version, scope=result.scope,
+                )
         return installed_chain
     finally:
         await client.close()
@@ -1065,8 +1085,31 @@ def cmd_install(
                 if ref:
                     project_manifest.add(project_path, str(ref))
 
+        # Фикс 5в/1: stub и skip — явные предупреждения (json-режим: stderr,
+        # stdout остаётся чистым машинным каналом).
+        for item in installed_chain:
+            label = item.get("slug") or item.get("skill_id") or "?"
+            if item.get("skipped"):
+                emit_message(
+                    f"«{label}»: установка пропущена ({item.get('skip_reason')}) — "
+                    "stub не может заменить существующую непустую установку.",
+                    level="warn",
+                )
+            elif item.get("content") == "stub":
+                emit_message(
+                    f"«{label}» установлен как stub: у скилла в хабе нет "
+                    "git-репозитория, контент — заглушка SKILL.md.",
+                    level="warn",
+                )
+
         def _render(items: list) -> None:
             for item in items:
+                if item.get("skipped"):
+                    console.print(
+                        f"[yellow]→ Пропущен[/] ({item['scope']}) "
+                        f"{item['slug']}@{item['version']}: {item.get('skip_reason')}"
+                    )
+                    continue
                 action = "Обновлён" if item["is_update"] else "Установлен"
                 mount = "📎" if item["linked"] else "📄"
                 console.print(
@@ -1103,11 +1146,62 @@ def cmd_enable(
     force: bool = typer.Option(False, "--force"),
     channel: str = typer.Option("published"),
 ) -> None:
-    """Включить навык в наборе проекта: стор + ссылка в project scope + манифест."""
+    """Включить навык в наборе проекта: стор + ссылка в project scope + манифест.
+
+    Store-first: если навык уже материализован в сторе — локальный re-link
+    БЕЗ сети и логина (работает оффлайн для любого источника: hub /
+    local-path / git-url). Докачка из хаба нужна только когда навыка в сторе
+    нет (требует login).
+    """
     cfg = ClientConfig.load()
     project_path = _resolve_project(cfg, project)
-    access = _get_access_token()
     target = get_target(agent or cfg.agent)
+
+    # --- store-first: навык уже в сторе → re-link + манифест, без сети ---
+    installer = SkillInstaller(target, cfg.effective_store_dir())
+    local = installer.link_existing(slug, project=project_path, force=force)
+    if local is not None:
+        linked, link_kind = local
+        store_meta = read_meta(cfg.effective_store_dir() / slug) or {}
+        project_manifest.add(project_path, slug)
+        track_skill_event(
+            "skill.install", slug=slug,
+            version=store_meta.get("version") or "", scope="project",
+        )
+        item = {
+            "slug": store_meta.get("slug") or slug,
+            "skill_id": store_meta.get("skill_id"),
+            "version": store_meta.get("version"),
+            "is_update": False,
+            "target_dir": str(target.slug_dir(slug, project=project_path)),
+            "scope": "project", "linked": linked, "link_kind": link_kind,
+            "source": "store",
+        }
+
+        def _render_local(_: dict) -> None:
+            mount = "📎" if item["linked"] else "📄"
+            console.print(
+                f"[green]✓[/] Включён в проект {mount} "
+                f"{item['slug']}@{item['version']} → {item['target_dir']} "
+                "[dim](из стора, без сети)[/]"
+            )
+            console.print(f"[dim]Манифест: {project_manifest.manifest_path(project_path)}[/]")
+
+        emit_data(
+            {"event": "enabled", "project": str(project_path), "skills": [item]},
+            text_renderer=_render_local,
+        )
+        return
+
+    # --- в сторе нет → докачка из хаба (нужен login) ---
+    if not cfg.is_logged_in():
+        emit_error(
+            "NOT_LOGGED_IN",
+            f"Навыка «{slug}» нет в локальном сторе; для докачки из хаба "
+            "залогиньтесь: skills-hub login",
+        )
+        raise typer.Exit(1)
+    access = _get_access_token()
 
     async def _do() -> None:
         installed_chain = await _install_chain(
@@ -1195,9 +1289,18 @@ def cmd_sync(
             if out is not None:
                 report["linked"].append(slug)
                 continue
-            # Нет в сторе → докачать (ленивый access).
+            # Нет в сторе → докачать из хаба (ленивый access). Без логина НЕ
+            # падаем целиком: что есть в сторе — уже слинковано, недостающее
+            # уходит в missing с подсказкой залогиниться (фикс 3).
             if "tok" not in access_holder:
-                access_holder["tok"] = _get_access_token()
+                if not cfg.is_logged_in():
+                    report["missing"].append(slug)
+                    continue
+                try:
+                    access_holder["tok"] = _get_access_token()
+                except typer.Exit:
+                    report["missing"].append(slug)
+                    continue
             try:
                 await _install_chain(
                     cfg, access_holder["tok"], slug=slug, channel=channel,
@@ -1221,6 +1324,13 @@ def cmd_sync(
                         linker.remove_link(d)  # только НАШИ (на стор) ссылки
                         report["pruned"].append(d.name)
 
+        payload: dict = {**report}
+        if report["missing"] and not cfg.is_logged_in():
+            payload["hint"] = (
+                "вы не залогинены — докачка из хаба недоступна; что уже в "
+                "сторе — слинковано. Для докачки: skills-hub login"
+            )
+
         def _render(r: dict) -> None:
             console.print(
                 f"[green]sync[/] {project_path}: "
@@ -1229,8 +1339,10 @@ def cmd_sync(
             )
             for s in r["missing"]:
                 console.print(f"  [yellow]✗ не удалось получить:[/] {s}")
+            if r.get("hint"):
+                console.print(f"  [dim]{r['hint']}[/]")
 
-        emit_data(report, text_renderer=_render)
+        emit_data(payload, text_renderer=_render)
 
     _run(_do())
 
@@ -1256,6 +1368,15 @@ def cmd_migrate(
     if scope in ("project", "all"):
         reports["project"] = installer.migrate_scope(project=project_path, dry_run=dry_run)
 
+    # Фикс 5б: мигрированный в project scope навык обязан попасть в
+    # .skills-hub/skills.toml — иначе следующий `sync --prune` снимет его
+    # ссылку как «не из манифеста» (живой факт).
+    manifest_added: list[str] = []
+    if not dry_run:
+        for name in reports.get("project", {}).get("migrated", []):
+            project_manifest.add(project_path, name)
+            manifest_added.append(name)
+
     def _render(payload: dict) -> None:
         prefix = "[yellow]dry-run[/] " if dry_run else ""
         for sc, r in payload["reports"].items():
@@ -1268,8 +1389,16 @@ def cmd_migrate(
                 console.print(f"  [green]→[/] {name}")
             for f in r["failed"]:
                 console.print(f"  [red]✗[/] {f['name']}: {f['error']}")
+        if payload["manifest_added"]:
+            console.print(
+                f"[dim]Дописано в {project_manifest.manifest_path(project_path)}: "
+                f"{', '.join(payload['manifest_added'])}[/]"
+            )
 
-    emit_data({"dry_run": dry_run, "reports": reports}, text_renderer=_render)
+    emit_data(
+        {"dry_run": dry_run, "reports": reports, "manifest_added": manifest_added},
+        text_renderer=_render,
+    )
 
 
 def cmd_store_list() -> None:
@@ -1312,15 +1441,35 @@ def cmd_store_path() -> None:
 
 
 def cmd_store_gc(
-    dry_run: bool = typer.Option(False, "--dry-run", help="Показать кандидатов, не удаляя"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run",
+        help="[deprecated] Алиас дефолта: только показать кандидатов "
+             "(дефолт и так ничего не удаляет).",
+    ),
+    force: bool = typer.Option(
+        False, "--force",
+        help="РЕАЛЬНО удалить кандидатов из стора. Без --force gc только "
+             "показывает список.",
+    ),
 ) -> None:
-    """Удалить из стора навыки без ссылок в GLOBAL scope.
+    """Показать (и под --force удалить) навыки стора без ссылок в GLOBAL scope.
+
+    По умолчанию НИЧЕГО не удаляет — только список кандидатов (фикс B9:
+    дефолтный gc удалял скиллы, на которые ссылались project-junction'ы).
 
     ВНИМАНИЕ: project-scope ссылки НЕ сканируются (реестр проектов не ведётся) —
-    навык, на который ссылается только проект, будет сочтён orphan. Используйте
-    --dry-run для проверки.
+    навык, на который ссылается только проект, будет сочтён orphan. Удаление —
+    ТОЛЬКО осознанно через --force.
     """
     from skills_hub_cli.core.installer import _force_rmtree
+
+    # Прямые вызовы (тесты/скрипты) могут передать OptionInfo-дефолты typer —
+    # они truthy; нормализуем, чтобы это НИКОГДА не включило удаление.
+    if not isinstance(dry_run, bool):
+        dry_run = False
+    if not isinstance(force, bool):
+        force = False
+    do_delete = force and not dry_run  # явный --dry-run сильнее --force
 
     cfg = ClientConfig.load()
     target = get_target(cfg.agent)
@@ -1343,15 +1492,24 @@ def cmd_store_gc(
             key = os.path.normcase(os.path.abspath(d))
             if key not in referenced:
                 candidates.append(d.name)
-                if not dry_run:
+                if do_delete:
                     _force_rmtree(d)
 
     def _render(p: dict) -> None:
-        verb = "Кандидаты на удаление" if dry_run else "Удалено из стора"
+        verb = "Удалено из стора" if p["deleted"] else "Кандидаты на удаление"
         console.print(f"[yellow]{verb}[/] ({len(p['candidates'])}): {', '.join(p['candidates']) or '—'}")
-        console.print("[dim]project-scope ссылки не учитываются — проверьте --dry-run.[/]")
+        if p["deleted"]:
+            console.print("[dim]project-scope ссылки не учитывались — проверьте проекты.[/]")
+        else:
+            console.print(
+                "[dim]project-scope ссылки не учитываются; ничего не удалено — "
+                "для удаления используйте --force.[/]"
+            )
 
-    emit_data({"candidates": candidates, "dry_run": dry_run}, text_renderer=_render)
+    emit_data(
+        {"candidates": candidates, "dry_run": not do_delete, "deleted": do_delete},
+        text_renderer=_render,
+    )
 
 
 def cmd_update(
@@ -1533,6 +1691,12 @@ def cmd_remove(
         slug=slug, project=project_path, keep_local=keep_local, purge=purge
     )
 
+    # Фикс 5а: симметрия с disable — снятый из project scope навык убираем и
+    # из .skills-hub/skills.toml, иначе следующий sync вернёт его обратно.
+    manifest_removed = False
+    if project_path is not None:
+        manifest_removed = project_manifest.remove(project_path, slug)
+
     if not result.removed:
         emit_data(
             {
@@ -1541,6 +1705,7 @@ def cmd_remove(
                 "removed": False,
                 "kept_local": False,
                 "purged": result.purged,
+                "manifest_removed": manifest_removed,
                 "path": str(result.target_dir),
             },
             text_renderer=lambda _: console.print(
@@ -1566,6 +1731,8 @@ def cmd_remove(
             )
         else:
             console.print(f"[green]✓[/] Удалён ({result.scope}): {slug}")
+        if manifest_removed:
+            console.print("[dim]Убран из .skills-hub/skills.toml[/]")
 
     emit_data(
         {
@@ -1574,6 +1741,7 @@ def cmd_remove(
             "removed": True,
             "kept_local": result.kept_local,
             "purged": result.purged,
+            "manifest_removed": manifest_removed,
             "path": str(result.target_dir),
         },
         text_renderer=_render,
@@ -2051,6 +2219,19 @@ def build_app() -> typer.Typer:
     # install — ALWAYS-ON: автономные источники (--path/--from-git) работают без
     # login; hub-режим (без этих флагов) внутри cmd_install сам требует токен.
     app.command(name="install")(cmd_install)
+    # lifecycle — ALWAYS-ON (фикс 3): enable/disable/remove/sync/migrate/store
+    # работают с ЛОКАЛЬНЫМ стором без login. Сеть нужна только sync-докачке и
+    # hub-enable — эти ветки сами отвечают NOT_LOGGED_IN / missing-подсказкой.
+    app.command(name="enable")(cmd_enable)
+    app.command(name="disable")(cmd_disable)
+    app.command(name="remove")(cmd_remove)
+    app.command(name="sync")(cmd_sync)
+    app.command(name="migrate")(cmd_migrate)
+    store_app = typer.Typer(no_args_is_help=True, help="Центральный стор навыков")
+    app.add_typer(store_app, name="store")
+    store_app.command("list")(cmd_store_list)
+    store_app.command("path")(cmd_store_path)
+    store_app.command("gc")(cmd_store_gc)
 
     if not is_logged_in:
         return app
@@ -2079,17 +2260,9 @@ def build_app() -> typer.Typer:
     if cfg.has_permission("skill.install"):
         # install зарегистрирован в always-on блоке (см. выше): автономные
         # источники --path/--from-git не требуют login.
+        # enable/disable/remove/sync/migrate/store(list/path/gc) — тоже в
+        # always-on блоке (фикс 3): lifecycle локального стора живёт без login.
         app.command(name="update")(cmd_update)
-        app.command(name="remove")(cmd_remove)
-        app.command(name="enable")(cmd_enable)
-        app.command(name="disable")(cmd_disable)
-        app.command(name="sync")(cmd_sync)
-        app.command(name="migrate")(cmd_migrate)
-        store_app = typer.Typer(no_args_is_help=True, help="Центральный стор навыков")
-        app.add_typer(store_app, name="store")
-        store_app.command("list")(cmd_store_list)
-        store_app.command("path")(cmd_store_path)
-        store_app.command("gc")(cmd_store_gc)
     if cfg.has_permission("skill.report_issue"):
         app.command(name="report")(cmd_report)
 
