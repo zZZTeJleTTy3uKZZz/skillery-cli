@@ -948,10 +948,26 @@ async def _install_local_source(
             manifest={"version": version, "files": []},
             project=project_path, force=force,
         )
-    track_skill_event(
-        "skill.update" if result.is_update else "skill.install",
-        slug=slug, version=result.version, scope=result.scope,
-    )
+    # Источник установки для аналитики (ось «source»): path → local-path,
+    # git → git-url (зеркалит installer'ский meta.source).
+    src_source = "local-path" if source["kind"] == "path" else "git-url"
+    if result.is_update:
+        track_skill_event(
+            "skill.update", slug=slug, version=result.version,
+            scope=result.scope, source=src_source,
+        )
+    else:
+        # Материализация в стор.
+        track_skill_event(
+            "skill.install", slug=slug, version=result.version,
+            scope=result.scope, source=src_source,
+        )
+    # Включение-в-проект (project-линк) — отдельное событие skill.enable.
+    if result.scope == "project":
+        track_skill_event(
+            "skill.enable", slug=slug, version=result.version,
+            scope="project", source=src_source,
+        )
     return [{
         "slug": slug, "skill_id": result.skill_id,
         "version": result.version, "is_update": result.is_update,
@@ -1034,11 +1050,19 @@ async def _install_chain(
                 entry["skip_reason"] = result.skip_reason
             installed_chain.append(entry)
             if not result.skipped:
+                ref = dep_slug or (str(dep_id) if dep_id is not None else "")
+                # Источник = hub (бэкенд-bundle + git clone).
                 track_skill_event(
                     "skill.update" if result.is_update else "skill.install",
-                    slug=dep_slug or (str(dep_id) if dep_id is not None else ""),
-                    version=dep_version, scope=result.scope,
+                    slug=ref, version=dep_version, scope=result.scope,
+                    source="hub",
                 )
+                # Включение-в-проект (project-линк) → отдельное skill.enable.
+                if result.scope == "project":
+                    track_skill_event(
+                        "skill.enable", slug=ref, version=dep_version,
+                        scope="project", source="hub",
+                    )
         return installed_chain
     finally:
         await client.close()
@@ -1203,9 +1227,12 @@ def cmd_enable(
         linked, link_kind = local
         store_meta = read_meta(cfg.effective_store_dir() / slug) or {}
         project_manifest.add(project_path, slug)
+        # Включение-в-проект (навык уже в сторе) → skill.enable; source берём
+        # из meta стора (навык пришёл из hub/local-path/git-url).
         track_skill_event(
-            "skill.install", slug=slug,
+            "skill.enable", slug=slug,
             version=store_meta.get("version") or "", scope="project",
+            source=store_meta.get("source"),
         )
         item = {
             "slug": store_meta.get("slug") or slug,
@@ -1281,7 +1308,8 @@ def cmd_disable(
     installer = SkillInstaller(target, cfg.effective_store_dir())
     result = installer.remove(slug=slug, project=project_path)
     in_manifest = project_manifest.remove(project_path, slug)
-    track_skill_event("skill.uninstall", slug=slug, scope="project")
+    # Снятие PROJECT-ссылки (стор цел) → skill.disable, НЕ uninstall.
+    track_skill_event("skill.disable", slug=slug, scope="project")
 
     def _render(_: dict) -> None:
         if result.removed:
@@ -1327,6 +1355,15 @@ def cmd_sync(
             out = installer.link_existing(slug, project=project_path, force=True)
             if out is not None:
                 report["linked"].append(slug)
+                # Массовый re-link включает навык в проект → skill.enable на
+                # каждый (раньше sync вообще не трекался — дыра аналитики).
+                # source читаем из meta стора (откуда навык изначально пришёл).
+                store_meta = read_meta(store_root / slug) or {}
+                track_skill_event(
+                    "skill.enable", slug=slug,
+                    version=store_meta.get("version") or "",
+                    scope="project", source=store_meta.get("source"),
+                )
                 continue
             # Нет в сторе → докачать из хаба (ленивый access). Без логина НЕ
             # падаем целиком: что есть в сторе — уже слинковано, недостающее
@@ -1777,13 +1814,18 @@ def cmd_remove(
         )
         return
 
-    # E23/E46: telemetry — silent track skill.uninstall event.
-    track_skill_event(
-        "skill.uninstall",
-        slug=slug,
-        scope=result.scope,
-        extra={"kept_local": result.kept_local},
-    )
+    # E23/E46 + аналитика-эпик: разводим disable vs uninstall.
+    # project-scope без --purge = только снята ссылка (стор цел) → skill.disable.
+    # --purge ИЛИ global-scope = навык удалён из стора → skill.uninstall.
+    if result.scope == "project" and not result.purged:
+        track_skill_event("skill.disable", slug=slug, scope="project")
+    else:
+        track_skill_event(
+            "skill.uninstall",
+            slug=slug,
+            scope=result.scope,
+            extra={"kept_local": result.kept_local},
+        )
 
     def _render(_: dict) -> None:
         if result.kept_local:

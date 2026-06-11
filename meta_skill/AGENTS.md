@@ -336,21 +336,34 @@ skills-hub daemon install     # пишет launchd plist / systemd user unit / T
 skills-hub daemon uninstall   # убирает autostart-юнит
 ```
 
-Команды управления телеметрией opt-in/opt-out **нет** — трекинг install /
-update / uninstall происходит автоматически (silent fail, никогда не ломает
-команду). Реальная отправка batch'а на backend гейтится правом `events.send`.
+Команды управления телеметрией opt-in/opt-out **нет** — трекинг происходит
+автоматически (silent fail, никогда не ломает команду). CLI **только кладёт
+события в локальную очередь** — он НЕ отправляет их синхронно в основной
+команде; отправку батчем делает daemon (или `event flush` вручную). Приём
+backend гейтится правом `events.send` для именованного актора; без токена
+события уходят как anonymous (`POST /events` принимает анонимно).
 
-Что трекается автоматически:
-- `skill.install` — slug, version, scope.
-- `skill.update` — slug, from_version, to_version.
-- `skill.uninstall` — slug.
-- (Опционально) `skill.run` — если skill сам вызвал `skills-hub event
-  track skill.run --resource-type skill --resource-id <id-или-slug>`.
+Что трекается автоматически (материализация-в-стор ≠ включение-в-проект):
+- `skill.install` — навык материализован в стор. payload: `slug`, `version`,
+  `scope` (`global`|`project`), `source` (`hub`|`local-path`|`git-url`).
+- `skill.update` — контент в сторе обновлён. payload: `slug`, `version`,
+  `scope`, `source`.
+- `skill.enable` — создана project-ссылка (включён в проект). payload: `slug`,
+  `version`, `scope=project`, `source`. Эмиттится из `enable`, `sync` (re-link),
+  `collection install --local`, `onboard --yes`, и из `install --scope project`
+  (вторым событием после `skill.install`).
+- `skill.disable` — project-ссылка снята (стор цел). payload: `slug`,
+  `scope=project`. Эмиттится из `disable` и `remove --scope project` без `--purge`.
+- `skill.uninstall` — навык удалён из стора. payload: `slug`, `scope`. Эмиттится
+  из `remove --purge` и global remove.
+- (Опционально) `skill.run` — отложен (если skill сам вызовет `skills-hub event
+  track skill.run --resource-type skill --resource-id <id-или-slug>`).
 
 Events queue — JSON-файл `~/.skills-hub/events.queue.json`. Daemon
-батчит и шлёт раз в 60 секунд (configurable через `--interval`). Если daemon не
-запущен — CLI отправляет sync прямо в команде (`install` / `update` /
-`uninstall`), чтобы не терять данные.
+батчит и шлёт раз в 60 секунд (configurable через `--interval`), поднимается
+заново при сбое/загрузке (autorestart + boot-trigger). Если daemon не запущен —
+события **копятся** в очереди (НЕ теряются) и уйдут при следующем старте; при
+этом `daemon status` предупредит о непустой очереди при мёртвом демоне.
 
 ## Шаг 9 — bug-report / feedback
 

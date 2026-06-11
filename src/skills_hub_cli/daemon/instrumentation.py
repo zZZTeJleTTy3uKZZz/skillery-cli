@@ -23,13 +23,18 @@ def track_skill_event(
     resource_id: str | None = None,
     version: str | None = None,
     scope: str | None = None,
+    source: str | None = None,
     extra: dict[str, Any] | None = None,
 ) -> None:
     """Положить event в очередь. Никогда не raises (silent fail).
 
     Параметры:
-        event_type: ``skill.install`` / ``skill.update`` / ``skill.uninstall``
-            / ``skill.run``.
+        event_type: ``skill.install`` / ``skill.update`` / ``skill.enable``
+            / ``skill.disable`` / ``skill.uninstall``.
+            **Каноничное разделение** (план «Аналитика навыков» 2026-06-11):
+            ``skill.install`` = материализация в стор, ``skill.enable`` =
+            создана project-ссылка (включён в проект), ``skill.disable`` =
+            ссылка снята (стор цел), ``skill.uninstall`` = удалён из стора.
         slug: slug скилла (идёт в payload как человекочитаемая метка).
         resource_id: идентификатор скилла-ресурса для аналитики — **строка**
             (``str(id)``), согласованная с backend/web (web ``track.ts`` шлёт
@@ -40,7 +45,16 @@ def track_skill_event(
             ``None`` и в качестве ссылки уходит ``slug``: backend-резолвер
             принимает id-или-slug, поэтому ссылка остаётся валидной.
         version: версия (если применимо).
-        scope: ``global`` / ``project``.
+        scope: ``global`` / ``project`` (КУДА линк — ось «scope»).
+        source: ИСТОЧНИК навыка — ``hub`` / ``local-path`` / ``git-url``
+            (резерв ``other-hub``). Отдельная ось аналитики «откуда ставят».
+            В install-точках известен из контекста (hub-докачка → ``hub``,
+            ``--path`` → ``local-path``, ``--from-git`` → ``git-url``); в
+            re-link точках (enable/sync/collection/onboard) читается из
+            ``read_meta(store/<slug>).get("source")`` — навык уже в сторе со
+            своим source. ``None`` → ключ в payload не кладётся.
+            NB: НЕ путать с ``metadata.source="cli"`` (транспортный канал —
+            какой клиент прислал событие).
         extra: дополнительные поля в payload.
     """
     try:
@@ -49,6 +63,8 @@ def track_skill_event(
             payload["version"] = version
         if scope:
             payload["scope"] = scope
+        if source:
+            payload["source"] = source
         if extra:
             payload.update(extra)
         # resource_id — всегда строка (str(id) если известен, иначе slug).

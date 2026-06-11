@@ -48,7 +48,7 @@ def _build_runner(*, interval_seconds: float) -> DaemonRunner:
     cfg = ClientConfig.load()
     access_holder: dict[str, str | None] = {"token": None}
 
-    def _factory():  # type: ignore[no-untyped-def]
+    def _factory(anonymous: bool = False):  # type: ignore[no-untyped-def]
         # Lazy: каждый цикл подтягиваем актуальный token из keyring (refresh
         # callback может его обновить).
         access = access_holder["token"]
@@ -57,6 +57,12 @@ def _build_runner(*, interval_seconds: float) -> DaemonRunner:
 
             access, _ = load_tokens(cfg.user_email)
             access_holder["token"] = access
+        if anonymous:
+            # POST /events анонимен: при 401 (токен протух) sender ретраит
+            # batch без Bearer. Деградировать некуда, если токена и не было.
+            if not access:
+                return None
+            return _common.make_client(cfg, "")
         return _common.make_client(cfg, access or "")
 
     collector = EventCollector(default_queue_path())
@@ -215,14 +221,24 @@ def cmd_daemon_status() -> None:
     alive = pid is not None and is_process_alive(pid)
     state = read_state()
     queue = EventCollector(default_queue_path())
+    queue_size = queue.size()
     payload: dict[str, Any] = {
         "alive": alive,
         "pid": pid,
         "pid_path": str(default_pid_path()),
         "queue_path": str(queue.path),
-        "queue_size": queue.size(),
+        "queue_size": queue_size,
         "state": state,
     }
+    # Демон мёртв, а в очереди копятся события → телеметрия не уходит.
+    # Явное предупреждение + машинно-читаемое поле (для автоматики/CI).
+    if not alive and queue_size > 0:
+        payload["stalled_events"] = queue_size
+        payload["warning"] = (
+            f"демон не запущен, {queue_size} "
+            f"событ{'ие' if queue_size == 1 else 'ий'} не "
+            f"отправлен{'о' if queue_size == 1 else 'о'}: skills-hub daemon start"
+        )
 
     def _render(p: dict[str, Any]) -> None:
         status = "[green]running[/]" if p["alive"] else "[yellow]stopped[/]"
@@ -241,6 +257,8 @@ def cmd_daemon_status() -> None:
                 console.print(
                     f"[yellow]Last error: {st['last_error']}[/]"
                 )
+        if p.get("warning"):
+            console.print(f"[yellow]⚠ {p['warning']}[/]")
 
     emit_data(payload, text_renderer=_render)
 

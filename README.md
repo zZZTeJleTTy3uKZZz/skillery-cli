@@ -94,10 +94,40 @@ skills-hub collection show popular
 
 ## E23 — Event tracking + daemon
 
-CLI пишет события (`skill.install` / `skill.update` / `skill.run` /
-произвольные через `event track`) в локальную очередь
-`~/.skills-hub/events.queue.json`. Отдельный daemon раз в минуту берёт
-batch и POST'ит на `/events` бэкенда (E6).
+CLI **никогда не шлёт события синхронно** в основной команде: он только
+**кладёт их в локальную очередь** `~/.skills-hub/events.queue.json` (silent —
+сбой записи никогда не ломает команду). Отдельный **daemon** раз в минуту берёт
+batch и POST'ит на `/events` бэкенда (E6). Для отладки можно протолкнуть очередь
+вручную одним циклом: `skills-hub event flush`.
+
+### Модель событий жизненного цикла (канон)
+
+Материализация-в-стор и включение-в-проект — РАЗНЫЕ события (две независимые
+оси аналитики):
+
+| event_type | Когда |
+| --- | --- |
+| `skill.install` | навык впервые материализован в центральный стор |
+| `skill.update` | контент навыка в сторе обновлён |
+| `skill.enable` | создана **project-ссылка** (навык включён в проект) |
+| `skill.disable` | project-ссылка снята (стор цел) |
+| `skill.uninstall` | навык удалён из стора (`remove --purge` / global remove) |
+
+`install <slug> --scope project` шлёт **два** события: `skill.install` (за
+материализацию, если навык новый в сторе) + `skill.enable` (за project-линк).
+`enable` уже материализованного навыка → только `skill.enable`. `sync` (массовый
+re-link), `collection install --local`, `onboard --yes` → `skill.enable` на
+каждый слинкованный навык. `disable` и `remove --scope project` (без `--purge`)
+→ `skill.disable`. `skill.run` (чтение навыка агентом) — отложен.
+
+Каждое `skill.install` / `skill.enable` / `skill.update` несёт в payload две оси:
+- **`scope`** — `global` | `project` (куда направлен линк);
+- **`source`** — `hub` | `local-path` | `git-url` (откуда навык: бэк-хаб /
+  локальная папка `--path` / произвольный git `--from-git`; резерв `other-hub`).
+  В re-link точках source читается из `_skill_meta.json` навыка в сторе.
+
+> Раньше материализация и включение-в-проект оба слались как `skill.install`,
+> а `disable`/`remove --project` — как `skill.uninstall`; теперь они разведены.
 
 ```bash
 # Ручное добавление event'а
@@ -124,6 +154,20 @@ skills-hub daemon install --platform linux
 только пишет unit-файл в user-scope и печатает инструкцию (`launchctl
 load`, `systemctl --user enable`, `schtasks /Create /XML`). Это
 безопасно для CI / shared dev-окружений.
+
+**Autorestart на всех платформах.** Unit-файлы поднимают демон заново при сбое
+и при загрузке системы: macOS — `KeepAlive`; linux — `Restart=on-failure`;
+Windows Task Scheduler — `<RestartOnFailure>` (интервал 1 мин, до 3 попыток) +
+второй триггер `<BootTrigger>` (старт при загрузке, не только при логине).
+
+**`daemon status`** при `alive=false` И непустой очереди выдаёт явное
+предупреждение и машинно-читаемое поле (`warning` / `stalled_events`): «демон не
+запущен, N событий не отправлены: skills-hub daemon start».
+
+**Anonymous-fallback отправки.** `POST /events` принимает события анонимно. Если
+токена нет или он протух, `event flush` и daemon шлют batch **без `Authorization`
+(anonymous)**, а не падают `SESSION_EXPIRED` — протухшая сессия не должна глушить
+телеметрию автономного CLI.
 
 ## Cross-agent
 
@@ -174,8 +218,11 @@ skills-hub install bitrix24 --agent codex
 - **E10 — коллекции**: `collections list`, `collection show`, `collection
   install` (массовая установка). Static + dynamic (по тегам).
 - **E23 — event tracking + daemon**: `event track / queue / flush`,
-  `daemon run/start/stop/status/install/uninstall`. Шлёт `skill.install`,
-  `skill.update`, `skill.run` в `/events` (E6 backend).
+  `daemon run/start/stop/status/install/uninstall`. Кладёт в локальную очередь
+  (async, daemon отправляет batch'ем) `skill.install` / `skill.update` /
+  `skill.enable` / `skill.disable` / `skill.uninstall` (+ `scope` и `source` в
+  payload) → `/events` (E6 backend). Daemon autorestart на всех платформах;
+  отправка с anonymous-fallback при протухшем токене.
 - Stripe-style API conventions (`/skills`, `/support/tickets`,
   `/collections`, ID prefixes `rat_`, `cmt_`, `tkt_`, `tmsg_`, `col_`,
   `evt_`).

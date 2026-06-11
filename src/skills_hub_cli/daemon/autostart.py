@@ -179,6 +179,9 @@ WIN_TASK_TEMPLATE = """<?xml version="1.0" encoding="UTF-16"?>
     <LogonTrigger>
       <Enabled>true</Enabled>
     </LogonTrigger>
+    <BootTrigger>
+      <Enabled>true</Enabled>
+    </BootTrigger>
   </Triggers>
   <Principals>
     <Principal id="Author">
@@ -204,6 +207,10 @@ WIN_TASK_TEMPLATE = """<?xml version="1.0" encoding="UTF-16"?>
     <WakeToRun>false</WakeToRun>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
     <Priority>7</Priority>
+    <RestartOnFailure>
+      <Interval>PT1M</Interval>
+      <Count>3</Count>
+    </RestartOnFailure>
   </Settings>
   <Actions Context="Author">
     <Exec>

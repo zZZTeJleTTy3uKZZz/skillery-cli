@@ -197,9 +197,12 @@ def cmd_onboard(
             if local_link is not None:
                 project_manifest.add(actual_project, slug)
                 store_meta = read_meta(cfg.effective_store_dir() / slug) or {}
+                # Навык уже в сторе → re-link = включение-в-проект →
+                # skill.enable (source из meta стора), НЕ повторный install.
                 track_skill_event(
-                    "skill.install", slug=slug,
+                    "skill.enable", slug=slug,
                     version=store_meta.get("version") or "", scope="project",
+                    source=store_meta.get("source"),
                 )
                 applied["linked"].append(slug)
                 continue

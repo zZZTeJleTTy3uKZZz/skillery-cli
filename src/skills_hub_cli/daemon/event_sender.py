@@ -69,8 +69,35 @@ class EventSender:
         digest = hashlib.sha256(canon.encode("utf-8")).hexdigest()
         return f"sh-cli-{digest[:24]}"
 
+    def _build_client(self, *, anonymous: bool = False):  # type: ignore[no-untyped-def]
+        """Зовёт factory. Контракт:
+
+        ``factory(anonymous=False) -> HubClient`` — обычный client (с токеном,
+        если есть). ``factory(anonymous=True)`` строит client БЕЗ Bearer и
+        возвращает ``None``, если деградировать некуда (токена и так не было).
+
+        Старый контракт (factory без параметра ``anonymous``) поддержан: при
+        ``anonymous=False`` зовём ``factory()`` без аргумента; при
+        ``anonymous=True`` такой factory не умеет деградировать → ``None``.
+        """
+        if not anonymous:
+            try:
+                return self._make_client(anonymous=False)
+            except TypeError:
+                return self._make_client()
+        # anonymous=True — только если factory это поддерживает.
+        try:
+            return self._make_client(anonymous=True)
+        except TypeError:
+            return None
+
     async def send_once(self) -> SendResult:
-        """Один цикл: drain batch → POST → at-failure requeue."""
+        """Один цикл: drain batch → POST → at-failure requeue.
+
+        POST /events анонимен (backend ``_optional_claims``): если токен протух
+        (401/SESSION_EXPIRED), один раз ретраим тем же batch БЕЗ Bearer
+        (anonymous) — протухшая сессия не глушит телеметрию автономного CLI.
+        """
         batch_events: list[QueuedEvent] = self._collector.drain(
             limit=self._batch_size
         )
@@ -79,12 +106,17 @@ class EventSender:
 
         dtos = [e.to_ingest_dto() for e in batch_events]
         idem = self._idempotency_key(dtos)
-        client: HubClient = self._make_client()
+        client: HubClient = self._build_client()
         try:
             try:
                 resp = await client.ingest_events(dtos, idempotency_key=idem)
             except ApiError as e:
-                # Возвращаем в очередь — попробуем в следующем цикле.
+                # 401 (токен протух) → ретрай anonymous (если есть куда
+                # деградировать). Иначе — requeue (как раньше).
+                if e.status_code == 401:
+                    retry = await self._send_anonymous(dtos, idem)
+                    if retry is not None:
+                        return retry
                 self._collector.requeue(batch_events)
                 return SendResult(
                     sent=len(batch_events),
@@ -111,6 +143,30 @@ class EventSender:
             )
         finally:
             await client.close()
+
+    async def _send_anonymous(
+        self, dtos: list[dict[str, Any]], idem: str
+    ) -> SendResult | None:
+        """Повтор batch анонимным client'ом (без Bearer).
+
+        Возвращает ``SendResult`` если ретрай выполнен; ``None`` если
+        деградировать некуда (factory не дала anonymous client — токена и не
+        было). Любая ошибка на ретрае → ``None`` (вызывающий сделает requeue).
+        """
+        anon = self._build_client(anonymous=True)
+        if anon is None:
+            return None
+        try:
+            resp = await anon.ingest_events(dtos, idempotency_key=idem)
+        except Exception:  # noqa: BLE001 — ретрай не удался → пусть requeue
+            return None
+        finally:
+            await anon.close()
+        accepted = int(resp.get("accepted", 0))
+        return SendResult(
+            sent=len(dtos), accepted=accepted,
+            skipped=max(0, len(dtos) - accepted), requeued=0,
+        )
 
     @staticmethod
     def make_run_id() -> str:

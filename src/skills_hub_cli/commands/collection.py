@@ -402,10 +402,15 @@ def _install_local(
                 meta = read_meta(store_dir / slug) or {}
                 if project_path is not None:
                     project_manifest.add(project_path, slug)
-                track_skill_event(
-                    "skill.install", slug=slug,
-                    version=meta.get("version") or "", scope=actual_scope,
-                )
+                # Навык уже материализован в сторе → re-link = включение-в-
+                # проект → skill.enable (НЕ повторный skill.install). source
+                # берём из meta стора (откуда навык пришёл изначально).
+                if actual_scope == "project":
+                    track_skill_event(
+                        "skill.enable", slug=slug,
+                        version=meta.get("version") or "", scope="project",
+                        source=meta.get("source"),
+                    )
                 linked.append({
                     "slug": meta.get("slug") or slug,
                     "skill_id": meta.get("skill_id"),

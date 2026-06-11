@@ -130,12 +130,29 @@ def cmd_event_queue(
 
 
 def cmd_event_flush() -> None:
-    """Синхронно отправить накопленные events (один цикл sender'а)."""
+    """Синхронно отправить накопленные events (один цикл sender'а).
+
+    POST /events анонимен (backend ``_optional_claims``): отсутствие или
+    протухание токена НЕ должно ронять flush — события уходят как anonymous.
+    Поэтому токен берётся best-effort (без exit(1) при NOT_LOGGED_IN/NO_TOKEN),
+    а factory умеет строить anonymous client (``anonymous=True`` → без Bearer).
+    """
+    from skills_hub_cli.config import load_tokens
+
     cfg = ClientConfig.load()
-    access = _common.get_access_token()
+    # best-effort: нет email/токена → пустая строка → client без Bearer.
+    access = ""
+    if cfg.user_email:
+        access, _ = load_tokens(cfg.user_email)
+        access = access or ""
     collector = EventCollector(default_queue_path())
 
-    def _factory():  # type: ignore[no-untyped-def]
+    def _factory(anonymous: bool = False):  # type: ignore[no-untyped-def]
+        if anonymous:
+            # Деградировать некуда, если токена и так не было.
+            if not access:
+                return None
+            return _common.make_client(cfg, "")
         return _common.make_client(cfg, access)
 
     sender = EventSender(collector, _factory)

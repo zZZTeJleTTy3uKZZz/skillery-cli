@@ -63,8 +63,9 @@ description: |
 11. **Онбордить проект** — `skills-hub onboard`: детект стека по
     маркер-файлам → подбор навыков из стора и хаба → `--yes` включает их в
     проект.
-12. **Запускать event-tracking daemon** (E23) — фон-агент шлёт `skill.install`,
-    `skill.update`, `skill.run` в `/events` (opt-in).
+12. **Запускать event-tracking daemon** (E23) — фон-агент батчем шлёт события
+    жизненного цикла (`skill.install`/`update`/`enable`/`disable`/`uninstall`,
+    + `scope` и `source` в payload) в `/events`; autorestart на всех платформах.
 13. **Сообщать о багах** через `skills-hub report` (исторический shortcut
     к тикетам).
 
@@ -321,16 +322,27 @@ JWT), с ним — **локальная** оффлайн-коллекция в 
 | `skills-hub daemon run [--interval N]`       | Foreground-цикл (для systemd / launchd / schtasks) |
 | `skills-hub daemon start [--interval N]`     | Запустить фон-процесс (collector + sender)  |
 | `skills-hub daemon stop`                     | Остановить (SIGTERM по PID-файлу)           |
-| `skills-hub daemon status`                   | PID / последний цикл / queue size           |
-| `skills-hub daemon install [--platform ...]` | Поставить как autostart (launchd / systemd user / Task Scheduler) |
+| `skills-hub daemon status`                   | PID / последний цикл / queue size (+ предупреждение, если демон мёртв и очередь непуста) |
+| `skills-hub daemon install [--platform ...]` | Поставить как autostart (launchd / systemd user / Task Scheduler) с autorestart + boot-trigger |
 | `skills-hub daemon uninstall [--platform ...]` | Убрать autostart-юнит                      |
 
 Подкоманды — sub-app `event` (в единственном числе): `event track / queue /
-flush`. Daemon кладёт events в `~/.skills-hub/events.queue.json` и шлёт батчами
-на `POST /events`. Без daemon'а CLI всё равно регистрирует события синхронно
-для команд `install`/`update`/`uninstall` (silent fail — телеметрия никогда не
-ломает основную команду). Реальная отправка на backend требует права
-`events.send`.
+flush`. CLI **никогда не шлёт события синхронно** в основной команде
+(`install`/`enable`/`update`/`disable`/`uninstall`): он только **кладёт их в
+локальную очередь** `~/.skills-hub/events.queue.json` (silent fail — телеметрия
+никогда не ломает основную команду). Отправку батчем на `POST /events` делает
+**daemon** (или `event flush` вручную для отладки). Отправка анонимна
+(anonymous-fallback при отсутствии/протухании токена); реальный приём backend
+гейтит правом `events.send` для именованного актора.
+
+**Модель событий (канон):** материализация-в-стор ≠ включение-в-проект.
+`skill.install` — навык материализован в стор; `skill.update` — контент в сторе
+обновлён; **`skill.enable`** — создана project-ссылка (включён в проект);
+**`skill.disable`** — ссылка снята (стор цел); `skill.uninstall` — удалён из
+стора (`remove --purge` / global). `install --scope project` шлёт ДВА события
+(install + enable). Каждое install/enable/update несёт в payload `scope`
+(`global`|`project`) и `source` (`hub`|`local-path`|`git-url`). `skill.run`
+(чтение агентом) — отложен.
 
 ### Публикация (только `skill.publish`)
 
