@@ -195,6 +195,31 @@ class ClientConfig:
         """skill-creator = наличие права `skill.publish` в эффективном наборе."""
         return "skill.publish" in self.permissions
 
+    def can_admin_users(self) -> bool:
+        """Может ли актор админить участников — зеркало backend-предиката
+        ``_can_admin_users`` (routes/users.py).
+
+        S3 D2.2: hub-admin ИЛИ любое из company.manage / user.invite /
+        user.remove / user.create / user.update / user.delete / user.lock.
+        Раньше CLI гейтил lock/unlock РОВНО на ``user.lock`` → owner
+        (company.manage) и manager (user.invite) не видели команду, хотя бэк
+        (и UI) их допускают. Единый предикат держит CLI-видимость = backend.
+        """
+        if self.is_hub_admin():
+            return True
+        return any(
+            p in self.permissions
+            for p in (
+                "company.manage",
+                "user.invite",
+                "user.remove",
+                "user.create",
+                "user.update",
+                "user.delete",
+                "user.lock",
+            )
+        )
+
     def is_logged_in(self) -> bool:
         return bool(self.user_email and self.permissions)
 
