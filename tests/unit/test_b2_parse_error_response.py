@@ -1,0 +1,192 @@
+"""B2 (CLI-сторона): единый разбор ошибочных ответов в transport.
+
+Раньше `_request()` корректно разворачивал тело ошибки FastAPI
+(`{"detail": dict|str|list}` → машинные `code`/`message`/`details`), а
+multipart-методы (`post_comment_multipart`, `reply_ticket_multipart`)
+имели СВОЙ дублированный разбор, читавший только top-level
+`{code,message,details}` → при контракте `{detail:{code,message}}` они
+давали `code=UNKNOWN`.
+
+Эти тесты фиксируют единый разбор:
+- `_parse_error_response` покрывает все формы detail (dict/str/list/нет);
+- 401 → SESSION_EXPIRED;
+- 429 → code из тела (RATE_LIMITED) при detail-dict И при top-level;
+- обе multipart-ветки теперь дают тот же ApiError, что и `_request`.
+"""
+from __future__ import annotations
+
+import pytest
+import respx
+from httpx import Response
+
+from skills_hub_cli.core.transport import ApiError, HubClient
+
+
+# ----------------------------- _parse_error_response (unit) ------------------
+@pytest.mark.asyncio
+async def test_parse_detail_dict_unwraps_code_message_details() -> None:
+    client = HubClient(base_url="http://localhost:8000", access_token="t")
+    try:
+        resp = Response(
+            403,
+            json={
+                "detail": {
+                    "code": "PERMISSION_DENIED",
+                    "message": "нет прав",
+                    "details": {"need": "skill.manage"},
+                }
+            },
+        )
+        err = client._parse_error_response(resp)
+    finally:
+        await client.close()
+    assert isinstance(err, ApiError)
+    assert err.status_code == 403
+    assert err.code == "PERMISSION_DENIED"
+    assert err.message == "нет прав"
+    assert err.details == {"need": "skill.manage"}
+
+
+@pytest.mark.asyncio
+async def test_parse_detail_str_becomes_message() -> None:
+    client = HubClient(base_url="http://localhost:8000", access_token="t")
+    try:
+        resp = Response(404, json={"detail": "Skill не найден"})
+        err = client._parse_error_response(resp)
+    finally:
+        await client.close()
+    assert err.code == "UNKNOWN"
+    assert err.message == "Skill не найден"
+
+
+@pytest.mark.asyncio
+async def test_parse_detail_list_422_validation() -> None:
+    client = HubClient(base_url="http://localhost:8000", access_token="t")
+    try:
+        resp = Response(
+            422,
+            json={
+                "detail": [
+                    {"loc": ["body", "email"], "msg": "value is not a valid email"}
+                ]
+            },
+        )
+        err = client._parse_error_response(resp)
+    finally:
+        await client.close()
+    assert err.code == "VALIDATION"
+    assert "body.email" in err.message
+    assert "value is not a valid email" in err.message
+
+
+@pytest.mark.asyncio
+async def test_parse_top_level_code_no_detail() -> None:
+    client = HubClient(base_url="http://localhost:8000", access_token="t")
+    try:
+        resp = Response(409, json={"code": "EMAIL_TAKEN", "message": "занят"})
+        err = client._parse_error_response(resp)
+    finally:
+        await client.close()
+    assert err.code == "EMAIL_TAKEN"
+    assert err.message == "занят"
+
+
+@pytest.mark.asyncio
+async def test_parse_non_json_body_falls_back_to_text() -> None:
+    client = HubClient(base_url="http://localhost:8000", access_token="t")
+    try:
+        resp = Response(500, text="Internal Server Error")
+        err = client._parse_error_response(resp)
+    finally:
+        await client.close()
+    assert err.code == "UNKNOWN"
+    assert err.message == "Internal Server Error"
+
+
+@pytest.mark.asyncio
+async def test_parse_401_session_expired() -> None:
+    client = HubClient(base_url="http://localhost:8000", access_token="t")
+    try:
+        resp = Response(401, json={"detail": "token invalid"})
+        err = client._parse_error_response(resp)
+    finally:
+        await client.close()
+    assert err.status_code == 401
+    assert err.code == "SESSION_EXPIRED"
+
+
+@pytest.mark.asyncio
+async def test_parse_429_rate_limited_from_detail_dict() -> None:
+    client = HubClient(base_url="http://localhost:8000", access_token="t")
+    try:
+        resp = Response(
+            429,
+            json={"detail": {"code": "RATE_LIMITED", "message": "слишком часто"}},
+        )
+        err = client._parse_error_response(resp)
+    finally:
+        await client.close()
+    assert err.status_code == 429
+    assert err.code == "RATE_LIMITED"
+    assert err.message == "слишком часто"
+
+
+@pytest.mark.asyncio
+async def test_parse_429_rate_limited_from_top_level() -> None:
+    client = HubClient(base_url="http://localhost:8000", access_token="t")
+    try:
+        resp = Response(429, json={"code": "RATE_LIMITED", "message": "wait"})
+        err = client._parse_error_response(resp)
+    finally:
+        await client.close()
+    assert err.code == "RATE_LIMITED"
+
+
+# ------------------- multipart-ветки используют единый разбор -----------------
+@pytest.mark.asyncio
+async def test_post_comment_multipart_unwraps_detail_dict() -> None:
+    with respx.mock(base_url="http://localhost:8000") as router:
+        router.post("/skills/5/comments/multipart").mock(
+            return_value=Response(
+                403,
+                json={
+                    "detail": {
+                        "code": "PERMISSION_DENIED",
+                        "message": "нет прав на комментарий",
+                    }
+                },
+            )
+        )
+        client = HubClient(base_url="http://localhost:8000", access_token="t")
+        try:
+            with pytest.raises(ApiError) as exc:
+                await client.post_comment_multipart(
+                    "5", body="hi", screenshots=[("a.png", b"x")]
+                )
+        finally:
+            await client.close()
+    assert exc.value.code == "PERMISSION_DENIED"
+    assert exc.value.message == "нет прав на комментарий"
+
+
+@pytest.mark.asyncio
+async def test_reply_ticket_multipart_unwraps_detail_dict() -> None:
+    with respx.mock(base_url="http://localhost:8000") as router:
+        router.post("/support/tickets/42/messages/multipart").mock(
+            return_value=Response(
+                429,
+                json={
+                    "detail": {"code": "RATE_LIMITED", "message": "слишком часто"}
+                },
+            )
+        )
+        client = HubClient(base_url="http://localhost:8000", access_token="t")
+        try:
+            with pytest.raises(ApiError) as exc:
+                await client.reply_ticket_multipart(
+                    "42", body="hi", screenshots=[("a.png", b"x")]
+                )
+        finally:
+            await client.close()
+    assert exc.value.code == "RATE_LIMITED"
+    assert exc.value.status_code == 429
