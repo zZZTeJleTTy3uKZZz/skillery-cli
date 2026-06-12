@@ -83,6 +83,42 @@ runtime_dependencies = [
 `runtime_dependencies` ⇒ `kind` не задан (дефолт при publish), пустые списки,
 флаги `has_cli=has_mcp=false`.
 
+### Что делает backend при publish (E6 phase 2)
+
+- **Денорм-флаги.** На навыке проставляются `has_cli = (есть [[cli]])` и
+  `has_mcp = (есть [[mcp]])` из публикуемого манифеста. При публикации новой
+  версии флаги пересчитываются (навык может «дорасти» prompt → tooling).
+- **Вывод `kind`.** Если `kind` не указан явно, но манифест несёт `[[cli]]` или
+  `[[mcp]]` — backend ставит `tooling`; иначе `prompt`. `runtime_dependencies`
+  сами по себе НЕ делают навык tooling (это зависимости окружения, не артефакт).
+- **Валидация tooling.** `kind = "tooling"` без единого `[[cli]]`/`[[mcp]]` →
+  ошибка публикации (`tooling-навык должен нести CLI или MCP`).
+- **`kind` во фронтматтере `SKILL.md`** читается (`from-git`); `[[cli]]`/`[[mcp]]`
+  объявляются ТОЛЬКО в `_skill_meta.toml` — если репо его несёт, backend берёт
+  TOML как source-of-truth манифеста, иначе fallback на фронтматтер.
+
+### Каталог-фасет (E6 phase 2)
+
+`GET /skills` принимает фасет-фильтры (комбинируются по AND):
+
+| query           | значение                       | смысл                          |
+| --------------- | ------------------------------ | ------------------------------ |
+| `kind=`         | `prompt`/`comprehensive`/`tooling` | точный тип навыка          |
+| `has_cli=`      | `true`/`false`                 | навык несёт CLI                |
+| `has_mcp=`      | `true`/`false`                 | навык несёт MCP                |
+
+`SkillDTO` в листинге/детали несёт `kind` / `has_cli` / `has_mcp`.
+
+### Install-bundle (E6 phase 2)
+
+`GET /skills/{slug}/install-bundle` дополнительно отдаёт агрегированный план
+по ВСЕЙ цепочке зависимостей (deps-first, дедуп) — для будущей установки
+клиентом (авто-установки в MVP нет):
+
+- `aggregated_cli` — все CLI-команды цепочки;
+- `aggregated_mcp` — все MCP-серверы цепочки;
+- `aggregated_runtime_dependencies` — все runtime-зависимости цепочки.
+
 ## E7 / E8 / E10 — опциональные поля (ROADMAP — publish их пока НЕ передаёт)
 
 > ⚠️ **Внимание, skill-авторы:** поля ниже (`rating_enabled`,
