@@ -35,6 +35,54 @@ dependencies = [
 ]
 ```
 
+## E6 — тип навыка + CLI/MCP/runtime (MVP: флаги + манифест)
+
+> Канон MVP: backend **читает и хранит** эти поля и проставляет денорм-флаги
+> `has_cli` / `has_mcp` на навыке при publish. **Авто-установки CLI и
+> авто-запуска MCP пока НЕТ** — это следующая волна. Сейчас это декларация.
+
+```toml
+# Тип навыка. Один из:
+#   prompt        — чистый промпт-инструкция (только SKILL.md)
+#   comprehensive — инструкция с кейсами/примерами/references
+#   tooling       — несёт CLI и/или MCP-сервер
+# Отсутствует ⇒ backend подставит дефолт при publish (prompt).
+kind = "tooling"
+
+# CLI-инструменты, которые несёт навык (tooling). Каждый — отдельная [[cli]].
+# command_name — имя команды в PATH; entrypoint — module:callable или путь
+# к скрипту (опционально, резолвится конвенцией при установке — будущая волна).
+[[cli]]
+command_name = "bx"
+entrypoint   = "bx_cli.main:run"
+
+[[cli]]
+command_name = "bx-admin"
+
+# MCP-серверы, которые несёт навык (tooling). Каждый — отдельная [[mcp]].
+# transport — stdio | sse | http. config — произвольная таблица (url/env/args…).
+[[mcp]]
+server_name = "bitrix-mcp"
+transport   = "stdio"
+
+[[mcp]]
+server_name = "bitrix-sse"
+transport   = "sse"
+config      = { url = "https://mcp.local/sse" }
+
+# Runtime-зависимости ПАКЕТОВ (НЕ skill→skill — та секция выше `dependencies`).
+# kind — pip | npm | system; spec — спецификация пакета.
+runtime_dependencies = [
+    { kind = "pip", spec = "httpx>=0.27" },
+    { kind = "npm", spec = "@scope/cli" },
+    { kind = "system", spec = "ffmpeg" },
+]
+```
+
+Бэк-совместимость: отсутствие `kind` / `[[cli]]` / `[[mcp]]` /
+`runtime_dependencies` ⇒ `kind` не задан (дефолт при publish), пустые списки,
+флаги `has_cli=has_mcp=false`.
+
 ## E7 / E8 / E10 — опциональные поля (ROADMAP — publish их пока НЕ передаёт)
 
 > ⚠️ **Внимание, skill-авторы:** поля ниже (`rating_enabled`,
@@ -163,6 +211,41 @@ support_kinds_allowed = ["bug", "feature", "question"]
       }
     },
     "preserved_paths": {"type": "array", "items": {"type": "string"}},
+    "kind": {"enum": ["prompt", "comprehensive", "tooling"]},
+    "cli": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["command_name"],
+        "properties": {
+          "command_name": {"type": "string"},
+          "entrypoint": {"type": "string"}
+        }
+      }
+    },
+    "mcp": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["server_name", "transport"],
+        "properties": {
+          "server_name": {"type": "string"},
+          "transport": {"enum": ["stdio", "sse", "http"]},
+          "config": {"type": "object"}
+        }
+      }
+    },
+    "runtime_dependencies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "spec"],
+        "properties": {
+          "kind": {"enum": ["pip", "npm", "system"]},
+          "spec": {"type": "string"}
+        }
+      }
+    },
     "rating_enabled": {"type": "boolean"},
     "comments_enabled": {"type": "boolean"},
     "comments_allow_screenshots": {"type": "boolean"},
