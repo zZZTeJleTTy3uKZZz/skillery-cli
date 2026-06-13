@@ -638,16 +638,48 @@ def test_members_and_roles_registered_for_plain_member(
 def test_member_subapp_partial_gates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Только user.invite → в member есть invite, но нет lock/remove/..."""
+    """role.manage → только change-role; lock/unlock/remove/invite/reset
+    отсутствуют (role.manage НЕ входит в can_admin_users → lock скрыт)."""
+    app = _build_app(monkeypatch, ["role.manage"])
+    member_group = next(g for g in app.registered_groups if g.name == "member")
+    sub = [c.name for c in member_group.typer_instance.registered_commands]
+    assert "change-role" in sub
+    assert "invite" not in sub
+    assert "remove" not in sub
+    assert "lock" not in sub
+    assert "unlock" not in sub
+    assert "reset-password" not in sub
+
+
+def test_member_subapp_invite_grants_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S3 D2.2: user.invite входит в backend `_can_admin_users` → manager
+    (user.invite) ДОЛЖЕН видеть lock/unlock в CLI (раньше гейт по узкому
+    user.lock прятал их, хотя бэк/UI допускают)."""
     app = _build_app(monkeypatch, ["user.invite"])
     member_group = next(g for g in app.registered_groups if g.name == "member")
     sub = [c.name for c in member_group.typer_instance.registered_commands]
     assert "invite" in sub
+    assert "lock" in sub
+    assert "unlock" in sub
+    # invite НЕ даёт remove/change-role/reset-password.
     assert "remove" not in sub
     assert "change-role" not in sub
-    assert "lock" not in sub
-    assert "unlock" not in sub
     assert "reset-password" not in sub
+
+
+def test_member_subapp_company_manage_grants_lock_and_reset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S3 D2.2: owner (company.manage) видит lock/unlock (can_admin_users) и
+    reset-password (company.manage) — паритет с backend."""
+    app = _build_app(monkeypatch, ["company.manage"])
+    member_group = next(g for g in app.registered_groups if g.name == "member")
+    sub = [c.name for c in member_group.typer_instance.registered_commands]
+    assert "lock" in sub
+    assert "unlock" in sub
+    assert "reset-password" in sub
 
 
 def test_member_subapp_full_for_hub_admin(

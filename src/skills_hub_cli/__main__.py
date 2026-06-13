@@ -2612,7 +2612,10 @@ def build_app() -> typer.Typer:
         can_invite=cfg.has_permission("user.invite"),
         can_remove=cfg.has_permission("user.remove"),
         can_change_role=cfg.has_permission("role.manage"),
-        can_lock=cfg.has_permission("user.lock"),
+        # S3 D2.2: lock/unlock гейтится тем же предикатом, что backend
+        # `_can_admin_users` (а не узким user.lock) — иначе owner/manager не
+        # видят команду, хотя бэк/UI их допускают.
+        can_lock=cfg.can_admin_users(),
         can_reset_password=cfg.has_permission("company.manage"),
     )
 
