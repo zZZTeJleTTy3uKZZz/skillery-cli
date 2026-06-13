@@ -2369,6 +2369,13 @@ def build_app() -> typer.Typer:
 
     _onboard_mod.register(app)
 
+    # --- E2 scaffold ---
+    # `skills-hub new <slug> --kind ...` — генерация скелета навыка. ALWAYS-ON:
+    # локальная генерация на диск, сети/логина не требует.
+    from skills_hub_cli.commands import scaffold as _scaffold_mod
+
+    _scaffold_mod.register(app)
+
     if not is_logged_in:
         return app
 
