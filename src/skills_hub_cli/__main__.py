@@ -32,7 +32,7 @@ from skills_hub_cli.config import (
     save_tokens,
     set_active_profile,
 )
-from skills_hub_cli.core import linker, project_manifest
+from skills_hub_cli.core import linker, project_manifest, tooling_install
 from skills_hub_cli.core.agents import detect_agent, get_target
 from skills_hub_cli.core.installer import SkillInstaller, read_meta
 from skills_hub_cli.core.manifest_builder import build_manifest, git_commit_sha
@@ -885,6 +885,87 @@ def _has_skill_md(skill_dir: Path) -> bool:
     return md.is_file()
 
 
+def _apply_tooling(result, manifest: dict | None, *, agent_target, project) -> None:
+    """E3 ф.2: поставить CLI/MCP/runtime-deps навыка (если он tooling). Graceful.
+
+    Ошибка установки артефактов НЕ ломает установку самого навыка (warn,
+    продолжаем — degradation как в reverse-factory). Печатает короткую сводку
+    о поставленных CLI/MCP и подсказку про PATH, если bin-каталог добавлен.
+    """
+    try:
+        report = tooling_install.apply_tooling_artifacts(
+            result, agent_target=agent_target, project=project, manifest=manifest
+        )
+    except Exception as exc:  # noqa: BLE001 — артефакты не валят install навыка
+        emit_message(
+            f"Не удалось доустановить CLI/MCP/зависимости навыка: {exc}",
+            level="warn",
+        )
+        return
+    _report_tooling(report)
+
+
+def _report_tooling(report: dict) -> None:
+    """Человекочитаемая сводка отчёта apply_tooling_artifacts (text + warn)."""
+    for cli in report.get("cli") or []:
+        name = cli.get("command_name", "?")
+        status = cli.get("status")
+        if status == "installed":
+            emit_message(f"CLI «{name}» доступен из любой директории.", level="info")
+            path_info = cli.get("path") or {}
+            if path_info.get("status") == "manual-needed":
+                emit_message(
+                    "Каталог CLI не в PATH. Добавьте его: "
+                    f"{path_info.get('instruction', '')} (или `skills-hub doctor --fix-path`).",
+                    level="warn",
+                )
+        elif status in ("error", "skipped"):
+            emit_message(
+                f"CLI «{name}» не поставлен ({status}): {cli.get('reason', '')}",
+                level="warn",
+            )
+    for mcp in report.get("mcp") or []:
+        name = mcp.get("server_name", "?")
+        status = mcp.get("status")
+        if status == "registered":
+            emit_message(f"MCP-сервер «{name}» зарегистрирован в агенте.", level="info")
+        elif status == "manual":
+            emit_message(mcp.get("instruction", f"MCP «{name}»: см. инструкцию."), level="warn")
+        elif status == "error":
+            emit_message(
+                f"MCP «{name}» не зарегистрирован: {mcp.get('reason', '')}", level="warn"
+            )
+    deps = report.get("deps") or {}
+    for d in deps.get("skipped") or []:
+        emit_message(
+            f"Зависимость {d.get('spec')} ({d.get('kind')}) не поставлена: "
+            f"{d.get('instruction', d.get('reason', ''))}",
+            level="warn",
+        )
+    for d in deps.get("failed") or []:
+        emit_message(
+            f"Зависимость {d.get('spec')} ({d.get('kind')}) — ошибка установки: "
+            f"{d.get('reason', '')}",
+            level="warn",
+        )
+
+
+def _revert_tooling(slug: str, *, agent_target, project, store_dir: Path) -> None:
+    """E3 ф.2: снять CLI/MCP навыка при disable/remove (по манифесту из стора).
+
+    Манифест читается из ``_skill_meta.json`` стора (он ещё на месте на момент
+    снятия ссылки / до purge). Никогда не бросает — снятие навыка важнее.
+    """
+    try:
+        meta = read_meta(store_dir) or {}
+        manifest = meta.get("manifest")
+        tooling_install.revert_tooling_artifacts(
+            manifest, agent_target=agent_target, project=project
+        )
+    except Exception as exc:  # noqa: BLE001 — откат артефактов не валит снятие
+        emit_message(f"Не удалось снять CLI/MCP навыка «{slug}»: {exc}", level="warn")
+
+
 async def _install_local_source(
     cfg: ClientConfig,
     *,
@@ -916,10 +997,20 @@ async def _install_local_source(
         version = _read_skill_md_version(skill_dir)
         # tags/description из frontmatter → в manifest меты: по ним onboard
         # матчит локально установленные навыки (live-smoke bug Phase E).
-        from skills_hub_cli.core.manifest_builder import _read_frontmatter
+        from skills_hub_cli.core.manifest_builder import (
+            _read_frontmatter,
+            _read_meta_toml,
+        )
 
         fm = _read_frontmatter(skill_dir / "SKILL.md")
         manifest: dict[str, object] = {"version": version, "files": []}
+        # E3 ф.2: локальный tooling-навык несёт cli/mcp/runtime_deps + kind в
+        # _skill_meta.toml — прокидываем их в manifest, чтобы _apply_tooling
+        # поставил CLI/MCP/зависимости (frontmatter их не содержит).
+        meta_toml = _read_meta_toml(skill_dir)
+        for key in ("kind", "cli", "mcp", "runtime_dependencies"):
+            if meta_toml.get(key):
+                manifest[key] = meta_toml[key]
         if fm.get("tags"):
             tags = fm["tags"]
             if isinstance(tags, list):
@@ -942,12 +1033,28 @@ async def _install_local_source(
         version = "0.0.0-local"
         # "" → дефолтная ветка репо (без --ref); иначе явный ref.
         ref = source.get("ref") or ""
+        manifest = {"version": version, "files": []}
         result = installer.install(
             slug=slug, version=version, commit_sha="",
             repo_url=source["url"], git_ref=ref,
-            manifest={"version": version, "files": []},
+            manifest=manifest,
             project=project_path, force=force,
         )
+    # E3 ф.2: tooling-навык (локальный источник) → CLI/MCP/runtime-deps.
+    # git-url источник: cli/mcp лежат в клонированном _skill_meta.toml стора —
+    # читаем оттуда (в локальном manifest их нет). path-источник: уже в manifest.
+    tooling_manifest = dict(manifest)
+    if source["kind"] == "git" and result.store_dir is not None:
+        from skills_hub_cli.core.manifest_builder import _read_meta_toml
+
+        cloned_meta = _read_meta_toml(result.store_dir)
+        for key in ("kind", "cli", "mcp", "runtime_dependencies"):
+            if cloned_meta.get(key):
+                tooling_manifest[key] = cloned_meta[key]
+    _apply_tooling(
+        result, tooling_manifest, agent_target=agent_target, project=project_path
+    )
+
     # Источник установки для аналитики (ось «source»): path → local-path,
     # git → git-url (зеркалит installer'ский meta.source).
     src_source = "local-path" if source["kind"] == "path" else "git-url"
@@ -1051,6 +1158,12 @@ async def _install_chain(
                 entry["skip_reason"] = result.skip_reason
             installed_chain.append(entry)
             if not result.skipped:
+                # E3 ф.2: tooling-навык → CLI в PATH-стор + MCP в конфиг агента +
+                # runtime-deps. Манифест — из bundle (E6 cli/mcp/runtime_deps).
+                _apply_tooling(
+                    result, dep_bundle.get("manifest"),
+                    agent_target=agent_target, project=project_path,
+                )
                 ref = dep_slug or (str(dep_id) if dep_id is not None else "")
                 # Источник = hub (бэкенд-bundle + git clone).
                 track_skill_event(
@@ -1226,8 +1339,17 @@ def cmd_enable(
     local = installer.link_existing(slug, project=project_path, force=force)
     if local is not None:
         linked, link_kind = local
-        store_meta = read_meta(cfg.effective_store_dir() / slug) or {}
+        store_dir = cfg.effective_store_dir() / slug
+        store_meta = read_meta(store_dir) or {}
         project_manifest.add(project_path, slug)
+        # E3 ф.2: повторное включение tooling-навыка в проект → CLI/MCP/deps
+        # (idempotent). Манифест из меты стора; result-подобие через legacy-link.
+        _apply_tooling(
+            type("_R", (), {"slug": slug, "skill_id": store_meta.get("skill_id"),
+                            "store_dir": store_dir})(),
+            store_meta.get("manifest"),
+            agent_target=target, project=project_path,
+        )
         # Включение-в-проект (навык уже в сторе) → skill.enable; source берём
         # из meta стора (навык пришёл из hub/local-path/git-url).
         track_skill_event(
@@ -1309,6 +1431,11 @@ def cmd_disable(
     installer = SkillInstaller(target, cfg.effective_store_dir())
     result = installer.remove(slug=slug, project=project_path)
     in_manifest = project_manifest.remove(project_path, slug)
+    # E3 ф.2: снять CLI/MCP навыка из конфига агента (стор цел → манифест есть).
+    _revert_tooling(
+        slug, agent_target=target, project=project_path,
+        store_dir=cfg.effective_store_dir() / slug,
+    )
     # Снятие PROJECT-ссылки (стор цел) → skill.disable, НЕ uninstall.
     track_skill_event(
         "skill.disable", slug=slug, scope="project", agent=target.name
@@ -1791,6 +1918,12 @@ def cmd_remove(
     _ = actual_scope  # передаётся через project_path
     target = get_target(agent or cfg.agent)
     installer = SkillInstaller(target, cfg.effective_store_dir())
+    # E3 ф.2: снять CLI/MCP навыка ДО remove — при --purge стор (и его манифест)
+    # удаляется, поэтому revert читает манифест из стора, пока он на месте.
+    _revert_tooling(
+        slug, agent_target=target, project=project_path,
+        store_dir=cfg.effective_store_dir() / slug,
+    )
     result = installer.remove(
         slug=slug, project=project_path, keep_local=keep_local, purge=purge
     )
