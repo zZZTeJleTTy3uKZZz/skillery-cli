@@ -2384,6 +2384,13 @@ def build_app() -> typer.Typer:
 
     _scaffold_mod.register(app)
 
+    # --- E7 analytics local ---
+    # `skills-hub analytics local` — read-only локальная картина (стор + проект
+    # + очередь событий). ALWAYS-ON: только локальные файлы, сети/логина не надо.
+    from skills_hub_cli.commands import analytics as _analytics_mod
+
+    _analytics_mod.register(app)
+
     if not is_logged_in:
         return app
 
