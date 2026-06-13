@@ -409,7 +409,7 @@ def _install_local(
                     track_skill_event(
                         "skill.enable", slug=slug,
                         version=meta.get("version") or "", scope="project",
-                        source=meta.get("source"),
+                        source=meta.get("source"), agent=target.name,
                     )
                 linked.append({
                     "slug": meta.get("slug") or slug,

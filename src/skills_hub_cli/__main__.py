@@ -951,22 +951,23 @@ async def _install_local_source(
     # Источник установки для аналитики (ось «source»): path → local-path,
     # git → git-url (зеркалит installer'ский meta.source).
     src_source = "local-path" if source["kind"] == "path" else "git-url"
+    agent_name = agent_target.name
     if result.is_update:
         track_skill_event(
             "skill.update", slug=slug, version=result.version,
-            scope=result.scope, source=src_source,
+            scope=result.scope, source=src_source, agent=agent_name,
         )
     else:
         # Материализация в стор.
         track_skill_event(
             "skill.install", slug=slug, version=result.version,
-            scope=result.scope, source=src_source,
+            scope=result.scope, source=src_source, agent=agent_name,
         )
     # Включение-в-проект (project-линк) — отдельное событие skill.enable.
     if result.scope == "project":
         track_skill_event(
             "skill.enable", slug=slug, version=result.version,
-            scope="project", source=src_source,
+            scope="project", source=src_source, agent=agent_name,
         )
     return [{
         "slug": slug, "skill_id": result.skill_id,
@@ -1055,13 +1056,13 @@ async def _install_chain(
                 track_skill_event(
                     "skill.update" if result.is_update else "skill.install",
                     slug=ref, version=dep_version, scope=result.scope,
-                    source="hub",
+                    source="hub", agent=agent_target.name,
                 )
                 # Включение-в-проект (project-линк) → отдельное skill.enable.
                 if result.scope == "project":
                     track_skill_event(
                         "skill.enable", slug=ref, version=dep_version,
-                        scope="project", source="hub",
+                        scope="project", source="hub", agent=agent_target.name,
                     )
         return installed_chain
     finally:
@@ -1232,7 +1233,7 @@ def cmd_enable(
         track_skill_event(
             "skill.enable", slug=slug,
             version=store_meta.get("version") or "", scope="project",
-            source=store_meta.get("source"),
+            source=store_meta.get("source"), agent=target.name,
         )
         item = {
             "slug": store_meta.get("slug") or slug,
@@ -1309,7 +1310,9 @@ def cmd_disable(
     result = installer.remove(slug=slug, project=project_path)
     in_manifest = project_manifest.remove(project_path, slug)
     # Снятие PROJECT-ссылки (стор цел) → skill.disable, НЕ uninstall.
-    track_skill_event("skill.disable", slug=slug, scope="project")
+    track_skill_event(
+        "skill.disable", slug=slug, scope="project", agent=target.name
+    )
 
     def _render(_: dict) -> None:
         if result.removed:
@@ -1363,6 +1366,7 @@ def cmd_sync(
                     "skill.enable", slug=slug,
                     version=store_meta.get("version") or "",
                     scope="project", source=store_meta.get("source"),
+                    agent=target.name,
                 )
                 continue
             # Нет в сторе → докачать из хаба (ленивый access). Без логина НЕ
@@ -1715,6 +1719,7 @@ def cmd_update(
                     slug=ref,
                     version=bundle["version"],
                     scope=scope_label,
+                    agent=target.name,
                 )
         finally:
             await client.close()
@@ -1818,12 +1823,15 @@ def cmd_remove(
     # project-scope без --purge = только снята ссылка (стор цел) → skill.disable.
     # --purge ИЛИ global-scope = навык удалён из стора → skill.uninstall.
     if result.scope == "project" and not result.purged:
-        track_skill_event("skill.disable", slug=slug, scope="project")
+        track_skill_event(
+            "skill.disable", slug=slug, scope="project", agent=target.name
+        )
     else:
         track_skill_event(
             "skill.uninstall",
             slug=slug,
             scope=result.scope,
+            agent=target.name,
             extra={"kept_local": result.kept_local},
         )
 

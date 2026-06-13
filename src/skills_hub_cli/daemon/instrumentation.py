@@ -24,6 +24,7 @@ def track_skill_event(
     version: str | None = None,
     scope: str | None = None,
     source: str | None = None,
+    agent: str | None = None,
     extra: dict[str, Any] | None = None,
 ) -> None:
     """Положить event в очередь. Никогда не raises (silent fail).
@@ -55,6 +56,11 @@ def track_skill_event(
             своим source. ``None`` → ключ в payload не кладётся.
             NB: НЕ путать с ``metadata.source="cli"`` (транспортный канал —
             какой клиент прислал событие).
+        agent: КАКОЙ ИИ-АГЕНТ ставит/включает навык — ``claude_code`` /
+            ``codex`` / ``antigravity`` / ``opencode`` / ``generic`` (ось
+            аналитики «агент», план E7). Берётся из ``target.name``
+            (``get_target``/``detect_agent`` в ``core/agents``) на каждой
+            track-точке. ``None`` → ключ в payload не кладётся.
         extra: дополнительные поля в payload.
     """
     try:
@@ -65,6 +71,8 @@ def track_skill_event(
             payload["scope"] = scope
         if source:
             payload["source"] = source
+        if agent:
+            payload["agent"] = agent
         if extra:
             payload.update(extra)
         # resource_id — всегда строка (str(id) если известен, иначе slug).

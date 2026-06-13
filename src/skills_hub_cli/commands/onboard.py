@@ -202,7 +202,7 @@ def cmd_onboard(
                 track_skill_event(
                     "skill.enable", slug=slug,
                     version=store_meta.get("version") or "", scope="project",
-                    source=store_meta.get("source"),
+                    source=store_meta.get("source"), agent=target.name,
                 )
                 applied["linked"].append(slug)
                 continue
