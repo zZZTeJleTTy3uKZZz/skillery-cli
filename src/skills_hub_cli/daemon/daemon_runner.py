@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from skills_hub_cli.daemon.backoff import BackoffPolicy
 from skills_hub_cli.daemon.event_collector import EventCollector
 from skills_hub_cli.daemon.event_sender import EventSender
 
@@ -47,6 +48,11 @@ def _default_skills_hub_dir() -> Path:
 
 def default_queue_path() -> Path:
     return _default_skills_hub_dir() / "events.queue.json"
+
+
+def default_guard_path() -> Path:
+    """Sidecar для анти-спам ``EventGuard`` (дедуп/throttle окно)."""
+    return _default_skills_hub_dir() / "events.guard.json"
 
 
 def default_pid_path() -> Path:
@@ -139,6 +145,7 @@ class DaemonRunner:
         interval_seconds: float = 60.0,
         pid_path: Path | None = None,
         state_path: Path | None = None,
+        backoff: BackoffPolicy | None = None,
     ) -> None:
         self._sender = sender
         self._interval = max(interval_seconds, 1.0)
@@ -146,6 +153,9 @@ class DaemonRunner:
         self._state_path = state_path or default_state_path()
         self._stop = asyncio.Event()
         self._state = DaemonState()
+        # Экспоненциальный backoff между провальными flush'ами (E7): cap 1ч,
+        # фактор 2. Пустой цикл (нечего слать) backoff НЕ растит.
+        self._backoff = backoff or BackoffPolicy(factor=2.0, max_delay=3600.0)
 
     @property
     def state(self) -> DaemonState:
@@ -210,12 +220,21 @@ class DaemonRunner:
                         loop.add_signal_handler(sig, self._stop.set)
         try:
             while not self._stop.is_set():
+                last: dict[str, Any] = {}
                 with suppress(Exception):
-                    await self.cycle_once()
+                    last = await self.cycle_once()
+                # Классификация исхода для backoff: «провал» = что-то слали, но
+                # всё ушло в requeue (network/5xx). Пустой цикл (sent=0) и успех
+                # сбрасывают backoff к базовому интервалу.
+                sent = int(last.get("sent", 0)) if last else 0
+                requeued = int(last.get("requeued", 0)) if last else 0
+                if sent > 0 and requeued >= sent:
+                    self._backoff.record_failure()
+                else:
+                    self._backoff.record_success()
+                delay = self._backoff.current_delay(base=self._interval)
                 try:
-                    await asyncio.wait_for(
-                        self._stop.wait(), timeout=self._interval
-                    )
+                    await asyncio.wait_for(self._stop.wait(), timeout=delay)
                 except asyncio.TimeoutError:
                     continue
         finally:

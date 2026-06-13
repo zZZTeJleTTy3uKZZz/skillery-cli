@@ -12,8 +12,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from skills_hub_cli.daemon.daemon_runner import default_queue_path
+from skills_hub_cli.daemon.daemon_runner import (
+    default_guard_path,
+    default_queue_path,
+)
 from skills_hub_cli.daemon.event_collector import EventCollector
+from skills_hub_cli.daemon.event_guard import EventGuard
 
 
 def track_skill_event(
@@ -78,6 +82,15 @@ def track_skill_event(
         # resource_id — всегда строка (str(id) если известен, иначе slug).
         # Никаких prefixed-id (`slk_…`) — форма унифицирована с backend/web.
         ref = str(resource_id) if resource_id is not None else slug
+        # Анти-спам: дубль/флуд в окне (дедуп+throttle) → НЕ кладём в очередь.
+        # Guard fail-open: любая ошибка guard'а → пропускаем событие как обычно
+        # (телеметрия best-effort, не роняем и не глушим из-за guard'а).
+        try:
+            guard = EventGuard(default_guard_path())
+            if not guard.should_accept(event_type, ref, payload=payload):
+                return
+        except Exception:
+            pass
         collector = EventCollector(default_queue_path())
         collector.append(
             event_type,
