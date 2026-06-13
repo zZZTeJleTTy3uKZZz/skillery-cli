@@ -300,7 +300,9 @@ def cmd_invite_links_list(
             await client.close()
 
         def _render(p: dict[str, Any]) -> None:
-            links = p.get("links") or []
+            # Канон (волна 3): список = ``items``; ``links`` сохранён
+            # бэкендом как deprecated-дубль (fallback).
+            links = p.get("items") or p.get("links") or []
             if not links:
                 console.print(f"[yellow]Ссылок нет[/] (company={cid})")
                 return

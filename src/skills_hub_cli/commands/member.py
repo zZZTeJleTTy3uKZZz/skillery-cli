@@ -12,9 +12,9 @@
 - ``member remove <user_id> [--company]`` — убрать из компании
   (``DELETE /memberships``).
 - ``member change-role <user_id> <role_id> [--company]`` — смена роли
-  (``POST /users/bulk/change_role`` с одним user_id).
+  (``POST /users/bulk/change-role`` с одним user_id).
 - ``member lock <user_id> [--reason]`` / ``member unlock <user_id>`` —
-  блокировка входа (``POST /users/{id}/lock|unlock``).
+  блокировка входа (``PUT /users/{id}/lock|unlock``).
 - ``member reset-password <user_id>`` — одноразовый пароль
   (``POST /users/{id}/reset-password``; показывается ОДИН раз).
 - ``roles`` — глобальный каталог ролей (``GET /roles``, paged) для
@@ -244,7 +244,7 @@ def cmd_member_change_role(
         None, "--company", help="ID компании (default: из вашего токена)"
     ),
 ) -> None:
-    """Сменить роль участника (POST /users/bulk/change_role одним user_id).
+    """Сменить роль участника (POST /users/bulk/change-role одним user_id).
 
     Право ``role.manage`` в компании (или hub.admin). Не-assignable роль
     для company-admin отклоняется backend'ом (422).
@@ -288,7 +288,7 @@ def cmd_member_lock(
         None, "--reason", help="Причина блокировки (попадает в audit)"
     ),
 ) -> None:
-    """Заблокировать вход пользователю (POST /users/{id}/lock).
+    """Заблокировать вход пользователю (PUT /users/{id}/lock).
 
     Право ``user.lock`` (или hub.admin). Активные сессии отзываются,
     self-lock запрещён backend'ом.
@@ -319,7 +319,7 @@ def cmd_member_lock(
 def cmd_member_unlock(
     user_id: str = typer.Argument(..., help="ID пользователя"),
 ) -> None:
-    """Снять блокировку входа (POST /users/{id}/unlock). Право ``user.lock``."""
+    """Снять блокировку входа (PUT /users/{id}/unlock). Право ``user.lock``."""
     cfg = ClientConfig.load()
     access = _common.get_access_token()
 

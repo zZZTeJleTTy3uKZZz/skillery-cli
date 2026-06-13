@@ -129,10 +129,13 @@ def cmd_tickets_list(
 
         def _render(p: dict[str, Any]) -> None:
             items = p.get("items") or []
+            # Канон (волна 3): размер страницы = ``size``; ``page_size``
+            # сохранён бэкендом как deprecated-дубль (fallback).
+            eff_size = p.get("size") or p.get("page_size") or 1
             table = Table(
                 title=(
                     f"Tickets (total={p.get('total')} page={p.get('page')}/"
-                    f"{(p.get('total', 0) + p.get('page_size', 1) - 1) // max(p.get('page_size', 1), 1)})"
+                    f"{(p.get('total', 0) + eff_size - 1) // max(eff_size, 1)})"
                 )
             )
             table.add_column("id")

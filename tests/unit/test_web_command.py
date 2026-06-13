@@ -58,9 +58,9 @@ async def test_hubclient_exchange_create_posts_correct_endpoint() -> None:
     from skills_hub_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
-        route = router.post("/auth/exchange/create").mock(
+        route = router.post("/auth/exchanges").mock(
             return_value=Response(
-                200,
+                201,
                 json={"code": "ABC123XYZ", "expires_at": "2026-05-25T12:00:00Z"},
             )
         )

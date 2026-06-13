@@ -244,13 +244,16 @@ class HubClient:
         )
 
     async def exchange_create(self) -> dict[str, Any]:
-        """POST /auth/exchange/create — выписывает короткоживущий code для handoff в Web UI.
+        """POST /auth/exchanges — выписывает короткоживущий code для handoff в Web UI.
 
+        Канон (волна 3): создание обменника = POST /auth/exchanges (отдаёт 201).
+        Старый POST /auth/exchange/create сохранён как deprecated-алиас (200).
         Returns: {"code": "...", "expires_at": "..."}.
         Backend выписывает code привязанным к текущему access-токену; Web UI
-        затем редеемит его через /auth/exchange/redeem и получает свою сессию.
+        затем редеемит его через POST /auth/exchanges/{code}/redeem и получает
+        свою сессию.
         """
-        return await self._request("POST", "/auth/exchange/create")
+        return await self._request("POST", "/auth/exchanges")
 
     async def list_skills(self, channel: str = "published") -> list[dict[str, Any]]:
         return await self._request("GET", "/skills", params={"channel": channel})
@@ -513,8 +516,10 @@ class HubClient:
         role_id: str,
         company_id: str,
     ) -> dict[str, Any]:
-        """POST /users/bulk/change_role — смена membership.role_id.
+        """POST /users/bulk/change-role — смена membership.role_id.
 
+        Канон (волна 3): kebab-путь ``/users/bulk/change-role``. Старый
+        ``/users/bulk/change_role`` остаётся deprecated-алиасом.
         Сверено с ``routes/users.py::bulk_change_role`` (:1095): body
         ``BulkChangeRoleRequest`` = ``{user_ids, role_id, company_id}``;
         право hub.admin ИЛИ role.manage в этой company. Ответ
@@ -524,7 +529,7 @@ class HubClient:
         """
         return await self._request(
             "POST",
-            "/users/bulk/change_role",
+            "/users/bulk/change-role",
             json={
                 "user_ids": user_ids,
                 "role_id": role_id,
@@ -535,8 +540,9 @@ class HubClient:
     async def lock_user(
         self, user_id: str, *, reason: str | None = None
     ) -> dict[str, Any]:
-        """POST /users/{id}/lock — заблокировать вход (E12).
+        """PUT /users/{id}/lock — заблокировать вход (E12).
 
+        Канон (волна 3): метод PUT. Старый POST остаётся deprecated-алиасом.
         Сверено с ``routes/users.py::lock_user`` (:842): body
         ``LockUserRequest`` = ``{reason?}`` (опционален, ≤500 симв.; без
         причины шлём ``{}``). Право hub.admin ИЛИ company-admin
@@ -548,16 +554,17 @@ class HubClient:
         if reason is not None:
             body["reason"] = reason
         return await self._request(
-            "POST", f"/users/{user_id}/lock", json=body
+            "PUT", f"/users/{user_id}/lock", json=body
         )
 
     async def unlock_user(self, user_id: str) -> dict[str, Any]:
-        """POST /users/{id}/unlock — снять блокировку (E12).
+        """PUT /users/{id}/unlock — снять блокировку (E12).
 
+        Канон (волна 3): метод PUT. Старый POST остаётся deprecated-алиасом.
         Сверено с ``routes/users.py::unlock_user`` (:888): без body, права
         те же, что у /lock. Ответ — ``UserListItemDTO``.
         """
-        return await self._request("POST", f"/users/{user_id}/unlock")
+        return await self._request("PUT", f"/users/{user_id}/unlock")
 
     async def reset_user_password(self, user_id: str) -> dict[str, Any]:
         """POST /users/{id}/reset-password — одноразовый пароль.
