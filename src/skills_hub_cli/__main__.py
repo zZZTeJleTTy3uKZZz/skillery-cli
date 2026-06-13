@@ -2336,6 +2336,11 @@ def build_app() -> typer.Typer:
     _account_mod.register(app)
     app.command(name="set-tokens", hidden=True)(cmd_set_tokens)
     app.command(name="status")(cmd_status)
+    # doctor — ALWAYS-ON (рядом со status): self-check окружения (Python/uv/
+    # agent/login/PATH/clikit), pass/warn/fail, --strict для CI. Сети не нужно.
+    from skills_hub_cli.commands import doctor as _doctor_mod
+
+    _doctor_mod.register(app)
     app.command(name="logout")(cmd_logout)
     app.command(name="whoami")(cmd_whoami)
     app.command(name="config")(cmd_config)
