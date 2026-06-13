@@ -59,6 +59,68 @@ class HubClient:
     async def close(self) -> None:
         await self._client.aclose()
 
+    def _parse_error_response(self, resp: httpx.Response) -> ApiError:
+        """Единый разбор ошибочного ответа (>=400) → ApiError.
+
+        Покрывает все формы тела:
+        - 401 → спец-код ``SESSION_EXPIRED`` (сессия истекла/невалидна);
+        - FastAPI ``{"detail": dict}`` — наши use-case коды (EMAIL_TAKEN,
+          PERMISSION_DENIED, RATE_LIMITED, ...) → разворачиваем в
+          top-level ``code``/``message``/``details``;
+        - ``{"detail": str}`` (HTTPException) → message;
+        - ``{"detail": list}`` (422 pydantic) → ``code=VALIDATION`` + склейка
+          ``loc: msg``;
+        - отсутствие ``detail`` → читаем top-level ``{code,message,details}``;
+        - не-JSON тело → ``code=UNKNOWN``, message = сырой текст.
+
+        429 (RATE_LIMITED) разбирается на общих основаниях — code берётся из
+        тела (detail-dict ИЛИ top-level), что не ломает RetryPolicy-ретрай.
+        """
+        if resp.status_code == 401:
+            # Чёткое сообщение: сессия истекла / была инвалидирована
+            return ApiError(
+                status_code=401,
+                code="SESSION_EXPIRED",
+                message=(
+                    "Сессия устарела или подпись токена не валидна. "
+                    "Сделайте login заново: `skills-hub login <invite-token>` "
+                    "(или попросите админа выписать новый invite)."
+                ),
+                details={"upstream": resp.text[:300]},
+            )
+        try:
+            data = resp.json()
+        except Exception:
+            data = {"code": "UNKNOWN", "message": resp.text, "details": {}}
+        if not isinstance(data, dict):
+            data = {"code": "UNKNOWN", "message": str(data), "details": {}}
+        # FastAPI заворачивает ошибки в {"detail": ...}: dict (наши
+        # use-case коды), str (HTTPException) или list (422 pydantic).
+        # Разворачиваем, чтобы code/message были машинно-доступны
+        # (EMAIL_TAKEN, PERMISSION_DENIED, RATE_LIMITED, ...), а не сырой JSON.
+        detail = data.get("detail")
+        if isinstance(detail, dict):
+            data = {**data, **detail}
+        elif isinstance(detail, str):
+            data = {**data, "message": detail}
+        elif isinstance(detail, list):
+            parts = []
+            for err in detail:
+                if isinstance(err, dict):
+                    loc = ".".join(str(x) for x in err.get("loc", []))
+                    parts.append(f"{loc}: {err.get('msg', '')}".strip(": "))
+            data = {
+                **data,
+                "code": "VALIDATION",
+                "message": "; ".join(parts) or resp.text,
+            }
+        return ApiError(
+            status_code=resp.status_code,
+            code=data.get("code", "UNKNOWN"),
+            message=data.get("message", resp.text),
+            details=data.get("details", {}),
+        )
+
     async def _request(self, method: str, url: str, **kwargs: Any) -> Any:
         extra_headers = kwargs.pop("headers", None) or {}
 
@@ -77,49 +139,8 @@ class HubClient:
                     method, url, headers=_merged_headers(), **kwargs
                 )
             # Если refresh не сработал — оставим 401, ниже выбросим понятный ApiError.
-        if resp.status_code == 401:
-            # Чёткое сообщение: сессия истекла / была инвалидирована
-            raise ApiError(
-                status_code=401,
-                code="SESSION_EXPIRED",
-                message=(
-                    "Сессия устарела или подпись токена не валидна. "
-                    "Сделайте login заново: `skills-hub login <invite-token>` "
-                    "(или попросите админа выписать новый invite)."
-                ),
-                details={"upstream": resp.text[:300]},
-            )
         if resp.status_code >= 400:
-            try:
-                data = resp.json()
-            except Exception:
-                data = {"code": "UNKNOWN", "message": resp.text, "details": {}}
-            # FastAPI заворачивает ошибки в {"detail": ...}: dict (наши
-            # use-case коды), str (HTTPException) или list (422 pydantic).
-            # Разворачиваем, чтобы code/message были машинно-доступны
-            # (EMAIL_TAKEN, PERMISSION_DENIED, ...), а не сырой JSON-блоб.
-            detail = data.get("detail")
-            if isinstance(detail, dict):
-                data = {**data, **detail}
-            elif isinstance(detail, str):
-                data = {**data, "message": detail}
-            elif isinstance(detail, list):
-                parts = []
-                for err in detail:
-                    if isinstance(err, dict):
-                        loc = ".".join(str(x) for x in err.get("loc", []))
-                        parts.append(f"{loc}: {err.get('msg', '')}".strip(": "))
-                data = {
-                    **data,
-                    "code": "VALIDATION",
-                    "message": "; ".join(parts) or resp.text,
-                }
-            raise ApiError(
-                status_code=resp.status_code,
-                code=data.get("code", "UNKNOWN"),
-                message=data.get("message", resp.text),
-                details=data.get("details", {}),
-            )
+            raise self._parse_error_response(resp)
         if resp.status_code == 204 or not resp.content:
             return None
         return resp.json()
@@ -223,13 +244,16 @@ class HubClient:
         )
 
     async def exchange_create(self) -> dict[str, Any]:
-        """POST /auth/exchange/create — выписывает короткоживущий code для handoff в Web UI.
+        """POST /auth/exchanges — выписывает короткоживущий code для handoff в Web UI.
 
+        Канон (волна 3): создание обменника = POST /auth/exchanges (отдаёт 201).
+        Старый POST /auth/exchange/create сохранён как deprecated-алиас (200).
         Returns: {"code": "...", "expires_at": "..."}.
         Backend выписывает code привязанным к текущему access-токену; Web UI
-        затем редеемит его через /auth/exchange/redeem и получает свою сессию.
+        затем редеемит его через POST /auth/exchanges/{code}/redeem и получает
+        свою сессию.
         """
-        return await self._request("POST", "/auth/exchange/create")
+        return await self._request("POST", "/auth/exchanges")
 
     async def list_skills(self, channel: str = "published") -> list[dict[str, Any]]:
         return await self._request("GET", "/skills", params={"channel": channel})
@@ -492,8 +516,10 @@ class HubClient:
         role_id: str,
         company_id: str,
     ) -> dict[str, Any]:
-        """POST /users/bulk/change_role — смена membership.role_id.
+        """POST /users/bulk/change-role — смена membership.role_id.
 
+        Канон (волна 3): kebab-путь ``/users/bulk/change-role``. Старый
+        ``/users/bulk/change_role`` остаётся deprecated-алиасом.
         Сверено с ``routes/users.py::bulk_change_role`` (:1095): body
         ``BulkChangeRoleRequest`` = ``{user_ids, role_id, company_id}``;
         право hub.admin ИЛИ role.manage в этой company. Ответ
@@ -503,7 +529,7 @@ class HubClient:
         """
         return await self._request(
             "POST",
-            "/users/bulk/change_role",
+            "/users/bulk/change-role",
             json={
                 "user_ids": user_ids,
                 "role_id": role_id,
@@ -514,8 +540,9 @@ class HubClient:
     async def lock_user(
         self, user_id: str, *, reason: str | None = None
     ) -> dict[str, Any]:
-        """POST /users/{id}/lock — заблокировать вход (E12).
+        """PUT /users/{id}/lock — заблокировать вход (E12).
 
+        Канон (волна 3): метод PUT. Старый POST остаётся deprecated-алиасом.
         Сверено с ``routes/users.py::lock_user`` (:842): body
         ``LockUserRequest`` = ``{reason?}`` (опционален, ≤500 симв.; без
         причины шлём ``{}``). Право hub.admin ИЛИ company-admin
@@ -527,16 +554,17 @@ class HubClient:
         if reason is not None:
             body["reason"] = reason
         return await self._request(
-            "POST", f"/users/{user_id}/lock", json=body
+            "PUT", f"/users/{user_id}/lock", json=body
         )
 
     async def unlock_user(self, user_id: str) -> dict[str, Any]:
-        """POST /users/{id}/unlock — снять блокировку (E12).
+        """PUT /users/{id}/unlock — снять блокировку (E12).
 
+        Канон (волна 3): метод PUT. Старый POST остаётся deprecated-алиасом.
         Сверено с ``routes/users.py::unlock_user`` (:888): без body, права
         те же, что у /lock. Ответ — ``UserListItemDTO``.
         """
-        return await self._request("POST", f"/users/{user_id}/unlock")
+        return await self._request("PUT", f"/users/{user_id}/unlock")
 
     async def reset_user_password(self, user_id: str) -> dict[str, Any]:
         """POST /users/{id}/reset-password — одноразовый пароль.
@@ -651,16 +679,7 @@ class HubClient:
             headers=self._auth_headers(),
         )
         if resp.status_code >= 400:
-            try:
-                d = resp.json()
-            except Exception:
-                d = {"code": "UNKNOWN", "message": resp.text, "details": {}}
-            raise ApiError(
-                status_code=resp.status_code,
-                code=d.get("code", "UNKNOWN"),
-                message=d.get("message", resp.text),
-                details=d.get("details", {}),
-            )
+            raise self._parse_error_response(resp)
         return resp.json()
 
     async def list_comments(
@@ -816,16 +835,7 @@ class HubClient:
             headers=self._auth_headers(),
         )
         if resp.status_code >= 400:
-            try:
-                d = resp.json()
-            except Exception:
-                d = {"code": "UNKNOWN", "message": resp.text, "details": {}}
-            raise ApiError(
-                status_code=resp.status_code,
-                code=d.get("code", "UNKNOWN"),
-                message=d.get("message", resp.text),
-                details=d.get("details", {}),
-            )
+            raise self._parse_error_response(resp)
         return resp.json()
 
     async def set_ticket_status(

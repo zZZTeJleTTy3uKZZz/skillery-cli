@@ -11,11 +11,11 @@
   вместе (422) → CLI derive'ит display_name из local-part email.
 - ``DELETE /memberships`` (routes/memberships.py:32) — query
   ``user_id``+``company_id``, 204; право ``user.remove``.
-- ``POST /users/bulk/change_role`` (routes/users.py:1095) —
+- ``POST /users/bulk/change-role`` (routes/users.py:1095) —
   ``{user_ids,role_id,company_id}`` → ``BulkActionResponse``; право
-  ``role.manage``|hub.admin.
-- ``POST /users/{id}/lock|unlock`` (routes/users.py:842,888) — lock body
-  ``{reason?}``; ответ ``UserListItemDTO``.
+  ``role.manage``|hub.admin (kebab-канон волны 3; ``change_role`` deprecated).
+- ``PUT /users/{id}/lock|unlock`` (routes/users.py:842,888) — lock body
+  ``{reason?}``; ответ ``UserListItemDTO`` (PUT-канон волны 3; POST deprecated).
 - ``POST /users/{id}/reset-password`` (routes/users.py:1152) — ответ
   ``ResetPasswordResponse{temp_password,expires_hint,requires_password_change}``.
 - ``GET /roles`` (routes/roles.py:99) — PAGED ``{items,total,page,size}``
@@ -128,9 +128,9 @@ async def test_transport_remove_membership_deletes_with_query() -> None:
 
 
 async def test_transport_bulk_change_role_body() -> None:
-    """POST /users/bulk/change_role — {user_ids:[id], role_id, company_id}."""
+    """POST /users/bulk/change-role — {user_ids:[id], role_id, company_id}."""
     with respx.mock(base_url="http://localhost:8000") as router:
-        route = router.post("/users/bulk/change_role").mock(
+        route = router.post("/users/bulk/change-role").mock(
             return_value=Response(
                 200,
                 json={
@@ -156,7 +156,7 @@ async def test_transport_bulk_change_role_body() -> None:
 
 async def test_transport_lock_user_sends_reason() -> None:
     with respx.mock(base_url="http://localhost:8000") as router:
-        route = router.post("/users/5/lock").mock(
+        route = router.put("/users/5/lock").mock(
             return_value=Response(200, json=_user_item(is_locked=True))
         )
         client = HubClient(base_url="http://localhost:8000")
@@ -172,7 +172,7 @@ async def test_transport_lock_user_sends_reason() -> None:
 async def test_transport_lock_user_without_reason_sends_empty_body() -> None:
     """reason опционален (LockUserRequest.reason=None) — без него body={}."""
     with respx.mock(base_url="http://localhost:8000") as router:
-        route = router.post("/users/5/lock").mock(
+        route = router.put("/users/5/lock").mock(
             return_value=Response(200, json=_user_item(is_locked=True))
         )
         client = HubClient(base_url="http://localhost:8000")
@@ -185,7 +185,7 @@ async def test_transport_lock_user_without_reason_sends_empty_body() -> None:
 
 async def test_transport_unlock_user_posts() -> None:
     with respx.mock(base_url="http://localhost:8000") as router:
-        route = router.post("/users/5/unlock").mock(
+        route = router.put("/users/5/unlock").mock(
             return_value=Response(200, json=_user_item(is_locked=False))
         )
         client = HubClient(base_url="http://localhost:8000")
