@@ -56,6 +56,14 @@ class HubClient:
             h["Authorization"] = f"Bearer {self._access_token}"
         return h
 
+    def set_access_token(self, token: str) -> None:
+        """Авторизовать клиент уже выписанным access-токеном (после login).
+
+        JWT-slim: нужен, чтобы ТЕМ ЖЕ клиентом сходить за эффективными правами
+        в ``/me/permissions`` (токен развёрнутый список прав больше не несёт).
+        """
+        self._access_token = token
+
     async def close(self) -> None:
         await self._client.aclose()
 
@@ -172,6 +180,18 @@ class HubClient:
             "/auth/login",
             json={"email": email, "password": password},
         )
+
+    async def get_me_permissions(self) -> list[str]:
+        """GET /me/permissions — authoritative эффективные права актора (из БД).
+
+        JWT-slim: единый источник прав для CLI-гейтинга (раньше читались из
+        JWT-claim ``permissions``, который убран из токена). Требует Bearer —
+        вызывать после :meth:`set_access_token`. Ответ — ``{permissions:[...],
+        company, role}``; берём только ``permissions``.
+        """
+        data = await self._request("GET", "/me/permissions")
+        perms = data.get("permissions") or []
+        return [str(p) for p in perms]
 
     # --- P1 account ---
     async def register(

@@ -46,6 +46,24 @@ def run(coro) -> None:  # noqa: ANN001
         sys.exit(1)
 
 
+async def hydrate_session_permissions(
+    client: HubClient, cfg: ClientConfig, access_token: str
+) -> None:
+    """JWT-slim: проставить ``cfg.permissions`` из ``/me/permissions`` (БД-авторитетно).
+
+    Access-токен развёрнутый список прав больше не несёт — после login флоу
+    авторизует ТОТ ЖЕ открытый клиент выписанным токеном и забирает эффективные
+    права (единый источник с backend-enforcement и web-UI). На ошибке сети/API
+    права остаются пустыми: логин уже состоялся, команду не валим — пользователь
+    увидит «0 прав» и сможет повторить.
+    """
+    client.set_access_token(access_token)
+    try:
+        cfg.permissions = await client.get_me_permissions()
+    except ApiError:
+        cfg.permissions = []
+
+
 def get_access_token() -> str:
     """Получить access-token либо exit(1) с сообщением."""
     cfg = ClientConfig.load()

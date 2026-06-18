@@ -53,8 +53,15 @@ def test_config_has_no_flag_fields() -> None:
     assert "is_skill_creator" not in field_names
 
 
-# ---------------------- populate_from_jwt не выставляет флаги ----------------------
-def test_populate_from_jwt_sets_permissions_only() -> None:
+# ---------------------- populate_from_jwt НЕ читает права из токена (JWT-slim) ----------------------
+def test_populate_from_jwt_ignores_permissions_claim() -> None:
+    """JWT-slim: populate_from_jwt заполняет role_id/company_id/exp, но НЕ права.
+
+    Источник эффективных прав — ``GET /me/permissions`` (БД-авторитетно), их
+    проставляет ``_common.hydrate_session_permissions`` в login-флоу. Даже если
+    в (legacy) токене есть claim ``permissions``, в cfg он НЕ попадает —
+    единый источник правды один.
+    """
     cfg = ClientConfig()
     token = _make_jwt(
         {
@@ -65,12 +72,9 @@ def test_populate_from_jwt_sets_permissions_only() -> None:
         }
     )
     populate_from_jwt(cfg, token)
-    assert cfg.permissions == ["hub.admin", "skill.publish", "skill.read"]
+    assert cfg.permissions == []  # права из токена НЕ берутся
     assert cfg.role_id == "1"
     assert cfg.company_id == "2"
-    # Признак роли — производное от прав, а не хранимое поле.
-    assert cfg.is_hub_admin() is True
-    assert cfg.is_skill_creator() is True
 
 
 # ---------------------- save/load round-trip без флагов ----------------------

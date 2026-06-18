@@ -169,6 +169,10 @@ def cmd_register(
             data = await client.register(
                 email=email, password=password, display_name=display_name
             )
+            # JWT-slim: права — из /me/permissions (токен их не несёт).
+            await _common.hydrate_session_permissions(
+                client, cfg, data["access_token"]
+            )
         finally:
             await client.close()
         _save_session(cfg, email, data)
@@ -260,6 +264,10 @@ def cmd_join(
                 password=password,
                 display_name=display_name,
                 token=token,
+            )
+            # JWT-slim: права — из /me/permissions (токен их не несёт).
+            await _common.hydrate_session_permissions(
+                client, cfg, data["access_token"]
             )
         finally:
             await client.close()

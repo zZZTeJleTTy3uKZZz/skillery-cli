@@ -473,8 +473,14 @@ def test_cmd_company_switch_saves_new_token_pair(
             "user_id": "1",
         }
 
+    async def _new_perms() -> list[str]:
+        # JWT-slim: после switch права роли целевой компании приходят из
+        # /me/permissions (токен их не несёт).
+        return ["company.manage", "skill.read"]
+
     fake_client.switch_active_company = _switch
     fake_client.close = _noop_close
+    fake_client.get_me_permissions = _new_perms
     _fake_factory(monkeypatch, fake_client)
 
     saved_tokens: dict[str, str] = {}

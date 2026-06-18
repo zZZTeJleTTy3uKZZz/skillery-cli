@@ -32,6 +32,12 @@ from skills_hub_cli.commands import account as account_mod
 from skills_hub_cli.config import ClientConfig
 
 
+async def _no_perms() -> list[str]:
+    """JWT-slim: register/join после логина дёргают /me/permissions —
+    fake-клиенту нужен async-метод, иначе await падает на MagicMock."""
+    return []
+
+
 def _text_mode() -> None:
     output_module._mode = "text"
 
@@ -230,6 +236,7 @@ def test_cmd_register_happy_path_saves_session(
 
     fake_client.register = _register
     fake_client.close = _close
+    fake_client.get_me_permissions = _no_perms
     monkeypatch.setattr(_common, "HubClient", lambda **kw: fake_client)
 
     account_mod.cmd_register(
@@ -271,6 +278,7 @@ def test_cmd_register_defaults_display_name_from_email(
 
     fake_client.register = _register
     fake_client.close = _close
+    fake_client.get_me_permissions = _no_perms
     monkeypatch.setattr(_common, "HubClient", lambda **kw: fake_client)
 
     account_mod.cmd_register(
@@ -344,6 +352,7 @@ def test_cmd_register_email_taken_exits_1(
 
     fake_client.register = _register
     fake_client.close = _close
+    fake_client.get_me_permissions = _no_perms
     monkeypatch.setattr(_common, "HubClient", lambda **kw: fake_client)
 
     with pytest.raises(SystemExit) as exc:
@@ -376,6 +385,7 @@ def test_cmd_register_api_error_json_mode_emits_error_event(
 
     fake_client.register = _register
     fake_client.close = _close
+    fake_client.get_me_permissions = _no_perms
     monkeypatch.setattr(_common, "HubClient", lambda **kw: fake_client)
 
     with pytest.raises(SystemExit) as exc:
@@ -573,6 +583,7 @@ def test_cmd_join_not_logged_in_registers_with_link(
     fake_client.register_with_link = _register_with_link
     fake_client.accept_invite_link = _accept
     fake_client.close = _close
+    fake_client.get_me_permissions = _no_perms
     monkeypatch.setattr(_common, "HubClient", lambda **kw: fake_client)
 
     account_mod.cmd_join(
@@ -612,6 +623,7 @@ def test_cmd_join_register_with_link_invalid_link_exits_1(
 
     fake_client.register_with_link = _register_with_link
     fake_client.close = _close
+    fake_client.get_me_permissions = _no_perms
     monkeypatch.setattr(_common, "HubClient", lambda **kw: fake_client)
 
     with pytest.raises(SystemExit) as exc:

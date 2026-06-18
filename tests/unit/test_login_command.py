@@ -47,6 +47,39 @@ async def test_hubclient_login_password_posts_correct_endpoint() -> None:
         assert result["refresh_token"] == "ref"
 
 
+# ---------------------- HubClient.get_me_permissions ----------------------
+@pytest.mark.asyncio
+async def test_hubclient_get_me_permissions_returns_list() -> None:
+    """JWT-slim: CLI берёт эффективные права из /me/permissions (БД-авторитетно),
+    а не из JWT-claim. Метод возвращает только список permission-ключей."""
+    import respx
+    from httpx import Response
+
+    from skills_hub_cli.core.transport import HubClient
+
+    with respx.mock(base_url="http://localhost:8000") as router:
+        route = router.get("/me/permissions").mock(
+            return_value=Response(
+                200,
+                json={
+                    "permissions": ["skill.install", "skill.read"],
+                    "company": None,
+                    "role": None,
+                },
+            )
+        )
+        client = HubClient(base_url="http://localhost:8000")
+        client.set_access_token("acc-token")
+        try:
+            perms = await client.get_me_permissions()
+        finally:
+            await client.close()
+        assert route.called
+        # Bearer проставлен set_access_token'ом.
+        assert route.calls.last.request.headers["Authorization"] == "Bearer acc-token"
+        assert perms == ["skill.install", "skill.read"]
+
+
 # ---------------------- login --email --password flow ----------------------
 def test_login_password_flow_calls_endpoint_and_saves_tokens(
     monkeypatch: pytest.MonkeyPatch,
@@ -86,8 +119,12 @@ def test_login_password_flow_calls_endpoint_and_saves_tokens(
     async def _fake_close() -> None:
         return None
 
+    async def _fake_get_me_permissions() -> list[str]:
+        return ["skill.read"]
+
     fake_client.login_password = _fake_login_password
     fake_client.close = _fake_close
+    fake_client.get_me_permissions = _fake_get_me_permissions
     monkeypatch.setattr(main_mod, "HubClient", lambda **kw: fake_client)
 
     main_mod.cmd_login(
@@ -101,6 +138,8 @@ def test_login_password_flow_calls_endpoint_and_saves_tokens(
     assert saved["email"] == "ivan@acme.ru"
     assert saved["access"] == "fake-access"
     assert saved["refresh"] == "fake-refresh"
+    # JWT-slim: права пришли из /me/permissions, не из токена.
+    assert cfg.permissions == ["skill.read"]
 
 
 def test_login_with_invite_still_works(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -129,8 +168,12 @@ def test_login_with_invite_still_works(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _fake_close() -> None:
         return None
 
+    async def _fake_get_me_permissions() -> list[str]:
+        return []
+
     fake_client.login_invite = _fake_invite
     fake_client.close = _fake_close
+    fake_client.get_me_permissions = _fake_get_me_permissions
     monkeypatch.setattr(main_mod, "HubClient", lambda **kw: fake_client)
 
     main_mod.cmd_login(

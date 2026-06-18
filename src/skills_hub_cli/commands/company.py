@@ -247,6 +247,12 @@ def cmd_company_switch(
         client = _common.make_client(cfg, access)
         try:
             data = await client.switch_active_company(company_id)
+            # JWT-slim: новая роль → новые права, но токен их не несёт —
+            # перечитываем эффективные из /me/permissions тем же клиентом
+            # (перенаведённым на новый access-токен).
+            await _common.hydrate_session_permissions(
+                client, cfg, data["access_token"]
+            )
         finally:
             await client.close()
         # Ответ — LoginPasswordResponse: новая пара под целевую компанию.

@@ -39,6 +39,7 @@ from skills_hub_cli.core.manifest_builder import build_manifest, git_commit_sha
 from skills_hub_cli.core.secret_scan import scan_dir as secret_scan_dir
 from skills_hub_cli.daemon.instrumentation import track_skill_event
 from skills_hub_cli.core.transport import ApiError, HubClient
+from skills_hub_cli.commands._common import hydrate_session_permissions
 from skills_hub_cli.output import (
     emit_data,
     emit_error,
@@ -336,6 +337,8 @@ def cmd_login(
             data = await client.login_invite(
                 invite_token=token, email=email, display_name=name
             )
+            # JWT-slim: права — из /me/permissions (токен их не несёт).
+            await hydrate_session_permissions(client, cfg, data["access_token"])
         finally:
             await client.close()
         save_tokens(email, data["access_token"], data["refresh_token"])
@@ -381,6 +384,9 @@ def _do_password_login(cfg: ClientConfig, *, email: str, password: str) -> None:
         client = HubClient(base_url=cfg.base_url)
         try:
             data = await client.login_password(email=email, password=password)
+            # JWT-slim: токен не несёт прав — забираем эффективные из
+            # /me/permissions тем же (теперь авторизованным) клиентом.
+            await hydrate_session_permissions(client, cfg, data["access_token"])
         finally:
             await client.close()
         save_tokens(email, data["access_token"], data["refresh_token"])
@@ -667,6 +673,21 @@ def cmd_set_tokens(
     save_tokens(email, access, refresh)
     cfg.user_email = email
     populate_from_jwt(cfg, access)
+
+    # JWT-slim: права не в токене — забираем из /me/permissions. [ADVANCED]-
+    # команда offline-толерантна: недостижимый backend → пустые права (не валим).
+    async def _hydrate() -> None:
+        client = HubClient(base_url=cfg.base_url)
+        try:
+            await hydrate_session_permissions(client, cfg, access)
+        finally:
+            await client.close()
+
+    try:
+        asyncio.run(_hydrate())
+    except Exception:  # noqa: BLE001 — offline-tolerant advanced command
+        cfg.permissions = []
+
     cfg.save()
     emit_data(
         {

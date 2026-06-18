@@ -246,13 +246,16 @@ def decode_jwt_claims(access_token: str) -> dict[str, object]:
 
 
 def populate_from_jwt(cfg: ClientConfig, access_token: str) -> None:
-    """Парсит JWT и заполняет cfg permissions/role_id/company_id/expires_at."""
+    """Парсит JWT и заполняет cfg role_id/company_id/access_expires_at.
+
+    JWT-slim (2026-06): permissions БОЛЬШЕ не читаются из токена — развёрнутый
+    список прав туда не кладётся. Их источник — ``GET /me/permissions``
+    (БД-авторитетно), см. ``commands._common.hydrate_session_permissions``,
+    вызываемый login-флоу после получения токена.
+    """
     claims = decode_jwt_claims(access_token)
     if not claims:
         return
-    perms = claims.get("permissions") or []
-    if isinstance(perms, list):
-        cfg.permissions = [str(p) for p in perms]
     cfg.role_id = claims.get("role_id") if claims.get("role_id") else None  # type: ignore[assignment]
     cfg.company_id = claims.get("company_id") if claims.get("company_id") else None  # type: ignore[assignment]
     exp = claims.get("exp")
