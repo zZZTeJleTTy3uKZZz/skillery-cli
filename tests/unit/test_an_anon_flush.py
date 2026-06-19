@@ -84,8 +84,13 @@ def test_flush_with_expired_token_does_not_exit(
 
     cfg = ClientConfig(base_url="http://x", user_email="u@e.io")
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
-    # keyring/файл пусты → токена нет
-    monkeypatch.setattr(_common, "load_tokens", lambda email: (None, None))
+    # keyring/файл пусты → токена нет. ВАЖНО: cmd_event_flush делает локальный
+    # импорт `from skills_hub_cli.config import load_tokens`, поэтому патчить
+    # надо ИСТОЧНИК (config), а не _common — иначе мок мимо, и читается реальный
+    # keyring пользователя (тест «флейчил» в зависимости от сохранённой сессии).
+    monkeypatch.setattr(
+        "skills_hub_cli.config.load_tokens", lambda email: (None, None)
+    )
 
     seen_tokens: list = []
     fake_client = MagicMock()

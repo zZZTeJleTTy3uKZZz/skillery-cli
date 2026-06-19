@@ -116,6 +116,88 @@ async def test_parse_401_session_expired() -> None:
 
 
 @pytest.mark.asyncio
+async def test_parse_401_no_structured_body_falls_back_to_session_hint() -> None:
+    """401 без машинного кода (не-JSON тело) → прежний SESSION_EXPIRED-хинт."""
+    client = HubClient(base_url="http://localhost:8000", access_token="t")
+    try:
+        resp = Response(401, text="Unauthorized")
+        err = client._parse_error_response(resp)
+    finally:
+        await client.close()
+    assert err.status_code == 401
+    assert err.code == "SESSION_EXPIRED"
+    assert "login заново" in err.message
+
+
+@pytest.mark.asyncio
+async def test_parse_401_invalid_credentials_uses_backend_code() -> None:
+    """401 при отказе логина (`POST /auth/login`, неверный пароль) — реальный
+    бэкенд отдаёт detail-dict с машинным кодом. Разворачиваем его, а НЕ
+    подменяем фиксированным SESSION_EXPIRED-хинтом про «протухший токен»."""
+    client = HubClient(base_url="http://localhost:8000", access_token="t")
+    try:
+        resp = Response(
+            401,
+            json={
+                "detail": {
+                    "code": "INVALID_CREDENTIALS",
+                    "message": "Неверный email или пароль",
+                    "details": {},
+                }
+            },
+        )
+        err = client._parse_error_response(resp)
+    finally:
+        await client.close()
+    assert err.status_code == 401
+    assert err.code == "INVALID_CREDENTIALS"
+    assert err.message == "Неверный email или пароль"
+
+
+@pytest.mark.asyncio
+async def test_parse_401_auth_method_not_available_uses_backend_code() -> None:
+    """401 AUTH_METHOD_NOT_AVAILABLE (у юзера нет пароля) — тоже из тела."""
+    client = HubClient(base_url="http://localhost:8000", access_token="t")
+    try:
+        resp = Response(
+            401,
+            json={
+                "detail": {
+                    "code": "AUTH_METHOD_NOT_AVAILABLE",
+                    "message": "У пользователя не установлен пароль",
+                }
+            },
+        )
+        err = client._parse_error_response(resp)
+    finally:
+        await client.close()
+    assert err.code == "AUTH_METHOD_NOT_AVAILABLE"
+    assert err.message == "У пользователя не установлен пароль"
+
+
+@pytest.mark.asyncio
+async def test_parse_401_token_revoked_keeps_backend_message() -> None:
+    """Истёкшая сессия на авторизованном запросе: бэкенд (`deps.py`) отдаёт
+    свой машинный код с понятным сообщением — отдаём его, не подменяя."""
+    client = HubClient(base_url="http://localhost:8000", access_token="t")
+    try:
+        resp = Response(
+            401,
+            json={
+                "detail": {
+                    "code": "TOKEN_REVOKED",
+                    "message": "Сессия завершена сменой пароля; войдите заново",
+                }
+            },
+        )
+        err = client._parse_error_response(resp)
+    finally:
+        await client.close()
+    assert err.code == "TOKEN_REVOKED"
+    assert err.message == "Сессия завершена сменой пароля; войдите заново"
+
+
+@pytest.mark.asyncio
 async def test_parse_429_rate_limited_from_detail_dict() -> None:
     client = HubClient(base_url="http://localhost:8000", access_token="t")
     try:

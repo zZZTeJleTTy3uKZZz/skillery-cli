@@ -71,31 +71,25 @@ class HubClient:
         """Единый разбор ошибочного ответа (>=400) → ApiError.
 
         Покрывает все формы тела:
-        - 401 → спец-код ``SESSION_EXPIRED`` (сессия истекла/невалидна);
         - FastAPI ``{"detail": dict}`` — наши use-case коды (EMAIL_TAKEN,
-          PERMISSION_DENIED, RATE_LIMITED, ...) → разворачиваем в
-          top-level ``code``/``message``/``details``;
+          PERMISSION_DENIED, RATE_LIMITED, INVALID_CREDENTIALS, ...) →
+          разворачиваем в top-level ``code``/``message``/``details``;
         - ``{"detail": str}`` (HTTPException) → message;
         - ``{"detail": list}`` (422 pydantic) → ``code=VALIDATION`` + склейка
           ``loc: msg``;
         - отсутствие ``detail`` → читаем top-level ``{code,message,details}``;
         - не-JSON тело → ``code=UNKNOWN``, message = сырой текст.
 
+        401: НЕ подменяем тело вслепую. Сначала разворачиваем ответ как любой
+        другой статус — чтобы отказ логина отдал свой машинный код
+        (``INVALID_CREDENTIALS``/``AUTH_METHOD_NOT_AVAILABLE``), а истёкший
+        токен — свой (``TOKEN_REVOKED`` и т.п.). Спец-хинт «сделайте login
+        заново» оставляем ТОЛЬКО как fallback, когда машинного кода в теле
+        нет (реально протухшая/невалидная подпись на авторизованном вызове).
+
         429 (RATE_LIMITED) разбирается на общих основаниях — code берётся из
         тела (detail-dict ИЛИ top-level), что не ломает RetryPolicy-ретрай.
         """
-        if resp.status_code == 401:
-            # Чёткое сообщение: сессия истекла / была инвалидирована
-            return ApiError(
-                status_code=401,
-                code="SESSION_EXPIRED",
-                message=(
-                    "Сессия устарела или подпись токена не валидна. "
-                    "Сделайте login заново: `skills-hub login <invite-token>` "
-                    "(или попросите админа выписать новый invite)."
-                ),
-                details={"upstream": resp.text[:300]},
-            )
         try:
             data = resp.json()
         except Exception:
@@ -122,9 +116,25 @@ class HubClient:
                 "code": "VALIDATION",
                 "message": "; ".join(parts) or resp.text,
             }
+        code = data.get("code", "UNKNOWN")
+        # 401 без машинного кода = протухший/невалидный токен на авторизованном
+        # вызове (бэкенд отдаёт detail-строку «Невалидный токен: …»). Тут даём
+        # понятный хинт. Если же код есть (отказ логина / TOKEN_REVOKED) —
+        # отдаём его как есть, не подменяя.
+        if resp.status_code == 401 and code == "UNKNOWN":
+            return ApiError(
+                status_code=401,
+                code="SESSION_EXPIRED",
+                message=(
+                    "Сессия устарела или подпись токена не валидна. "
+                    "Сделайте login заново: `skills-hub login <invite-token>` "
+                    "(или попросите админа выписать новый invite)."
+                ),
+                details={"upstream": resp.text[:300]},
+            )
         return ApiError(
             status_code=resp.status_code,
-            code=data.get("code", "UNKNOWN"),
+            code=code,
             message=data.get("message", resp.text),
             details=data.get("details", {}),
         )
