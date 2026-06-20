@@ -14,8 +14,14 @@ from typing import Any
 
 import httpx
 
+from skills_hub_cli import __version__ as _CLI_VERSION
+
 RefreshCallback = Callable[[], Awaitable[tuple[str, str] | None]]
 """() -> (new_access, new_refresh) | None — None если refresh не получился."""
+
+# H-5: User-Agent CLI — backend различает WEB/CLI-сессии по этому префиксу
+# (``skills-hub-cli`` ⇒ client_type='cli'). Версия — из метаданных пакета.
+USER_AGENT = f"skills-hub-cli/{_CLI_VERSION}"
 
 
 @dataclass
@@ -51,7 +57,10 @@ class HubClient:
         )
 
     def _auth_headers(self) -> dict[str, str]:
-        h = {"Accept": "application/json"}
+        # H-5: всегда шлём CLI User-Agent — backend помечает сессию client_type=
+        # 'cli' (логин/refresh идут этим же клиентом, поэтому UA попадает в
+        # session-запись). Перебивает дефолтный httpx UA.
+        h = {"Accept": "application/json", "User-Agent": USER_AGENT}
         if self._access_token:
             h["Authorization"] = f"Bearer {self._access_token}"
         return h
