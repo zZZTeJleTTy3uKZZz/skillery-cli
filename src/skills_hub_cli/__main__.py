@@ -2517,16 +2517,20 @@ def build_app() -> typer.Typer:
     store_app.command("gc")(cmd_store_gc)
     # --- P1 local-collections ---
     # Единый collection sub-app — ALWAYS-ON: все глаголы (list/show/install/
-    # create/add/remove/delete) регистрируются всегда, у каждого есть локальный
-    # режим через флаг --local (оффлайн, без логина). Серверный режим (без
-    # --local) гейтится ВНУТРИ модуля флагами server_enabled (skill.read) /
-    # can_install (skill.install) — проверяются в рантайме команд.
+    # create/add/remove/delete/tags) регистрируются всегда; create/add/remove/
+    # delete имеют локальный режим через флаг --local (оффлайн, без логина).
+    # Серверный режим (без --local) гейтится ВНУТРИ модуля флагами
+    # server_enabled (skill.read) / can_install (skill.install) / can_manage
+    # (catalog.manage, M-2) — проверяются в рантайме команд.
     from skills_hub_cli.commands import collection as _coll_mod
 
     _coll_mod.register(
         app,
         server_enabled=cfg.has_permission("skill.read"),
         can_install=cfg.has_permission("skill.install"),
+        # D-CLI M-2: серверный CRUD коллекций (create/add/remove/tags) —
+        # право catalog.manage (hub.admin bypass внутри has_permission).
+        can_manage=cfg.has_permission("catalog.manage"),
     )
 
     # --- P1 onboard ---
@@ -2635,10 +2639,30 @@ def build_app() -> typer.Typer:
         can_change_role=cfg.has_permission("role.manage"),
         # S3 D2.2: lock/unlock гейтится тем же предикатом, что backend
         # `_can_admin_users` (а не узким user.lock) — иначе owner/manager не
-        # видят команду, хотя бэк/UI их допускают.
+        # видят команду, хотя бэк/UI их допускают. D-CLI M-3: suspend/activate/
+        # revoke-sessions — тот же предикат (зеркало bulk-эндпоинтов).
         can_lock=cfg.can_admin_users(),
         can_reset_password=cfg.has_permission("company.manage"),
+        # D-CLI M-5: CRUD пользователей. create/edit/delete — company-admin или
+        # hub.admin (зеркало backend `_can_admin_users` per-action); transfer/
+        # export — строго hub.admin (backend hub-admin-only).
+        can_create=cfg.has_permission("user.create")
+        or cfg.has_permission("company.manage"),
+        can_update=cfg.has_permission("user.update")
+        or cfg.has_permission("company.manage"),
+        can_delete=cfg.has_permission("user.delete")
+        or cfg.has_permission("company.manage"),
+        can_transfer=cfg.is_hub_admin(),
+        can_export=cfg.is_hub_admin(),
     )
+
+    # --- D-CLI M-4: permissions + role set-permissions ---
+    # Управление каталогом прав и набором прав роли — гейт hub.admin
+    # (backend допускает set-permissions ещё и role.manage в своей компании,
+    # но CLI-видимость держим на hub.admin; бэк финально режет 403).
+    from skills_hub_cli.commands import permission as _permission_mod
+
+    _permission_mod.register(app, can_manage=cfg.is_hub_admin())
 
     # === Admin sub-app (если есть хотя бы одно admin-право) ===
     can_sync = cfg.has_permission("hub.admin")

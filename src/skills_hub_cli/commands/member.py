@@ -385,6 +385,368 @@ def cmd_member_reset_password(
     _common.run(_do())
 
 
+def _bulk_status_outcome(p: dict[str, Any], user_id: str) -> str:
+    """Outcome для одиночной bulk-операции (suspend/activate) над user_id."""
+    results = p.get("results") or []
+    if results:
+        return results[0].get("outcome", "—")
+    return "updated" if p.get("updated_count") else "skipped"
+
+
+def cmd_member_suspend(
+    user_id: str = typer.Argument(..., help="ID пользователя"),
+) -> None:
+    """Приостановить пользователя (POST /users/bulk/suspend одним user_id).
+
+    Право ``user.lock``/``company.manage`` (зеркало backend ``_can_admin_users``;
+    bulk-эндпоинт допускает company-admin над своими). Активные сессии
+    отзываются (status=suspended).
+    """
+    cfg = ClientConfig.load()
+    access = _common.get_access_token()
+
+    async def _do() -> None:
+        client = _common.make_client(cfg, access)
+        try:
+            r = await client.bulk_suspend(user_ids=[user_id])
+        finally:
+            await client.close()
+
+        def _render(p: dict[str, Any]) -> None:
+            outcome = _bulk_status_outcome(p, user_id)
+            if outcome == "updated":
+                console.print(
+                    f"[green]✓[/] Пользователь {user_id} приостановлен "
+                    "[dim](сессии отозваны)[/]"
+                )
+            else:
+                console.print(
+                    f"[yellow]Не изменён[/]: {user_id} → {outcome}"
+                )
+
+        emit_data(r, text_renderer=_render)
+
+    _common.run(_do())
+
+
+def cmd_member_activate(
+    user_id: str = typer.Argument(..., help="ID пользователя"),
+) -> None:
+    """Активировать пользователя (POST /users/bulk/activate одним user_id).
+
+    Право как у suspend (``_can_admin_users``). Ставит status=active.
+    """
+    cfg = ClientConfig.load()
+    access = _common.get_access_token()
+
+    async def _do() -> None:
+        client = _common.make_client(cfg, access)
+        try:
+            r = await client.bulk_activate(user_ids=[user_id])
+        finally:
+            await client.close()
+
+        def _render(p: dict[str, Any]) -> None:
+            outcome = _bulk_status_outcome(p, user_id)
+            if outcome == "updated":
+                console.print(
+                    f"[green]✓[/] Пользователь {user_id} активирован"
+                )
+            else:
+                console.print(
+                    f"[yellow]Не изменён[/]: {user_id} → {outcome}"
+                )
+
+        emit_data(r, text_renderer=_render)
+
+    _common.run(_do())
+
+
+def cmd_member_revoke_sessions(
+    user_id: str = typer.Argument(..., help="ID пользователя"),
+) -> None:
+    """Отозвать все сессии пользователя (POST /users/{id}/revoke-sessions).
+
+    «Выйти со всех устройств»: живые access-токены → 401, refresh-токены
+    отозваны, статус НЕ меняется. Право ``user.lock``/``company.manage`` (или
+    self). В отличие от lock — вход остаётся разрешён.
+    """
+    cfg = ClientConfig.load()
+    access = _common.get_access_token()
+
+    async def _do() -> None:
+        client = _common.make_client(cfg, access)
+        try:
+            u = await client.revoke_user_sessions(user_id)
+        finally:
+            await client.close()
+        emit_data(
+            u,
+            text_renderer=lambda p: console.print(
+                f"[green]✓[/] Сессии отозваны: {p.get('email') or user_id} "
+                "[dim](пользователь вышел со всех устройств)[/]"
+            ),
+        )
+
+    _common.run(_do())
+
+
+def cmd_member_create(
+    email: str = typer.Option(..., "--email", help="Email пользователя"),
+    name: str | None = typer.Option(
+        None,
+        "--name",
+        help="Display-name (если опущен — часть email до @)",
+    ),
+    role_id: str | None = typer.Option(
+        None, "--role-id", help="ID роли (опц.; без неё — роль «Участник»)"
+    ),
+    first_name: str | None = typer.Option(None, "--first-name"),
+    last_name: str | None = typer.Option(None, "--last-name"),
+    set_password: str | None = typer.Option(
+        None,
+        "--set-password",
+        help="Задать пароль сразу (≥8 символов; иначе — без пароля)",
+    ),
+    company: str | None = typer.Option(
+        None, "--company", help="ID компании (default: из вашего токена)"
+    ),
+) -> None:
+    """Создать пользователя (POST /users).
+
+    Право ``user.create``/``company.manage`` (hub.admin — любую компанию;
+    company-admin — только свою). Если email уже есть — добавляется membership
+    (is_new_user=False). В отличие от ``member invite`` — без invite-токена.
+    """
+    cfg = ClientConfig.load()
+    access = _common.get_access_token()
+    company_id = _resolve_company_id(cfg, company, required=True)
+    display_name = name or _derive_display_name(email)
+
+    async def _do() -> None:
+        client = _common.make_client(cfg, access)
+        try:
+            r = await client.create_user(
+                email=email,
+                display_name=display_name,
+                company_id=company_id,
+                role_id=role_id,
+                first_name=first_name,
+                last_name=last_name,
+                set_password=set_password,
+            )
+        finally:
+            await client.close()
+
+        def _render(p: dict[str, Any]) -> None:
+            is_new = p.get("is_new_user")
+            console.print(
+                f"[green]✓[/] Пользователь {email} "
+                f"(id={p.get('user_id')}, company={company_id})"
+            )
+            if is_new:
+                console.print("  [dim](создан новый user)[/]")
+            else:
+                console.print(
+                    "  [dim](существующий user — добавлен membership)[/]"
+                )
+
+        emit_data(r, text_renderer=_render)
+
+    _common.run(_do())
+
+
+def cmd_member_edit(
+    user_id: str = typer.Argument(..., help="ID пользователя"),
+    name: str | None = typer.Option(None, "--name", help="Новый display-name"),
+    first_name: str | None = typer.Option(None, "--first-name"),
+    last_name: str | None = typer.Option(None, "--last-name"),
+    status: str | None = typer.Option(
+        None, "--status", help="active | invited | suspended"
+    ),
+) -> None:
+    """Изменить пользователя (PATCH /users/{id}, merge-patch).
+
+    Право ``user.update``/``company.manage`` (или self). Шлём только заданные
+    поля. ``--status suspended`` отзывает refresh-токены.
+    """
+    cfg = ClientConfig.load()
+    payload: dict[str, Any] = {}
+    if name is not None:
+        payload["display_name"] = name
+    if first_name is not None:
+        payload["first_name"] = first_name
+    if last_name is not None:
+        payload["last_name"] = last_name
+    if status is not None:
+        if status not in ("active", "invited", "suspended"):
+            emit_error(
+                "VALIDATION",
+                "--status должен быть active|invited|suspended, "
+                f"получено: {status}",
+            )
+            raise typer.Exit(1)
+        payload["status"] = status
+    if not payload:
+        emit_error(
+            "VALIDATION",
+            "Нечего менять: укажите --name/--first-name/--last-name/--status",
+        )
+        raise typer.Exit(1)
+    access = _common.get_access_token()
+
+    async def _do() -> None:
+        client = _common.make_client(cfg, access)
+        try:
+            u = await client.update_user(user_id, payload)
+        finally:
+            await client.close()
+
+        def _render(p: dict[str, Any]) -> None:
+            console.print(
+                f"[green]✓[/] Пользователь обновлён: "
+                f"{p.get('email') or user_id} (id={p.get('id') or user_id})"
+            )
+            console.print(f"  Поля: {', '.join(sorted(payload))}")
+
+        emit_data(u, text_renderer=_render)
+
+    _common.run(_do())
+
+
+def cmd_member_delete(
+    user_id: str = typer.Argument(..., help="ID пользователя"),
+) -> None:
+    """Удалить пользователя (DELETE /users/{id}, soft-delete).
+
+    Право ``user.delete``/``company.manage``. Self-delete запрещён (409).
+    Refresh-токены отзываются.
+    """
+    cfg = ClientConfig.load()
+    access = _common.get_access_token()
+
+    async def _do() -> None:
+        client = _common.make_client(cfg, access)
+        try:
+            await client.delete_user(user_id)
+        finally:
+            await client.close()
+        emit_data(
+            {"event": "user_deleted", "user_id": user_id},
+            text_renderer=lambda p: console.print(
+                f"[green]✓[/] Пользователь {p['user_id']} удалён "
+                "[dim](soft-delete, сессии отозваны)[/]"
+            ),
+        )
+
+    _common.run(_do())
+
+
+def cmd_member_transfer(
+    user_id: str = typer.Argument(..., help="ID пользователя"),
+    new_company: str = typer.Option(
+        ..., "--to-company", help="ID компании назначения"
+    ),
+    new_role_id: str = typer.Option(
+        ..., "--role-id", help="ID роли в новой компании"
+    ),
+    keep_old: bool = typer.Option(
+        False,
+        "--keep-old",
+        help="Оставить членство в прежней компании (default: убрать)",
+    ),
+) -> None:
+    """Перенести пользователя в другую компанию (POST /users/{id}/transfer).
+
+    Только hub.admin. По умолчанию старые memberships удаляются; ``--keep-old``
+    оставляет пользователя в обеих компаниях.
+    """
+    cfg = ClientConfig.load()
+    access = _common.get_access_token()
+
+    async def _do() -> None:
+        client = _common.make_client(cfg, access)
+        try:
+            u = await client.transfer_user(
+                user_id,
+                new_company_id=new_company,
+                new_role_id=new_role_id,
+                keep_old_membership=keep_old,
+            )
+        finally:
+            await client.close()
+
+        def _render(p: dict[str, Any]) -> None:
+            console.print(
+                f"[green]✓[/] Пользователь {p.get('email') or user_id} "
+                f"перенесён в компанию {new_company} (role={new_role_id})"
+            )
+            if keep_old:
+                console.print(
+                    "  [dim](членство в прежней компании сохранено)[/]"
+                )
+
+        emit_data(u, text_renderer=_render)
+
+    _common.run(_do())
+
+
+def cmd_member_export(
+    company: str | None = typer.Option(
+        None, "--company", help="Фильтр по компании"
+    ),
+    q: str | None = typer.Option(
+        None, "--q", help="Фильтр по email (подстрока)"
+    ),
+    status: str | None = typer.Option(
+        None, "--status", help="Фильтр по статусу"
+    ),
+    output: str | None = typer.Option(
+        None, "--output", "-o", help="Файл для CSV (default: stdout)"
+    ),
+) -> None:
+    """Экспорт пользователей в CSV (GET /users/export.csv). Только hub.admin.
+
+    Без ``--output`` CSV печатается в stdout; с ним — пишется в файл.
+    Columns: id, email, first_name, last_name, status, last_login_at,
+    created_at.
+    """
+    from pathlib import Path
+
+    cfg = ClientConfig.load()
+    access = _common.get_access_token()
+
+    async def _do() -> None:
+        client = _common.make_client(cfg, access)
+        try:
+            csv_text = await client.export_users(
+                company_id=company, q=q, status=status
+            )
+        finally:
+            await client.close()
+        if output:
+            Path(output).write_text(csv_text, encoding="utf-8")
+            emit_data(
+                {
+                    "event": "users_exported",
+                    "output": output,
+                    "rows": max(csv_text.count("\n") - 1, 0),
+                },
+                text_renderer=lambda p: console.print(
+                    f"[green]✓[/] Экспортировано в {p['output']} "
+                    f"({p['rows']} строк)"
+                ),
+            )
+        else:
+            # CSV — машинный текст: печатаем как есть (raw), без rich-разметки.
+            emit_data(
+                {"event": "users_exported", "csv": csv_text},
+                text_renderer=lambda p: print(p["csv"], end=""),
+            )
+
+    _common.run(_do())
+
+
 def cmd_roles_list() -> None:
     """Глобальный каталог ролей (GET /roles) — для выбора role_id.
 
@@ -437,14 +799,37 @@ def register(
     can_change_role: bool = False,
     can_lock: bool = False,
     can_reset_password: bool = False,
+    can_create: bool = False,
+    can_update: bool = False,
+    can_delete: bool = False,
+    can_transfer: bool = False,
+    can_export: bool = False,
 ) -> None:
     """Регистрирует ``members``/``roles`` (любой залогиненный) + sub-app
     ``member`` (подкоманды по правам; без единого права sub-app не
-    создаётся вовсе — как admin sub-app в ``build_app``)."""
+    создаётся вовсе — как admin sub-app в ``build_app``).
+
+    M-3: ``suspend``/``activate``/``revoke-sessions`` гейтятся ``can_lock``
+    (предикат ``_can_admin_users`` — зеркало backend bulk-эндпоинтов).
+    M-5: ``create``/``edit``/``delete``/``transfer``/``export`` —
+    отдельными правами (``user.create``/``user.update``/``user.delete``/
+    hub.admin для transfer+export).
+    """
     app.command(name="members")(cmd_members_list)
     app.command(name="roles")(cmd_roles_list)
     if not any(
-        (can_invite, can_remove, can_change_role, can_lock, can_reset_password)
+        (
+            can_invite,
+            can_remove,
+            can_change_role,
+            can_lock,
+            can_reset_password,
+            can_create,
+            can_update,
+            can_delete,
+            can_transfer,
+            can_export,
+        )
     ):
         return
     member_app = typer.Typer(
@@ -453,6 +838,12 @@ def register(
     )
     if can_invite:
         member_app.command("invite")(cmd_member_invite)
+    if can_create:
+        member_app.command("create")(cmd_member_create)
+    if can_update:
+        member_app.command("edit")(cmd_member_edit)
+    if can_delete:
+        member_app.command("delete")(cmd_member_delete)
     if can_remove:
         member_app.command("remove")(cmd_member_remove)
     if can_change_role:
@@ -460,6 +851,15 @@ def register(
     if can_lock:
         member_app.command("lock")(cmd_member_lock)
         member_app.command("unlock")(cmd_member_unlock)
+        # M-3: suspend/activate/revoke-sessions — тот же предикат
+        # (_can_admin_users), что lock/unlock, зеркало bulk-эндпоинтов бэка.
+        member_app.command("suspend")(cmd_member_suspend)
+        member_app.command("activate")(cmd_member_activate)
+        member_app.command("revoke-sessions")(cmd_member_revoke_sessions)
     if can_reset_password:
         member_app.command("reset-password")(cmd_member_reset_password)
+    if can_transfer:
+        member_app.command("transfer")(cmd_member_transfer)
+    if can_export:
+        member_app.command("export")(cmd_member_export)
     app.add_typer(member_app, name="member")

@@ -111,19 +111,25 @@ async def test_transport_list_users_omits_optional_params() -> None:
         assert params["size"] == "25"
 
 
-async def test_transport_remove_membership_deletes_with_query() -> None:
-    """DELETE /memberships?user_id=&company_id= → 204 (None)."""
+async def test_transport_remove_membership_uses_canon_path() -> None:
+    """M-1: канон — DELETE /companies/{cid}/members/{uid} (path), без query.
+
+    Раньше CLI слал deprecated ``DELETE /memberships?user_id=&company_id=``;
+    теперь — канон path-форму (бэкенд принимает оба, поведение идентично).
+    """
     with respx.mock(base_url="http://localhost:8000") as router:
-        route = router.delete("/memberships").mock(return_value=Response(204))
+        route = router.delete("/companies/7/members/5").mock(
+            return_value=Response(204)
+        )
         client = HubClient(base_url="http://localhost:8000")
         try:
             result = await client.remove_membership(user_id="5", company_id="7")
         finally:
             await client.close()
         assert route.called
-        params = route.calls.last.request.url.params
-        assert params["user_id"] == "5"
-        assert params["company_id"] == "7"
+        assert route.calls.last.request.method == "DELETE"
+        # query-параметры на канон-пути не передаются
+        assert "user_id" not in route.calls.last.request.url.params
         assert result is None
 
 

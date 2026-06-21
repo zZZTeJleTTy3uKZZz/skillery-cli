@@ -233,20 +233,35 @@ def test_cmd_delete_local_not_found_exit1(
     "call",
     [
         lambda: coll_mod.cmd_collection_create(name="x", local=False, title=None),
-        lambda: coll_mod.cmd_collection_delete(name="x", local=False),
         lambda: coll_mod.cmd_collection_add(name="x", skill_slug="s", local=False),
         lambda: coll_mod.cmd_collection_remove(name="x", skill_slug="s", local=False),
     ],
 )
-def test_crud_without_local_flag_errors(
+def test_server_crud_without_manage_perm_errors(
     cfg_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str], call,  # noqa: ANN001
 ) -> None:
-    """create/add/remove/delete без --local → USE_LOCAL_FLAG (серверных нет в CLI)."""
+    """D-CLI M-2: create/add/remove без --local и без catalog.manage →
+    NOT_AVAILABLE (серверный CRUD теперь есть, но гейтится правом)."""
+    _json_mode(monkeypatch)
+    _offline_cfg(tmp_path, monkeypatch)
+    monkeypatch.setattr(coll_mod, "_CAN_MANAGE", False)
+    with pytest.raises(typer.Exit):
+        call()
+    evt = _last_json(capsys.readouterr().err)
+    assert evt["code"] == "NOT_AVAILABLE"
+
+
+def test_server_delete_not_supported_in_cli(
+    cfg_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """D-CLI M-2: серверный delete из CLI не поддержан (только Web UI) →
+    USE_LOCAL_FLAG-подсказка про --local."""
     _json_mode(monkeypatch)
     _offline_cfg(tmp_path, monkeypatch)
     with pytest.raises(typer.Exit):
-        call()
+        coll_mod.cmd_collection_delete(name="x", local=False)
     evt = _last_json(capsys.readouterr().err)
     assert evt["code"] == "USE_LOCAL_FLAG"
 
@@ -409,9 +424,12 @@ def test_install_local_unknown_collection_exit1(
 
 
 # ======================================================
-#  Регистрация: единый sub-app collection, 7 глаголов, без plural
+#  Регистрация: единый sub-app collection, 8 глаголов, без plural
+#  (D-CLI M-2 добавил серверный `tags`).
 # ======================================================
-_VERBS = {"list", "show", "install", "create", "add", "remove", "delete"}
+_VERBS = {
+    "list", "show", "install", "create", "add", "remove", "delete", "tags",
+}
 
 
 def _collection_cmd_names(app: typer.Typer) -> set[str]:

@@ -535,17 +535,19 @@ class HubClient:
     async def remove_membership(
         self, *, user_id: str, company_id: str
     ) -> None:
-        """DELETE /memberships?user_id=&company_id= — убрать из компании.
+        """DELETE /companies/{company_id}/members/{user_id} — убрать из компании.
 
-        Сверено с ``routes/memberships.py::delete_membership`` (:32): flat-
-        форма (E1), оба query-параметра обязательны, право ``user.remove``
-        (hub-admin bypass). Ответ 204 → None. Side-effects бэка: refresh-
-        токены target user'а revoked + audit ``user.remove``.
+        M-1: канон — path-форма ``DELETE /companies/{cid}/members/{uid}``
+        (``routes/companies.py``). Старый flat-эндпоинт
+        ``DELETE /memberships?user_id=&company_id=`` (deprecated) принимается
+        бэкендом до сих пор, поведение идентично — но CLI шлёт канон.
+        Право ``user.remove`` (hub-admin bypass). Ответ 204 → None.
+        Side-effects бэка: refresh-токены target user'а revoked + audit
+        ``user.remove``.
         """
         return await self._request(
             "DELETE",
-            "/memberships",
-            params={"user_id": user_id, "company_id": company_id},
+            f"/companies/{company_id}/members/{user_id}",
         )
 
     async def bulk_change_role(
@@ -619,6 +621,166 @@ class HubClient:
             "POST", f"/users/{user_id}/reset-password"
         )
 
+    # --- D-CLI M-3: bulk suspend/activate + revoke-sessions ---
+    async def bulk_suspend(self, *, user_ids: list[str]) -> dict[str, Any]:
+        """POST /users/bulk/suspend — массово suspend + revoke сессий.
+
+        Сверено с ``routes/users.py::bulk_suspend`` (:1250): body
+        ``BulkUserIdsRequest`` = ``{user_ids}`` (selection-by-id; ``filters``/
+        ``dry_run`` — не используем из CLI). Право hub.admin ИЛИ company-admin
+        (``user.lock``/``user.update``/``company.manage``) над своими.
+        Ответ ``BulkActionResponse`` = ``{updated_count, skipped_ids,
+        results:[{id,outcome}], affected_count, dry_run}``.
+        """
+        return await self._request(
+            "POST", "/users/bulk/suspend", json={"user_ids": user_ids}
+        )
+
+    async def bulk_activate(self, *, user_ids: list[str]) -> dict[str, Any]:
+        """POST /users/bulk/activate — массово активировать (status=active).
+
+        Сверено с ``routes/users.py::bulk_activate`` (:1277): те же body/права/
+        ответ, что и у :meth:`bulk_suspend`.
+        """
+        return await self._request(
+            "POST", "/users/bulk/activate", json={"user_ids": user_ids}
+        )
+
+    async def revoke_user_sessions(self, user_id: str) -> dict[str, Any]:
+        """POST /users/{id}/revoke-sessions — «выйти со всех устройств».
+
+        Сверено с ``routes/users.py::revoke_user_sessions`` (:1009): без body;
+        бампает session-эпоху (живые access → 401) + отзывает refresh-токены,
+        статус НЕ меняется. Права: hub.admin (любого) / company-admin (member
+        своей компании) / self. Ответ — ``UserListItemDTO``.
+        """
+        return await self._request(
+            "POST", f"/users/{user_id}/revoke-sessions"
+        )
+
+    # --- D-CLI M-5: CRUD пользователей + transfer + export ---
+    async def create_user(
+        self,
+        *,
+        email: str,
+        display_name: str,
+        company_id: str,
+        role_id: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        set_password: str | None = None,
+    ) -> dict[str, Any]:
+        """POST /users — создать пользователя (E12).
+
+        Сверено с ``routes/users.py::create_user`` (:708) + ``CreateUserRequest``:
+        обязательны ``email``/``display_name``/``company_id``; ``role_id``
+        опционален (без него бэк назначит роль «Участник»). hub-admin создаёт
+        в любой компании; company-admin — только в своей. Если email уже есть —
+        добавляет membership (``is_new_user=False``). Ответ 201
+        ``CreateUserResponse`` = ``{user_id, is_new_user}``.
+        Опциональные поля (None) не шлём — pydantic применит свои дефолты.
+        """
+        body: dict[str, Any] = {
+            "email": email,
+            "display_name": display_name,
+            "company_id": company_id,
+        }
+        if role_id is not None:
+            body["role_id"] = role_id
+        if first_name is not None:
+            body["first_name"] = first_name
+        if last_name is not None:
+            body["last_name"] = last_name
+        if set_password is not None:
+            body["set_password"] = set_password
+        return await self._request("POST", "/users", json=body)
+
+    async def update_user(
+        self, user_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """PATCH /users/{id} — merge-patch пользователя (E12, RFC 7396).
+
+        Сверено с ``routes/users.py::update_user`` (:777) + ``UpdateUserRequest``:
+        изменяемые поля — ``display_name``/``first_name``/``last_name``/
+        ``status`` (active|invited|suspended)/``user_metadata``;
+        ``app_metadata`` — только hub-admin. Шлём только переданные поля
+        (caller собирает dict без None). Ответ — ``UserListItemDTO``.
+        """
+        return await self._request("PATCH", f"/users/{user_id}", json=payload)
+
+    async def delete_user(self, user_id: str) -> None:
+        """DELETE /users/{id} — soft-delete пользователя (E12).
+
+        Сверено с ``routes/users.py::delete_user`` (:837): без body; право
+        hub.admin (любого) / company-admin (member своей компании); self-delete
+        запрещён (409). Ответ 204 → None. Side-effect: refresh-токены revoked.
+        """
+        return await self._request("DELETE", f"/users/{user_id}")
+
+    async def transfer_user(
+        self,
+        user_id: str,
+        *,
+        new_company_id: str,
+        new_role_id: str,
+        keep_old_membership: bool = False,
+    ) -> dict[str, Any]:
+        """POST /users/{id}/transfer — перенести в другую компанию (E12).
+
+        Сверено с ``routes/users.py::transfer_user`` (:881) +
+        ``TransferUserRequest``: body
+        ``{new_company_id, new_role_id, keep_old_membership}``; hub-admin only.
+        По умолчанию старые memberships удаляются (``keep_old_membership=False``).
+        Ответ — ``UserListItemDTO``.
+        """
+        return await self._request(
+            "POST",
+            f"/users/{user_id}/transfer",
+            json={
+                "new_company_id": new_company_id,
+                "new_role_id": new_role_id,
+                "keep_old_membership": keep_old_membership,
+            },
+        )
+
+    async def export_users(
+        self,
+        *,
+        company_id: str | None = None,
+        q: str | None = None,
+        status: str | None = None,
+        ids: list[str] | None = None,
+    ) -> str:
+        """GET /users/export.csv — CSV-выгрузка пользователей (hub.admin).
+
+        Сверено с ``routes/users.py::export_users_csv`` (:1498): hub.admin only;
+        фильтры зеркалят ``GET /users`` (``email``→``q`` по подстроке тут не
+        поддержан — у export свой ``email`` query, поэтому ``q`` шлём как
+        ``email``), ``status`` (alias), ``company_id``; ``ids`` (непустой) —
+        режим «выгрузить выбранных» (прочие фильтры игнорируются). Ответ —
+        ``text/csv`` (НЕ JSON) → возвращаем сырой текст, а не dict.
+        Columns: id, email, first_name, last_name, status, last_login_at,
+        created_at.
+        """
+        params: dict[str, Any] = {}
+        if q:
+            params["email"] = q
+        if status:
+            params["status"] = status
+        if company_id:
+            params["company_id"] = company_id
+        if ids:
+            params["ids"] = ids
+        resp = await self._client.request(
+            "GET",
+            "/users/export.csv",
+            params=params,
+            headers=self._auth_headers(),
+        )
+        if resp.status_code >= 400:
+            raise self._parse_error_response(resp)
+        return resp.text
+
     async def list_roles(
         self,
         *,
@@ -638,6 +800,54 @@ class HubClient:
         if q is not None:
             params["q"] = q
         return await self._request("GET", "/roles", params=params)
+
+    # --- D-CLI M-4: каталог permissions + права роли ---
+    async def list_permissions(
+        self, *, q: str | None = None
+    ) -> dict[str, Any]:
+        """GET /permissions — каталог всех прав (любой авторизованный).
+
+        Сверено с ``routes/permissions.py::list_permissions`` (:111): ответ —
+        канон-обёртка ``{items,total,page,size}`` (REST-07). ``q`` — фильтр по
+        slug/label/описанию. ``size`` не шлём — backend default ``size=0`` =
+        «без пагинации, отдать весь каталог одним запросом» (нужно для
+        выбора прав роли). Item: ``key``/``slug``/``label``/``description``/
+        ``scope``/``is_system``/``used_by_roles_count``.
+        """
+        params: dict[str, Any] = {}
+        if q is not None:
+            params["q"] = q
+        return await self._request("GET", "/permissions", params=params)
+
+    async def list_role_permissions(
+        self, role_id: str
+    ) -> list[dict[str, Any]]:
+        """GET /roles/{id}/permissions — права, привязанные к роли (E5).
+
+        Сверено с ``routes/permissions.py::list_role_permissions`` (:169):
+        любой авторизованный; ответ — **плоский** ``list[PermissionDTO]`` (НЕ
+        обёрнут в ``{items}``). 404 NOT_FOUND если роли нет.
+        """
+        return await self._request("GET", f"/roles/{role_id}/permissions")
+
+    async def set_role_permissions(
+        self, role_id: str, *, permission_slugs: list[str]
+    ) -> list[dict[str, Any]]:
+        """PUT /roles/{id}/permissions — replace-set прав роли (REST-16 канон).
+
+        Сверено с ``routes/permissions.py::put_role_permissions`` (:253) +
+        ``UpdateRolePermissionsRequest``: body принимает ``permission_ids`` ИЛИ
+        ``permission_slugs`` — CLI оперирует человекочитаемыми slug'ами
+        (``skill.publish`` и т.п.), бэк резолвит их в ids. Идемпотентная полная
+        замена набора. Право: hub.admin (bypass) ИЛИ role.manage в своей
+        компании (нельзя выдавать system-scope права / править global-роли).
+        Ответ — **плоский** ``list[PermissionDTO]`` (новый набор).
+        """
+        return await self._request(
+            "PUT",
+            f"/roles/{role_id}/permissions",
+            json={"permission_slugs": permission_slugs},
+        )
 
     async def submit_issue(
         self,
@@ -902,8 +1112,19 @@ class HubClient:
         type: str | None = None,
         owner_id: str | None = None,
         include_global: bool = True,
+        page: int | None = None,
+        size: int | None = None,
+        sort: str | None = None,
+        q: str | None = None,
     ) -> dict[str, Any]:
-        """GET /collections — список коллекций."""
+        """GET /collections — список коллекций (server-paged, канон /tags).
+
+        M-6: добавлены ``page``/``size``/``sort``/``q`` — server-side offset-
+        пагинация (``routes/collections.py::list_collections``, :247) → ответ
+        ``{items,total,page,size}``. ``sort`` — title|created|updated; ``q`` —
+        подстрока по названию/slug. Неуказанные параметры не шлём — backend
+        применит свои дефолты (page=1, size=DEFAULT, sort=id ASC).
+        """
         params: dict[str, Any] = {"include_global": str(include_global).lower()}
         if company_id:
             params["company_id"] = company_id
@@ -911,11 +1132,100 @@ class HubClient:
             params["type"] = type
         if owner_id:
             params["owner_id"] = owner_id
+        if page is not None:
+            params["page"] = page
+        if size is not None:
+            params["size"] = size
+        if sort is not None:
+            params["sort"] = sort
+        if q is not None:
+            params["q"] = q
         return await self._request("GET", "/collections", params=params)
 
     async def get_collection(self, slug: str) -> dict[str, Any]:
         """GET /collections/{slug} — детали + skills."""
         return await self._request("GET", f"/collections/{slug}")
+
+    # --- D-CLI M-2: серверный CRUD коллекций ---
+    async def create_collection(
+        self,
+        *,
+        title: str,
+        type: str = "static",
+        slug: str | None = None,
+        description: str | None = None,
+        icon: str | None = None,
+        company_id: str | None = None,
+        parent_id: str | None = None,
+    ) -> dict[str, Any]:
+        """POST /collections — создать серверную коллекцию (201).
+
+        Сверено с ``routes/collections.py::create_collection`` (:473) +
+        ``CreateCollectionRequest``: обязателен ``title`` + ``type``
+        (static|dynamic); ``slug`` опционален (None ⇒ адресация по id);
+        ``company_id`` None ⇒ global, иначе tenant-scoped (member может только
+        в своей компании). Право ``collection.create``/hub.admin. Ответ —
+        ``CollectionDTO``. Опциональные поля (None) не шлём.
+        """
+        body: dict[str, Any] = {"title": title, "type": type}
+        if slug is not None:
+            body["slug"] = slug
+        if description is not None:
+            body["description"] = description
+        if icon is not None:
+            body["icon"] = icon
+        if company_id is not None:
+            body["company_id"] = company_id
+        if parent_id is not None:
+            body["parent_id"] = parent_id
+        return await self._request("POST", "/collections", json=body)
+
+    async def add_skill_to_collection(
+        self, slug: str, skill_id: str
+    ) -> dict[str, Any]:
+        """POST /collections/{slug}/skills — добавить навык в (static) коллекцию.
+
+        Сверено с ``routes/collections.py::add_skill_to_collection`` (:778) +
+        ``AddSkillToCollectionRequest``: body ``{skill_id}`` — числовой id
+        (caller резолвит slug заранее). Право ``collection.update``/owner/
+        hub.admin (через ``_ensure_visible``). Ответ 201
+        ``CollectionSkillLinkResponse`` = ``{collection_slug, collection_id,
+        skill_id}``.
+        """
+        return await self._request(
+            "POST",
+            f"/collections/{slug}/skills",
+            json={"skill_id": skill_id},
+        )
+
+    async def remove_skill_from_collection(
+        self, slug: str, skill_id: str
+    ) -> None:
+        """DELETE /collections/{slug}/skills/{skill_id} — убрать навык (204).
+
+        Сверено с ``routes/collections.py::remove_skill_from_collection``
+        (:831): path-сегмент ``{skill_id}`` принимает id-ИЛИ-slug (backend
+        резолвит); idempotent (нет навыка → no-op 204). Ответ 204 → None.
+        """
+        return await self._request(
+            "DELETE", f"/collections/{slug}/skills/{skill_id}"
+        )
+
+    async def set_collection_tags(
+        self, slug: str, *, tag_ids: list[str]
+    ) -> None:
+        """PUT /collections/{slug}/tags — задать набор тегов коллекции (204).
+
+        Сверено с ``routes/collections.py::set_collection_tags`` (:869) +
+        ``SetCollectionTagsRequest``: body ``{tag_ids}`` — СТРОГО числовые id
+        (бэк 422 на нечисловые). Replace-set (полная замена). Право
+        ``collection.update``/owner/hub.admin. Ответ 204 → None.
+        """
+        return await self._request(
+            "PUT",
+            f"/collections/{slug}/tags",
+            json={"tag_ids": tag_ids},
+        )
 
     # === E6 — Events ingestion ===
     async def ingest_events(

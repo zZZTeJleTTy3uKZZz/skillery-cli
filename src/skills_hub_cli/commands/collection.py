@@ -40,6 +40,9 @@ _resolve_install_scope = None  # type: ignore[assignment]
 # (как у member/company sub-app). Локальный режим (``--local``) от них не зависит.
 _SERVER_ENABLED = False
 _CAN_INSTALL = False
+# D-CLI M-2: серверный CRUD коллекций (create/add/remove/delete/tags) — право
+# ``catalog.manage`` (или hub.admin). Локальный режим от него не зависит.
+_CAN_MANAGE = False
 
 
 def _ensure_install_helpers() -> None:
@@ -75,15 +78,16 @@ def _require_server(verb: str) -> None:
         raise typer.Exit(1)
 
 
-def _require_local_flag(verb: str) -> None:
-    """create/add/remove/delete есть только локально → --local обязателен."""
-    emit_error(
-        "USE_LOCAL_FLAG",
-        f"CLI управляет только ЛОКАЛЬНЫМИ коллекциями — добавьте --local: "
-        f"skills-hub collection {verb} … --local. "
-        f"Серверные коллекции создаются/редактируются в Web UI.",
-    )
-    raise typer.Exit(1)
+def _require_manage(verb: str) -> None:
+    """Серверный CRUD коллекций (M-2) гейтится правом ``catalog.manage``."""
+    if not _CAN_MANAGE:
+        emit_error(
+            "NOT_AVAILABLE",
+            f"Управление серверными коллекциями требует право catalog.manage. "
+            f"Для локальной коллекции добавьте --local: "
+            f"skills-hub collection {verb} … --local.",
+        )
+        raise typer.Exit(1)
 
 
 # ======================================================
@@ -94,6 +98,10 @@ def _list_server(
     type_: str | None,
     owner_id: str | None,
     include_global: bool,
+    page: int | None = None,
+    size: int | None = None,
+    sort: str | None = None,
+    q: str | None = None,
 ) -> None:
     cfg = ClientConfig.load()
     access = _common.get_access_token()
@@ -106,13 +114,27 @@ def _list_server(
                 type=type_,
                 owner_id=owner_id,
                 include_global=include_global,
+                page=page,
+                size=size,
+                sort=sort,
+                q=q,
             )
         finally:
             await client.close()
 
         def _render(p: dict[str, Any]) -> None:
             items = p.get("items") or []
-            table = Table(title=f"Collections (count={len(items)})")
+            total = p.get("total")
+            if total is not None:
+                cur_size = p.get("size") or len(items) or 1
+                pages = (total + cur_size - 1) // max(cur_size, 1)
+                title = (
+                    f"Collections (всего: {total}, "
+                    f"стр. {p.get('page') or 1}/{max(pages, 1)})"
+                )
+            else:
+                title = f"Collections (count={len(items)})"
+            table = Table(title=title)
             for col in ("slug", "title", "type", "skills", "owner", "company"):
                 table.add_column(col, overflow="fold" if col == "title" else None)
             for c in items:
@@ -188,13 +210,30 @@ def cmd_collection_list(
         True, "--include-global/--no-global",
         help="Включать global-коллекции (default: yes).",
     ),
+    page: int = typer.Option(1, "--page", min=1, help="Номер страницы (1-based)"),
+    size: int | None = typer.Option(
+        None, "--size", help="Размер страницы (default backend)"
+    ),
+    sort: str | None = typer.Option(
+        None, "--sort", help="title | created | updated"
+    ),
+    q: str | None = typer.Option(
+        None, "--q", help="Поиск по названию/slug (подстрока)"
+    ),
 ) -> None:
-    """Список коллекций: серверный каталог (default) или ``--local``."""
+    """Список коллекций: серверный каталог (default) или ``--local``.
+
+    M-6: серверный режим поддерживает offset-пагинацию (``--page``/``--size``/
+    ``--sort``/``--q``). В ``--local`` эти опции игнорируются.
+    """
     if local:
         _list_local()
         return
     _require_server("list")
-    _list_server(company_id, type_, owner_id, include_global)
+    _list_server(
+        company_id, type_, owner_id, include_global,
+        page=page, size=size, sort=sort, q=q,
+    )
 
 
 # ======================================================
@@ -546,20 +585,70 @@ def cmd_collection_install(
 # ======================================================
 #  create / add / remove / delete — ТОЛЬКО локальные (--local)
 # ======================================================
+def _create_server(
+    name: str,
+    title: str | None,
+    type_: str,
+    description: str | None,
+    company: str | None,
+) -> None:
+    cfg = ClientConfig.load()
+    access = _common.get_access_token()
+
+    async def _do() -> None:
+        client = _common.make_client(cfg, access)
+        try:
+            r = await client.create_collection(
+                title=title or name,
+                type=type_,
+                slug=name,
+                description=description,
+                company_id=company,
+            )
+        finally:
+            await client.close()
+
+        def _render(p: dict[str, Any]) -> None:
+            label = p.get("slug") or p.get("id")
+            console.print(
+                f"[green]✓[/] Серверная коллекция «{p.get('title')}» "
+                f"создана ({label}, type={p.get('type')})"
+            )
+
+        emit_data(r, text_renderer=_render)
+
+    _common.run(_do())
+
+
 def cmd_collection_create(
     name: str = typer.Argument(
-        ..., help="Имя локальной коллекции (буквы/цифры/«-»/«_»)"
+        ..., help="Имя/slug коллекции (буквы/цифры/«-»/«_»)"
     ),
     local: bool = typer.Option(
-        False, "--local", help="Обязателен: CLI создаёт только локальные коллекции."
+        False, "--local", help="Создать ЛОКАЛЬНУЮ коллекцию (оффлайн, без хаба)."
     ),
     title: str | None = typer.Option(
         None, "--title", help="Человекочитаемый заголовок (default: имя)"
     ),
+    type_: str = typer.Option(
+        "static", "--type", help="static | dynamic (только серверная)"
+    ),
+    description: str | None = typer.Option(
+        None, "--description", help="Описание (только серверная)"
+    ),
+    company: str | None = typer.Option(
+        None, "--company", help="ID компании (только серверная; None ⇒ global)"
+    ),
 ) -> None:
-    """Создать ЛОКАЛЬНУЮ коллекцию (требует ``--local``; оффлайн, без логина)."""
+    """Создать коллекцию: серверную (catalog.manage) или ``--local``.
+
+    M-2: без ``--local`` создаётся СЕРВЕРНАЯ коллекция через POST /collections
+    (право catalog.manage). С ``--local`` — локальная в collections.toml.
+    """
     if not local:
-        _require_local_flag("create")
+        _require_manage("create")
+        _create_server(name, title, type_, description, company)
+        return
     try:
         coll = local_collections.create(name, title=title)
     except local_collections.LocalCollectionError as e:
@@ -584,9 +673,19 @@ def cmd_collection_delete(
         False, "--local", help="Обязателен: удаляется только локальная коллекция."
     ),
 ) -> None:
-    """Удалить ЛОКАЛЬНУЮ коллекцию (требует ``--local``; навыки на диске целы)."""
+    """Удалить ЛОКАЛЬНУЮ коллекцию (требует ``--local``; навыки на диске целы).
+
+    Удаление СЕРВЕРНОЙ коллекции из CLI не поддержано (только через Web UI) —
+    в CLI доступны create/add/remove/tags серверных коллекций, но не delete.
+    """
     if not local:
-        _require_local_flag("delete")
+        emit_error(
+            "USE_LOCAL_FLAG",
+            "Удаление серверной коллекции из CLI не поддержано (через Web UI). "
+            "Для локальной коллекции добавьте --local: "
+            "skills-hub collection delete … --local.",
+        )
+        raise typer.Exit(1)
     try:
         local_collections.delete(name)
     except local_collections.LocalCollectionError as e:
@@ -600,22 +699,48 @@ def cmd_collection_delete(
     )
 
 
+def _add_server(name: str, skill_ref: str) -> None:
+    cfg = ClientConfig.load()
+    access = _common.get_access_token()
+
+    async def _do() -> None:
+        client = _common.make_client(cfg, access)
+        try:
+            skill_id = await _common.resolve_skill_id(client, skill_ref)
+            r = await client.add_skill_to_collection(name, skill_id)
+        finally:
+            await client.close()
+
+        def _render(p: dict[str, Any]) -> None:
+            console.print(
+                f"[green]✓[/] Навык {skill_ref} (id={p.get('skill_id')}) "
+                f"добавлен в коллекцию «{p.get('collection_slug') or name}»"
+            )
+
+        emit_data(r, text_renderer=_render)
+
+    _common.run(_do())
+
+
 def cmd_collection_add(
-    name: str = typer.Argument(..., help="Имя локальной коллекции"),
+    name: str = typer.Argument(..., help="Имя/slug коллекции"),
     skill_slug: str = typer.Argument(
         ..., metavar="SKILL_SLUG", help="Слаг навыка (или числовой id)"
     ),
     local: bool = typer.Option(
-        False, "--local", help="Обязателен: правится только локальная коллекция."
+        False, "--local", help="Править ЛОКАЛЬНУЮ коллекцию (а не серверную)."
     ),
 ) -> None:
-    """Добавить навык в ЛОКАЛЬНУЮ коллекцию (требует ``--local``).
+    """Добавить навык в коллекцию: серверную (catalog.manage) или ``--local``.
 
-    Если слага нет в локальном сторе — warning, но слаг добавляется (``install
-    --local`` докачает его из хаба при наличии логина).
+    M-2: без ``--local`` — POST /collections/{slug}/skills (slug навыка
+    резолвится в числовой id). С ``--local``: если слага нет в локальном сторе
+    — warning, но слаг добавляется (``install --local`` докачает из хаба).
     """
     if not local:
-        _require_local_flag("add")
+        _require_manage("add")
+        _add_server(name, skill_slug)
+        return
     cfg = ClientConfig.load()
     try:
         coll, added = local_collections.add_skill(name, skill_slug)
@@ -648,18 +773,51 @@ def cmd_collection_add(
     )
 
 
+def _remove_server(name: str, skill_ref: str) -> None:
+    cfg = ClientConfig.load()
+    access = _common.get_access_token()
+
+    async def _do() -> None:
+        client = _common.make_client(cfg, access)
+        try:
+            # DELETE /collections/{slug}/skills/{skill_id} принимает id-или-slug
+            # навыка как есть (backend резолвит), idempotent.
+            await client.remove_skill_from_collection(name, skill_ref)
+        finally:
+            await client.close()
+        emit_data(
+            {
+                "event": "collection_skill_removed",
+                "collection": name,
+                "skill": skill_ref,
+            },
+            text_renderer=lambda p: console.print(
+                f"[green]✓[/] Навык {p['skill']} убран из коллекции "
+                f"«{p['collection']}»"
+            ),
+        )
+
+    _common.run(_do())
+
+
 def cmd_collection_remove(
-    name: str = typer.Argument(..., help="Имя локальной коллекции"),
+    name: str = typer.Argument(..., help="Имя/slug коллекции"),
     skill_slug: str = typer.Argument(
         ..., metavar="SKILL_SLUG", help="Слаг навыка (или числовой id)"
     ),
     local: bool = typer.Option(
-        False, "--local", help="Обязателен: правится только локальная коллекция."
+        False, "--local", help="Править ЛОКАЛЬНУЮ коллекцию (а не серверную)."
     ),
 ) -> None:
-    """Убрать навык из ЛОКАЛЬНОЙ коллекции (требует ``--local``; диск цел)."""
+    """Убрать навык из коллекции: серверной (catalog.manage) или ``--local``.
+
+    M-2: без ``--local`` — DELETE /collections/{slug}/skills/{skill} (idempotent).
+    С ``--local`` — правка collections.toml (навыки на диске целы).
+    """
     if not local:
-        _require_local_flag("remove")
+        _require_manage("remove")
+        _remove_server(name, skill_slug)
+        return
     try:
         coll, removed = local_collections.remove_skill(name, skill_slug)
     except local_collections.LocalCollectionError as e:
@@ -680,22 +838,68 @@ def cmd_collection_remove(
     )
 
 
+def cmd_collection_tags(
+    name: str = typer.Argument(..., help="slug серверной коллекции"),
+    tag_ids: str = typer.Option(
+        ...,
+        "--tags",
+        help="ID тегов через запятую (replace-set; пусто = очистить)",
+    ),
+) -> None:
+    """Задать набор тегов СЕРВЕРНОЙ коллекции (PUT /collections/{slug}/tags).
+
+    M-2: replace-set — полная замена набора тегов. Право catalog.manage.
+    ``--tags`` принимает строго ЧИСЛОВЫЕ id через запятую (бэк 422 на нечисловые);
+    ``--tags ""`` очищает все теги. Серверная операция (нет ``--local``).
+    """
+    _require_manage("tags")
+    ids = [t.strip() for t in tag_ids.split(",") if t.strip()]
+    bad = [t for t in ids if not t.isdigit()]
+    if bad:
+        emit_error(
+            "VALIDATION",
+            f"--tags должны быть числовыми id, получено: {', '.join(bad)}",
+        )
+        raise typer.Exit(1)
+    cfg = ClientConfig.load()
+    access = _common.get_access_token()
+
+    async def _do() -> None:
+        client = _common.make_client(cfg, access)
+        try:
+            await client.set_collection_tags(name, tag_ids=ids)
+        finally:
+            await client.close()
+        emit_data(
+            {"event": "collection_tags_set", "collection": name, "tag_ids": ids},
+            text_renderer=lambda p: console.print(
+                f"[green]✓[/] Теги коллекции «{p['collection']}» обновлены: "
+                f"{', '.join(p['tag_ids']) or '(очищено)'}"
+            ),
+        )
+
+    _common.run(_do())
+
+
 def register(
     app: typer.Typer,
     *,
     server_enabled: bool = False,
     can_install: bool = False,
+    can_manage: bool = False,
 ) -> None:
     """Регистрация единого ``collection`` sub-app.
 
     Вызывается ВСЕГДА (из always-on зоны ``build_app``). Локальный режим
     (``--local``) работает без логина; серверный — гейтится ``server_enabled``
-    (``skill.read``) и ``can_install`` (``skill.install``), которые
-    прокидываются в модульные флаги и проверяются командами в рантайме.
+    (``skill.read``), ``can_install`` (``skill.install``) и ``can_manage``
+    (``catalog.manage`` — серверный CRUD, M-2), которые прокидываются в
+    модульные флаги и проверяются командами в рантайме.
     """
-    global _SERVER_ENABLED, _CAN_INSTALL
+    global _SERVER_ENABLED, _CAN_INSTALL, _CAN_MANAGE
     _SERVER_ENABLED = server_enabled
     _CAN_INSTALL = can_install
+    _CAN_MANAGE = can_manage
 
     collection_app = typer.Typer(
         no_args_is_help=True,
@@ -708,4 +912,6 @@ def register(
     collection_app.command("add")(cmd_collection_add)
     collection_app.command("remove")(cmd_collection_remove)
     collection_app.command("delete")(cmd_collection_delete)
+    # M-2: tags — серверная операция (replace-set тегов коллекции).
+    collection_app.command("tags")(cmd_collection_tags)
     app.add_typer(collection_app, name="collection")

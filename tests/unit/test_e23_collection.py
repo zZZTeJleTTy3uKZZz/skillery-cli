@@ -88,7 +88,17 @@ def test_cmd_collections_list_renders_items(monkeypatch: pytest.MonkeyPatch) -> 
 
     fake_client = MagicMock()
 
-    async def _list(*, company_id=None, type=None, owner_id=None, include_global=True):  # noqa: ANN001
+    async def _list(  # noqa: ANN001
+        *,
+        company_id=None,
+        type=None,
+        owner_id=None,
+        include_global=True,
+        page=None,
+        size=None,
+        sort=None,
+        q=None,
+    ):
         return {
             "items": [
                 {
