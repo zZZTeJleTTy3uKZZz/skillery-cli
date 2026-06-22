@@ -61,6 +61,71 @@ async def test_daemon_runner_cycle_once_persists_state(tmp_path: Path) -> None:
     assert state["total_sent"] == 1
 
 
+def _make_event_runner(tmp_path: Path, **runner_kwargs) -> DaemonRunner:  # noqa: ANN003
+    """Хелпер: runner с одним событием в очереди + успешным ingest-клиентом."""
+    collector = EventCollector(tmp_path / "q.json")
+    collector.append("skill.install")
+    fake_client = MagicMock()
+
+    async def _ingest(events, *, idempotency_key):  # noqa: ANN001
+        return {
+            "accepted": len(events),
+            "event_ids": [f"ev_{i}" for i in range(len(events))],
+        }
+
+    async def _close() -> None:
+        return None
+
+    fake_client.ingest_events = _ingest
+    fake_client.close = _close
+    sender = EventSender(collector, lambda: fake_client)
+    return DaemonRunner(
+        sender,
+        interval_seconds=60,
+        pid_path=tmp_path / "daemon.pid",
+        state_path=tmp_path / "daemon.state.json",
+        **runner_kwargs,
+    )
+
+
+@pytest.mark.asyncio
+async def test_daemon_reconcile_callback_invoked_after_send(
+    tmp_path: Path,
+) -> None:
+    """Best-effort reconcile вызывается ПОСЛЕ send_once в каждом такте."""
+    calls: list[int] = []
+
+    async def _reconcile() -> None:
+        calls.append(1)
+
+    runner = _make_event_runner(tmp_path, reconcile=_reconcile)
+    last = await runner.cycle_once()
+    # Event-flow не пострадал.
+    assert last["sent"] == 1
+    assert last["accepted"] == 1
+    # Reconcile отработал.
+    assert calls == [1]
+
+
+@pytest.mark.asyncio
+async def test_daemon_reconcile_failure_does_not_break_cycle(
+    tmp_path: Path,
+) -> None:
+    """Падение reconcile глотается (suppress) — event-цикл продолжает работать."""
+
+    async def _boom() -> None:
+        raise RuntimeError("reconcile blew up")
+
+    runner = _make_event_runner(tmp_path, reconcile=_boom)
+    # Не должно бросить, событие всё равно отправлено.
+    last = await runner.cycle_once()
+    assert last["sent"] == 1
+    assert last["accepted"] == 1
+    # State по-прежнему пишется (цикл завершился штатно).
+    state = read_state(runner.state_path)
+    assert state["cycles"] == 1
+
+
 def test_read_running_pid_missing_returns_none(tmp_path: Path) -> None:
     pid = read_running_pid(tmp_path / "absent.pid")
     assert pid is None

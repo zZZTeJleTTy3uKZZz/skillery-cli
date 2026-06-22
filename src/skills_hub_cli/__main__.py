@@ -1575,6 +1575,107 @@ def cmd_sync(
     _run(_do())
 
 
+async def _reconcile_hub_installs(
+    cfg: ClientConfig,
+    access: str,
+    *,
+    channel: str,
+    agent_target,  # IAgentTarget
+    force: bool = False,
+) -> dict[str, list]:
+    """«Нажал Установить в вебе → CLI скачал»: подтянуть /me/installs в стор.
+
+    Идемпотентно: для каждого навыка из ``/me/installs`` сравниваем версию с
+    локальным стором (``read_meta``). Отсутствующий или устаревший → качаем
+    через :func:`_install_chain` (GLOBAL scope, как ``skills-hub install`` без
+    ``--project``). Уже актуальный — пропускаем.
+
+    Возвращает report ``{downloaded, updated, skipped, failed}`` (списки имён).
+    Используется и ``cmd_pull``, и best-effort reconcile в демоне.
+    """
+    store_root = cfg.effective_store_dir()
+    client = HubClient(
+        base_url=cfg.base_url, access_token=access,
+        on_token_refresh=_make_refresh_callback(cfg),
+    )
+    report: dict[str, list] = {
+        "downloaded": [], "updated": [], "skipped": [], "failed": [],
+    }
+    try:
+        installs = await client.list_my_installs()
+    finally:
+        await client.close()
+
+    for entry in installs:
+        slug = entry.get("slug")
+        skill_id = entry.get("skill_id")
+        remote_version = entry.get("installed_version") or ""
+        # Адресуем навык по slug, иначе по id (slug-less). Это же — имя папки
+        # стора (installer.install кладёт slug-less под str(id)).
+        ref = slug or (str(skill_id) if skill_id is not None else None)
+        if not ref:
+            continue
+        local_meta = read_meta(store_root / ref) or {}
+        local_version = local_meta.get("version")
+        if local_meta and local_version and not force:
+            # Уже в сторе: качаем только если remote СТРОГО новее.
+            if not remote_version or not _is_newer(remote_version, local_version):
+                report["skipped"].append(ref)
+                continue
+            bucket = "updated"
+        else:
+            bucket = "downloaded"
+        try:
+            await _install_chain(
+                cfg, access, slug=str(ref), channel=channel, scope="global",
+                project_path=None, force=force, agent_target=agent_target,
+            )
+            report[bucket].append(ref)
+        except Exception:
+            report["failed"].append(ref)
+    return report
+
+
+def cmd_pull(
+    agent: Optional[str] = typer.Option(None),
+    channel: str = typer.Option("published"),
+    force: bool = typer.Option(
+        False, "--force", help="Перекачать даже если локальная версия актуальна",
+    ),
+) -> None:
+    """Скачать навыки, помеченные установленными в вебе («нажал Установить»).
+
+    Тянет ``/me/installs`` и докачивает отсутствующие/устаревшие в глобальный
+    стор (как ``skills-hub install`` без ``--project``). Уже актуальные —
+    пропускает. Это вторая половина потока «установка из веба»: веб помечает
+    навык установленным, CLI ``pull`` приносит файлы. Нужен login.
+    """
+    cfg = ClientConfig.load()
+    if not cfg.is_logged_in():
+        emit_error("NOT_LOGGED_IN", "Сначала: skills-hub login <invite>")
+        raise typer.Exit(1)
+    access = _get_access_token()
+    target = get_target(agent or cfg.agent)
+
+    async def _do() -> None:
+        report = await _reconcile_hub_installs(
+            cfg, access, channel=channel, agent_target=target, force=force,
+        )
+
+        def _render(r: dict) -> None:
+            console.print(
+                f"[green]pull[/]: ↓downloaded {len(r['downloaded'])}  "
+                f"↑updated {len(r['updated'])}  ={len(r['skipped'])} skipped  "
+                f"✗{len(r['failed'])} failed"
+            )
+            for s in r["failed"]:
+                console.print(f"  [yellow]✗ не удалось получить:[/] {s}")
+
+        emit_data(report, text_renderer=_render)
+
+    _run(_do())
+
+
 def cmd_migrate(
     scope: str = typer.Option("all", "--scope", help="all | global | project"),
     project: Optional[Path] = typer.Option(None, "--project"),
@@ -2509,6 +2610,9 @@ def build_app() -> typer.Typer:
     app.command(name="disable")(cmd_disable)
     app.command(name="remove")(cmd_remove)
     app.command(name="sync")(cmd_sync)
+    # pull — докачка навыков, помеченных установленными в вебе (/me/installs).
+    # Hub-режим: внутри сам требует login.
+    app.command(name="pull")(cmd_pull)
     app.command(name="migrate")(cmd_migrate)
     store_app = typer.Typer(no_args_is_help=True, help="Центральный стор навыков")
     app.add_typer(store_app, name="store")

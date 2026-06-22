@@ -302,6 +302,34 @@ class HubClient:
             "GET", f"/skills/{slug}/install-bundle", params={"channel": channel}
         )
 
+    async def install_skill(
+        self, slug: str, channel: str = "published"
+    ) -> dict[str, Any]:
+        """POST /skills/{slug}/install — пометить навык установленным для актора.
+
+        Сверено с ``routes/skills.py::install_skill``: эмитит install-событие
+        (тот же путь, что install-bundle) + проверяет доступ (закрытый навык без
+        гранта → 403). Файлы НЕ качает — это делает CLI отдельно через
+        :meth:`install_bundle`. Ответ — ``{install_state: {...}}``. Право
+        ``skill.install``.
+        """
+        return await self._request(
+            "POST", f"/skills/{slug}/install", params={"channel": channel}
+        )
+
+    async def list_my_installs(self) -> list[dict[str, Any]]:
+        """GET /me/installs — навыки, помеченные актором установленными.
+
+        Сверено с ``routes/me.py::list_my_installs``: ответ —
+        ``{items: [{slug, skill_id, installed_version}]}``. Источник — install-
+        события (та же истина, что install_state). Используется
+        ``skills-hub pull`` и демоном для reconcile (знать ЧТО тянуть). Берём
+        только ``items``.
+        """
+        data = await self._request("GET", "/me/installs")
+        items = data.get("items") if isinstance(data, dict) else None
+        return list(items) if items else []
+
     async def get_skill(self, slug: str) -> dict[str, Any]:
         return await self._request("GET", f"/skills/{slug}")
 

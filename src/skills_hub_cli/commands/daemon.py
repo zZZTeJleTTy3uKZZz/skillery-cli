@@ -43,20 +43,38 @@ from skills_hub_cli.output import emit_data, emit_error, emit_message
 console = Console()
 
 
-def _build_runner(*, interval_seconds: float) -> DaemonRunner:
-    """Создать ``DaemonRunner`` с реальной очередью + sender'ом."""
+# Best-effort reconcile-инсталлов в демоне выполняется НЕ каждый event-цикл, а
+# не чаще раза в N секунд — чтобы не дёргать /me/installs + git каждые 60с.
+_RECONCILE_MIN_INTERVAL_SECONDS = 300.0
+
+
+def _build_runner(
+    *, interval_seconds: float, reconcile_installs: bool = True
+) -> DaemonRunner:
+    """Создать ``DaemonRunner`` с реальной очередью + sender'ом.
+
+    ``reconcile_installs`` — подключить best-effort reconcile («нажал Установить
+    в вебе → демон скачал»). Дефолт on; выключается, если юзер не залогинен или
+    флагом. Reconcile НЕ влияет на event-цикл (обёрнут в suppress в runner'е).
+    """
+    import time as _time
+
     cfg = ClientConfig.load()
     access_holder: dict[str, str | None] = {"token": None}
 
-    def _factory(anonymous: bool = False):  # type: ignore[no-untyped-def]
-        # Lazy: каждый цикл подтягиваем актуальный token из keyring (refresh
-        # callback может его обновить).
+    def _current_access() -> str | None:
         access = access_holder["token"]
         if not access and cfg.user_email:
             from skills_hub_cli.config import load_tokens
 
             access, _ = load_tokens(cfg.user_email)
             access_holder["token"] = access
+        return access
+
+    def _factory(anonymous: bool = False):  # type: ignore[no-untyped-def]
+        # Lazy: каждый цикл подтягиваем актуальный token из keyring (refresh
+        # callback может его обновить).
+        access = _current_access()
         if anonymous:
             # POST /events анонимен: при 401 (токен протух) sender ретраит
             # batch без Bearer. Деградировать некуда, если токена и не было.
@@ -67,7 +85,33 @@ def _build_runner(*, interval_seconds: float) -> DaemonRunner:
 
     collector = EventCollector(default_queue_path())
     sender = EventSender(collector, _factory)
-    return DaemonRunner(sender, interval_seconds=interval_seconds)
+
+    reconcile = None
+    if reconcile_installs and cfg.is_logged_in():
+        last_run: dict[str, float] = {"at": 0.0}
+
+        async def _reconcile() -> None:
+            now = _time.monotonic()
+            if now - last_run["at"] < _RECONCILE_MIN_INTERVAL_SECONDS:
+                return
+            last_run["at"] = now
+            access = _current_access()
+            if not access:
+                return
+            # Lazy-import: избегаем циклической зависимости __main__ ↔ daemon.
+            from skills_hub_cli.__main__ import _reconcile_hub_installs
+            from skills_hub_cli.core.agents import get_target
+
+            target = get_target(cfg.agent)
+            await _reconcile_hub_installs(
+                cfg, access, channel="published", agent_target=target,
+            )
+
+        reconcile = _reconcile
+
+    return DaemonRunner(
+        sender, interval_seconds=interval_seconds, reconcile=reconcile
+    )
 
 
 def cmd_daemon_run(

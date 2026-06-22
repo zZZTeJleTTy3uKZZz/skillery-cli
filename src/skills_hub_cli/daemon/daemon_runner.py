@@ -15,11 +15,17 @@ import json
 import os
 import signal
 import sys
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+ReconcileCallback = Callable[[], Awaitable[None]]
+"""Опциональный best-effort хук reconcile-инсталлов («нажал в вебе → демон
+скачал»). Вызывается ПОСЛЕ send_once и оборачивается в suppress(Exception),
+чтобы НЕ ломать event-цикл. None ⇒ демон только шлёт события (как раньше)."""
 
 from skills_hub_cli.daemon.backoff import BackoffPolicy
 from skills_hub_cli.daemon.event_collector import EventCollector
@@ -146,6 +152,7 @@ class DaemonRunner:
         pid_path: Path | None = None,
         state_path: Path | None = None,
         backoff: BackoffPolicy | None = None,
+        reconcile: ReconcileCallback | None = None,
     ) -> None:
         self._sender = sender
         self._interval = max(interval_seconds, 1.0)
@@ -156,6 +163,9 @@ class DaemonRunner:
         # Экспоненциальный backoff между провальными flush'ами (E7): cap 1ч,
         # фактор 2. Пустой цикл (нечего слать) backoff НЕ растит.
         self._backoff = backoff or BackoffPolicy(factor=2.0, max_delay=3600.0)
+        # Best-effort reconcile-инсталлов («нажал в вебе → демон скачал»).
+        # None ⇒ демон только шлёт события (поведение/тесты не меняются).
+        self._reconcile = reconcile
 
     @property
     def state(self) -> DaemonState:
@@ -189,7 +199,7 @@ class DaemonRunner:
         )
 
     async def cycle_once(self) -> dict[str, Any]:
-        """Один такт: send_once + обновление state."""
+        """Один такт: send_once (+ best-effort reconcile) + обновление state."""
         result = await self._sender.send_once()
         self._state.cycles += 1
         self._state.last_cycle_at = datetime.now(UTC).isoformat()
@@ -204,6 +214,12 @@ class DaemonRunner:
             "last_error": result.last_error,
         }
         self._write_state()
+        # Best-effort reconcile ПОСЛЕ event-flush: «нажал Установить в вебе →
+        # демон скачал». Любая ошибка глотается (suppress) — event-цикл и его
+        # backoff-классификация (по send-результату выше) не должны страдать.
+        if self._reconcile is not None:
+            with suppress(Exception):
+                await self._reconcile()
         return self._state.last_send
 
     async def run_forever(self) -> None:
