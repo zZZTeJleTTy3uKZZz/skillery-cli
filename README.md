@@ -1,6 +1,6 @@
 # skills-hub-cli
 
-CLI клиент для Skills Hub — приватного маркетплейса AI-skills.
+CLI клиент для Skillery — приватного маркетплейса AI-skills.
 
 ## Установка
 
@@ -255,7 +255,7 @@ backend / отдельные токены для другой среды.
 
 ## Связано
 
-- [Skills Hub backend](../backend/) — серверная часть, OpenAPI на
+- [Skillery backend](../backend/) — серверная часть, OpenAPI на
   `<base_url>/docs`.
 - [meta-skill bootstrap](./meta_skill/) — навык-обёртка, ставит CLI и
   регистрирует агента; содержит `SKILL.md`, `AGENTS.md`, `commands/` для

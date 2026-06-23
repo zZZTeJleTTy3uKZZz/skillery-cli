@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "skills-hub-cli"
 version = "0.3.0"
-description = "Skills Hub CLI — клиент для приватного маркетплейса AI-skills."
+description = "Skillery CLI — клиент для приватного маркетплейса AI-skills."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Proprietary" }

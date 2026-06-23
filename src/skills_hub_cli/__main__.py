@@ -1,4 +1,4 @@
-"""Skills Hub CLI — модульный typer entrypoint.
+"""Skillery CLI — модульный typer entrypoint.
 
 Команды видны в --help только если у залогиненного пользователя есть
 соответствующий permission в JWT (получен от backend при login).
@@ -2532,7 +2532,7 @@ def build_app() -> typer.Typer:
     cfg = ClientConfig.load()
     is_logged_in = cfg.is_logged_in()
 
-    description_lines = ["Skills Hub CLI"]
+    description_lines = ["Skillery CLI"]
     if is_logged_in:
         is_hub_admin = cfg.is_hub_admin()
         is_skill_creator = cfg.is_skill_creator()

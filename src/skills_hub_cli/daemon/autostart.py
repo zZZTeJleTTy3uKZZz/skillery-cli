@@ -120,7 +120,7 @@ def install_launchd(
 
 # === Linux — systemd user unit ===
 SYSTEMD_TEMPLATE = """[Unit]
-Description=Skills Hub event-tracking daemon
+Description=Skillery event-tracking daemon
 After=network.target
 
 [Service]
@@ -173,7 +173,7 @@ def install_systemd(
 WIN_TASK_TEMPLATE = """<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>Skills Hub event-tracking daemon</Description>
+    <Description>Skillery event-tracking daemon</Description>
   </RegistrationInfo>
   <Triggers>
     <LogonTrigger>
