@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 import typer
+from clikit.command_kit import build_root_app, gated
 from rich.console import Console
 from rich.json import JSON as RichJSON
 from rich.prompt import Prompt
@@ -2554,12 +2555,31 @@ def build_app() -> typer.Typer:
             "коллекции (collection *-local), onboard.[/]"
         )
 
-    app = typer.Typer(
-        no_args_is_help=True,
-        add_completion=True,
+    # cli-kits W6: каркас root-приложения строится через clikit.command_kit
+    # (build_root_app), а НЕ голым typer.Typer. Бренд — "skills-hub". Помощь и
+    # no_args_is_help сохранены прежними.
+    #
+    # ВАЖНО — почему callback и `version`-команда ниже переопределяются/снимаются:
+    # build_root_app задаёт СВОЙ глобальный callback (json-дефолт + --text/--plain
+    # через clikit.output) и регистрирует подкоманду `version`. У этого CLI
+    # ИСТОРИЧЕСКИЙ контракт вывода ДРУГОЙ: дефолт — text, режим инициализируется
+    # пре-проходом по argv ДО построения app (см. init_output_mode выше через
+    # skills_hub_cli.output), а callback — no-op. Чтобы не сломать ни поведение
+    # вывода (is_json()), ни набор команд (`skills-hub --help`), мы:
+    #   1) переопределяем callback историческим (--profile/--json/--version, без
+    #      --text и без clikit-реинициализации вывода);
+    #   2) снимаем авто-зарегистрированную команду `version` (флага --version и
+    #      его callback'а достаточно — набор команд остаётся прежним).
+    app = build_root_app(
+        brand="skills-hub",
         help="\n".join(description_lines),
-        rich_markup_mode="rich",
+        no_args_is_help=True,
     )
+    # Снять авто-`version`-подкоманду из build_root_app: исторически её нет,
+    # версия печатается ТОЛЬКО глобальным флагом --version.
+    app.registered_commands = [
+        c for c in app.registered_commands if c.name != "version"
+    ]
 
     @app.callback()
     def _root(
@@ -2577,7 +2597,11 @@ def build_app() -> typer.Typer:
             is_eager=True,
         ),
     ) -> None:
-        """Корневой callback (профиль + json считаны до построения app)."""
+        """Корневой callback (профиль + json считаны до построения app).
+
+        Переопределяет callback из build_root_app, чтобы сохранить исторический
+        контракт вывода (дефолт text, режим уже инициализирован пре-проходом).
+        """
         _ = profile, json_output, version
 
     # === Always-on ===
@@ -2688,34 +2712,32 @@ def build_app() -> typer.Typer:
 
         # post-команду регистрируем отдельно ниже (нужен comment.post).
         app.command(name="comments")(_comment_mod.cmd_comments_list)
-    if cfg.has_permission("skill.install"):
-        # install зарегистрирован в always-on блоке (см. выше): автономные
-        # источники --path/--from-git не требуют login.
-        # enable/disable/remove/sync/migrate/store(list/path/gc) — тоже в
-        # always-on блоке (фикс 3): lifecycle локального стора живёт без login.
-        app.command(name="update")(cmd_update)
-    if cfg.has_permission("skill.report_issue"):
-        app.command(name="report")(cmd_report)
+    # install зарегистрирован в always-on блоке (см. выше): автономные
+    # источники --path/--from-git не требуют login.
+    # enable/disable/remove/sync/migrate/store(list/path/gc) — тоже в
+    # always-on блоке (фикс 3): lifecycle локального стора живёт без login.
+    # cli-kits W6: одиночные permission-гейты → command_kit.gated.
+    gated(app, permission="skill.install", has_permission=cfg.has_permission,
+          name="update")(cmd_update)
+    gated(app, permission="skill.report_issue", has_permission=cfg.has_permission,
+          name="report")(cmd_report)
 
     # === E23 — Skill review: ratings + comments post ===
     if cfg.has_permission("skill.rate"):
         from skills_hub_cli.commands import rate as _rate_mod
 
         _rate_mod.register(app)
-    if cfg.has_permission("comment.post"):
-        from skills_hub_cli.commands import comment as _comment_mod
-
-        app.command(name="comment")(_comment_mod.cmd_comment_post)
-    # comment-edit / comment-delete — независимые per-permission гейты
+    # comment / comment-edit / comment-delete — независимые per-permission гейты
     # (PATCH/DELETE /comments/{id} адресуют comment по числовому id).
-    if cfg.has_permission("comment.edit_own"):
-        from skills_hub_cli.commands import comment as _comment_mod
+    # cli-kits W6: → command_kit.gated (1:1 одиночные команды).
+    from skills_hub_cli.commands import comment as _comment_mod
 
-        app.command(name="comment-edit")(_comment_mod.cmd_comment_edit)
-    if cfg.has_permission("comment.delete_own"):
-        from skills_hub_cli.commands import comment as _comment_mod
-
-        app.command(name="comment-delete")(_comment_mod.cmd_comment_delete)
+    gated(app, permission="comment.post", has_permission=cfg.has_permission,
+          name="comment")(_comment_mod.cmd_comment_post)
+    gated(app, permission="comment.edit_own", has_permission=cfg.has_permission,
+          name="comment-edit")(_comment_mod.cmd_comment_edit)
+    gated(app, permission="comment.delete_own", has_permission=cfg.has_permission,
+          name="comment-delete")(_comment_mod.cmd_comment_delete)
 
     # === E23 — Support tickets ===
     if cfg.has_permission("ticket.create") or cfg.has_permission("ticket.read"):
@@ -2734,8 +2756,9 @@ def build_app() -> typer.Typer:
     _daemon_mod.register(app)
 
     # === Creator ===
-    if cfg.has_permission("skill.publish"):
-        app.command(name="publish")(cmd_publish)
+    # cli-kits W6: одиночный гейт publish → command_kit.gated.
+    gated(app, permission="skill.publish", has_permission=cfg.has_permission,
+          name="publish")(cmd_publish)
 
     # --- P1 member ---
     # Участники + каталог ролей (C3): members/roles — любой залогиненный
@@ -2785,12 +2808,19 @@ def build_app() -> typer.Typer:
             help="Admin команды (зависят от ваших прав)",
         )
         app.add_typer(admin_app, name="admin")
-        if can_sync:
-            admin_app.command("sync-skill")(cmd_admin_sync)
-        if can_company_create:
-            admin_app.command("company-create")(cmd_admin_company_create)
-        if can_invite:
-            admin_app.command("invite")(cmd_admin_invite)
+        # cli-kits W6: подкоманды admin → command_kit.gated. Предикаты —
+        # предвычисленные булевы (can_invite включает is_hub_admin-fallback),
+        # поэтому has_permission отдаём как lambda над готовым bool (точное
+        # зеркало прежних `if can_x:`).
+        gated(admin_app, permission="sync-skill",
+              has_permission=lambda _p: can_sync,
+              name="sync-skill")(cmd_admin_sync)
+        gated(admin_app, permission="company-create",
+              has_permission=lambda _p: can_company_create,
+              name="company-create")(cmd_admin_company_create)
+        gated(admin_app, permission="invite",
+              has_permission=lambda _p: can_invite,
+              name="invite")(cmd_admin_invite)
 
     # --- P1 company ---
     # sub-app `company` (C2): show/switch — always-on для залогиненного

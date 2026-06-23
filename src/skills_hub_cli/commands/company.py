@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import Any
 
 import typer
+from clikit.command_kit import gated
 from rich.console import Console
 from rich.table import Table
 
@@ -601,12 +602,15 @@ def register(
     )
     company_app.command("show")(cmd_company_show)
     company_app.command("switch")(cmd_company_switch)
-    if can_list:
-        company_app.command("list")(cmd_company_list)
-    if can_create:
-        company_app.command("create")(cmd_company_create)
-    if can_edit:
-        company_app.command("edit")(cmd_company_edit)
+    # cli-kits W6: одиночные permission-гейты → command_kit.gated. Предикаты —
+    # предвычисленные булевы (зеркало backend), поэтому has_permission отдаём
+    # как lambda над готовым флагом.
+    gated(company_app, permission="list", has_permission=lambda _p: can_list,
+          name="list")(cmd_company_list)
+    gated(company_app, permission="create", has_permission=lambda _p: can_create,
+          name="create")(cmd_company_create)
+    gated(company_app, permission="edit", has_permission=lambda _p: can_edit,
+          name="edit")(cmd_company_edit)
     if can_invite_links:
         il_app = typer.Typer(
             no_args_is_help=True,
@@ -621,8 +625,11 @@ def register(
             no_args_is_help=True, help="Granted-каталог компании"
         )
         cat_app.command("list")(cmd_catalog_list)
-        if can_catalog_manage:
-            cat_app.command("grant")(cmd_catalog_grant)
-            cat_app.command("revoke")(cmd_catalog_revoke)
+        gated(cat_app, permission="grant",
+              has_permission=lambda _p: can_catalog_manage,
+              name="grant")(cmd_catalog_grant)
+        gated(cat_app, permission="revoke",
+              has_permission=lambda _p: can_catalog_manage,
+              name="revoke")(cmd_catalog_revoke)
         company_app.add_typer(cat_app, name="catalog")
     app.add_typer(company_app, name="company")

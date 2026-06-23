@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import typer
+from clikit.command_kit import gated
 from rich.console import Console
 from rich.table import Table
 
@@ -320,8 +321,10 @@ def register_ticket(
     ticket_app.command("create")(cmd_ticket_create)
     ticket_app.command("show")(cmd_ticket_show)
     ticket_app.command("reply")(cmd_ticket_reply)
-    if can_update:
-        ticket_app.command("status")(cmd_ticket_status)
+    # cli-kits W6: одиночный гейт status → command_kit.gated (предикат —
+    # предвычисленный can_update).
+    gated(ticket_app, permission="status", has_permission=lambda _p: can_update,
+          name="status")(cmd_ticket_status)
     app.add_typer(ticket_app, name="ticket")
 
     tickets_app = typer.Typer(no_args_is_help=True, help="List support tickets")

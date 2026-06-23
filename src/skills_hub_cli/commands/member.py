@@ -32,6 +32,7 @@ from __future__ import annotations
 from typing import Any
 
 import typer
+from clikit.command_kit import gated
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -836,18 +837,22 @@ def register(
         no_args_is_help=True,
         help="Управление участниками компании (по правам)",
     )
-    if can_invite:
-        member_app.command("invite")(cmd_member_invite)
-    if can_create:
-        member_app.command("create")(cmd_member_create)
-    if can_update:
-        member_app.command("edit")(cmd_member_edit)
-    if can_delete:
-        member_app.command("delete")(cmd_member_delete)
-    if can_remove:
-        member_app.command("remove")(cmd_member_remove)
-    if can_change_role:
-        member_app.command("change-role")(cmd_member_change_role)
+    # cli-kits W6: одиночные permission-гейты → command_kit.gated. Предикаты —
+    # предвычисленные булевы (зеркало backend per-action), has_permission —
+    # lambda над готовым флагом.
+    gated(member_app, permission="invite", has_permission=lambda _p: can_invite,
+          name="invite")(cmd_member_invite)
+    gated(member_app, permission="create", has_permission=lambda _p: can_create,
+          name="create")(cmd_member_create)
+    gated(member_app, permission="edit", has_permission=lambda _p: can_update,
+          name="edit")(cmd_member_edit)
+    gated(member_app, permission="delete", has_permission=lambda _p: can_delete,
+          name="delete")(cmd_member_delete)
+    gated(member_app, permission="remove", has_permission=lambda _p: can_remove,
+          name="remove")(cmd_member_remove)
+    gated(member_app, permission="change-role",
+          has_permission=lambda _p: can_change_role,
+          name="change-role")(cmd_member_change_role)
     if can_lock:
         member_app.command("lock")(cmd_member_lock)
         member_app.command("unlock")(cmd_member_unlock)
@@ -856,10 +861,12 @@ def register(
         member_app.command("suspend")(cmd_member_suspend)
         member_app.command("activate")(cmd_member_activate)
         member_app.command("revoke-sessions")(cmd_member_revoke_sessions)
-    if can_reset_password:
-        member_app.command("reset-password")(cmd_member_reset_password)
-    if can_transfer:
-        member_app.command("transfer")(cmd_member_transfer)
-    if can_export:
-        member_app.command("export")(cmd_member_export)
+    gated(member_app, permission="reset-password",
+          has_permission=lambda _p: can_reset_password,
+          name="reset-password")(cmd_member_reset_password)
+    gated(member_app, permission="transfer",
+          has_permission=lambda _p: can_transfer,
+          name="transfer")(cmd_member_transfer)
+    gated(member_app, permission="export", has_permission=lambda _p: can_export,
+          name="export")(cmd_member_export)
     app.add_typer(member_app, name="member")
