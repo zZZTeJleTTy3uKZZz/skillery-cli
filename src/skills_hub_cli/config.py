@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import tomli_w
+from librarykit.secret_store import SecretStore
 
 KEYRING_SERVICE = "skills-hub-cli"
 
@@ -324,66 +325,97 @@ def _warn_stderr(message: str) -> None:
         print(f"! {one_line}", file=sys.stderr)
 
 
+class _HubSecretStore(SecretStore):
+    """``librarykit.SecretStore``, привязанный к контракту хранения config.py.
+
+    cli-kits W2: secret-слой токенов CLI — это SecretStore из кита-владельца, а
+    не своя копия логики keyring/file-fallback. НО историческая раскладка
+    Skills Hub должна остаться байт-в-байт (иначе залогиненный прод-юзер
+    разлогинится), поэтому подкласс переопределяет три точки SecretStore так,
+    чтобы они шли через существующие config-функции:
+
+    - ``_keyring()``       → ``_try_keyring`` (сохраняет monkeypatch-точку тестов
+                             и единый импорт keyring);
+    - ``_namespace()``     → ``_keyring_namespace`` (namespace остаётся
+                             ``skills-hub-cli[:<profile>]``, а не ``brand`` от
+                             конструктора — старые keyring-ключи читаются);
+    - ``_tokens_file_path``→ ``_tokens_file_path`` config.py (путь остаётся
+                             ``~/.skills-hub/[profiles/<p>/]tokens.toml``, а не
+                             ``platformdirs.user_config_dir``).
+
+    Сами алгоритмы (порядок keyring→file, partial-write cleanup, удаление stale
+    файла, дочитывание файла при пустом keyring) — наследуются от SecretStore.
+    Ключи токенов (``{user}:access``/``{user}:refresh``) и формат tokens.toml у
+    SecretStore идентичны прежним config.py — менять нечего.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(KEYRING_SERVICE, profile=active_profile())
+
+    def _keyring(self):  # type: ignore[override]
+        return _try_keyring()
+
+    def _namespace(self) -> str:  # type: ignore[override]
+        return _keyring_namespace()
+
+    def _tokens_file_path(self) -> Path:  # type: ignore[override]
+        return _tokens_file_path()
+
+
+def _secret_store() -> _HubSecretStore:
+    """Фабрика стора на текущий профиль (профиль читается из env/`set_active_profile`)."""
+    return _HubSecretStore()
+
+
 def save_tokens(user_email: str, access: str, refresh: str) -> None:
+    """Сохранить пару токенов через ``librarykit.SecretStore``.
+
+    SecretStore сам делает: keyring → при ЛЮБОЙ ошибке записи (вкл. CredWrite
+    WinError 1783 на длинных JWT) file-fallback обоих токенов + best-effort
+    cleanup частично записанных keyring-ключей; успешная запись keyring чистит
+    stale tokens.toml. Поверх этого config.py добавляет аккуратный warning в
+    stderr (контракт config.py — у generic-стора его нет): если после save
+    keyring пуст, а файл появился, значит запись ушла в file-fallback.
+    """
     kr = _try_keyring()
+    store = _secret_store()
     if kr is None:
-        _write_tokens_file(user_email, access, refresh)
+        # keyring недоступен вовсе — тихий file-fallback (как раньше, без warn).
+        store.save_tokens(user_email, access, refresh)
         return
+
+    file_existed_before = _tokens_file_path().exists()
+    store.save_tokens(user_email, access, refresh)
+
+    # SecretStore проглатывает ошибку записи keyring молча. Определяем факт
+    # ухода в file-fallback по тому, что в keyring токенов НЕТ, а файл есть.
     ns = _keyring_namespace()
-    try:
-        kr.set_password(ns, f"{user_email}:access", access)  # type: ignore[attr-defined]
-        kr.set_password(ns, f"{user_email}:refresh", refresh)  # type: ignore[attr-defined]
-    except Exception as e:
-        # Windows Credential Manager ограничивает blob 2560 байт (UTF-16 →
-        # ~1280 символов): длинные JWT дают CredWrite WinError 1783. Любая
-        # ошибка записи → file-fallback ОБОИХ токенов. При partial-write
-        # (access записался, refresh упал) НЕ оставляем рассинхрон: возможно
-        # записанные keyring-ключи удаляются best-effort.
-        for key in ("access", "refresh"):
-            with contextlib.suppress(Exception):
-                kr.delete_password(ns, f"{user_email}:{key}")  # type: ignore[attr-defined]
-        _write_tokens_file(user_email, access, refresh)
+    wrote_keyring = False
+    with contextlib.suppress(Exception):
+        wrote_keyring = (
+            kr.get_password(ns, f"{user_email}:access") is not None  # type: ignore[attr-defined]
+        )
+    if not wrote_keyring and _tokens_file_path().exists() and not file_existed_before:
         _warn_stderr(
-            f"keyring недоступен для записи токенов ({e.__class__.__name__}: {e}); "
+            "keyring недоступен для записи токенов; "
             f"токены сохранены в файл {_tokens_file_path()}"
         )
-        return
-    # Запись в keyring успешна — подчищаем устаревший file-fallback, чтобы
-    # load_tokens при недоступном keyring не вернул СТАРУЮ пару токенов.
-    with contextlib.suppress(Exception):
-        _tokens_file_path().unlink(missing_ok=True)
 
 
 def load_tokens(user_email: str) -> tuple[str | None, str | None]:
+    """Прочитать пару токенов через ``librarykit.SecretStore``.
+
+    env-override (``SKILLS_HUB_ACCESS_TOKEN``/``SKILLS_HUB_REFRESH_TOKEN``)
+    читается ПЕРВЫМ — это исторический контракт config.py (SecretStore читает
+    env по ``<BRAND>_*``-ключам с дефисами, что под нашим брендом не совпало
+    бы), поэтому env-ветку обрабатываем здесь до делегации в стор.
+    """
     env_access = os.environ.get("SKILLS_HUB_ACCESS_TOKEN")
     if env_access:
         return env_access, os.environ.get("SKILLS_HUB_REFRESH_TOKEN")
-
-    kr = _try_keyring()
-    if kr is None:
-        return _read_tokens_file()
-    access: str | None = None
-    refresh: str | None = None
-    try:
-        access = kr.get_password(_keyring_namespace(), f"{user_email}:access")  # type: ignore[attr-defined]
-        refresh = kr.get_password(_keyring_namespace(), f"{user_email}:refresh")  # type: ignore[attr-defined]
-    except Exception:
-        access, refresh = None, None
-    if access is None or refresh is None:
-        # keyring установлен, но запись могла уйти в file-fallback (например
-        # CredWrite WinError 1783 на длинных JWT) — дочитываем tokens.toml.
-        file_access, file_refresh = _read_tokens_file()
-        access = access if access is not None else file_access
-        refresh = refresh if refresh is not None else file_refresh
-    return access, refresh
+    return _secret_store().load_tokens(user_email)
 
 
 def clear_tokens(user_email: str) -> None:
     """Чистит ОБА хранилища best-effort: keyring-ключи и file-fallback."""
-    kr = _try_keyring()
-    if kr is not None:
-        for key in ("access", "refresh"):
-            with contextlib.suppress(Exception):
-                kr.delete_password(_keyring_namespace(), f"{user_email}:{key}")  # type: ignore[attr-defined]
-    with contextlib.suppress(Exception):
-        _tokens_file_path().unlink(missing_ok=True)
+    _secret_store().clear_tokens(user_email)
