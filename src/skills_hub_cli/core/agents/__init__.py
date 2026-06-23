@@ -1,9 +1,18 @@
-"""Cross-agent install targets."""
-from skills_hub_cli.core.agents.antigravity import AntigravityTarget
-from skills_hub_cli.core.agents.base import BaseAgentTarget, IAgentTarget
-from skills_hub_cli.core.agents.claude_code import ClaudeCodeTarget
-from skills_hub_cli.core.agents.codex import CodexTarget
-from skills_hub_cli.core.agents.detect import detect_agent, get_target
+"""Тонкий re-export shim: install-targets переехали в кит ``skillkit.targets``.
+
+cli-kits W7: ``IAgentTarget`` + детект агента теперь в ките. Здесь — реэкспорт,
+чтобы прежние импорты ``from skills_hub_cli.core.agents import ...`` (и
+подмодульные ``...agents.claude_code`` / ``...agents.codex``) не ломались.
+"""
+from skillkit.targets import (
+    AntigravityTarget,
+    BaseAgentTarget,
+    ClaudeCodeTarget,
+    CodexTarget,
+    IAgentTarget,
+    detect_agent,
+    get_target,
+)
 
 __all__ = [
     "AntigravityTarget",

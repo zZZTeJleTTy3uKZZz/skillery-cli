@@ -1,8 +1,4 @@
+"""Re-export shim: ``ClaudeCodeTarget`` → ``skillkit.targets.claude_code``."""
 from __future__ import annotations
 
-from skills_hub_cli.core.agents.base import BaseAgentTarget
-
-
-class ClaudeCodeTarget(BaseAgentTarget):
-    name = "claude_code"
-    dirname = ".claude"
+from skillkit.targets.claude_code import ClaudeCodeTarget  # noqa: F401
