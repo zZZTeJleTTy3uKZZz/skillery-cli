@@ -12,7 +12,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import tomli_w
+from clikit.config import AppConfig, interpolate_env
+from librarykit.config_util import atomic_write_text as _atomic_write_text
 from librarykit.secret_store import SecretStore
+from pydantic import Field
 
 KEYRING_SERVICE = "skills-hub-cli"
 
@@ -62,6 +65,42 @@ def _keyring_namespace() -> str:
 DEFAULT_CONFIG_DIR = _default_config_dir()
 DEFAULT_CONFIG_FILE = _default_config_file()
 DEFAULT_BASE_URL = _default_base_url()
+
+
+class _HubAppConfig(AppConfig):
+    """``clikit.config.AppConfig`` для конфиг-слоя ClientConfig (cli-kits W4).
+
+    Несёт все ПЕРСИСТИМЫЕ поля ClientConfig как typed-поля pydantic — это
+    переводит конфиг-слой CLI на каноничную модель кита и даёт fail-fast
+    валидацию типов из коробки (``extra='ignore'`` базового AppConfig делает
+    load forward-compatible: незнакомые/legacy-ключи в TOML игнорируются, а не
+    падают). ``ClientConfig.load`` инстанцирует эту модель через
+    ``model_validate`` (после BOM-safe чтения файла + ``interpolate_env``), а
+    ``ClientConfig.save`` пишет TOML атомарно (writer кита).
+
+    Поля-предикаты (``is_hub_admin`` и т.п.), derive-методы и токены остаются на
+    ClientConfig — это лишь сериализационный слой. ``output_format`` объявлен с
+    дефолтом ``"text"`` (а не ``None`` базового AppConfig) — историческое
+    значение CLI; пустой ``base_url`` доводится до env-дефолта
+    (``SKILLS_HUB_BASE_URL``) уже в ClientConfig ``__post_init__``.
+    """
+
+    # base_url / output_format / mcp / adapters унаследованы от AppConfig;
+    # переопределяем дефолт output_format на исторический "text".
+    output_format: str = "text"
+    user_email: str | None = None
+    agent: str | None = None
+    permissions: list[str] = Field(default_factory=list)
+    company_id: str | None = None
+    role_id: str | None = None
+    access_expires_at: str | None = None
+    auto_update: bool = True
+    auto_update_cooldown_min: int = 60
+    last_auto_update_at: str | None = None
+    default_install_scope: str = "project"
+    default_project_dir: str | None = None
+    store_dir: str | None = None
+    web_ui_url: str | None = None
 
 
 @dataclass
@@ -130,30 +169,52 @@ class ClientConfig:
 
     @classmethod
     def load(cls, path: Path | None = None) -> ClientConfig:
+        """Прочитать конфиг поверх ``clikit.config.AppConfig`` (cli-kits W4).
+
+        Конфиг-слой ClientConfig — это модель ``_HubAppConfig`` (подкласс
+        ``AppConfig``): даёт fail-fast валидацию типов и env-интерполяцию
+        ``${VAR}`` из коробки. Чтение нашего канонического файла
+        (``~/.skills-hub/[profiles/<p>/]config.toml``) делаем сами и BOM-safe
+        (``utf-8-sig``) — историческое поведение CLI (некоторые Windows-редакторы
+        пишут BOM); затем интерполяция и ``model_validate`` (``extra='ignore'`` —
+        незнакомые/legacy-ключи не ломают load).
+
+        Историческая семантика сохранена: отсутствующий файл → дефолты;
+        ``base_url`` из файла приоритетнее env-дефолта ``SKILLS_HUB_BASE_URL``
+        (env лишь подставляет дефолт, когда поля нет — это делает
+        ``__post_init__`` / ``effective_store_dir``).
+        """
         actual_path = path or _default_config_file()
         if not actual_path.exists():
             return cls()
-        raw = actual_path.read_text(encoding="utf-8-sig")
-        data = tomllib.loads(raw)
+        raw = tomllib.loads(actual_path.read_text(encoding="utf-8-sig"))
+        ac = _HubAppConfig.model_validate(interpolate_env(raw))
+        base_url = ac.base_url or _default_base_url()
         return cls(
-            base_url=data.get("base_url", _default_base_url()),
-            user_email=data.get("user_email"),
-            agent=data.get("agent"),
-            permissions=list(data.get("permissions", [])),
-            company_id=data.get("company_id"),
-            role_id=data.get("role_id"),
-            access_expires_at=data.get("access_expires_at"),
-            auto_update=bool(data.get("auto_update", True)),
-            auto_update_cooldown_min=int(data.get("auto_update_cooldown_min", 60)),
-            last_auto_update_at=data.get("last_auto_update_at"),
-            output_format=str(data.get("output_format", "text")),
-            default_install_scope=str(data.get("default_install_scope", "project")),
-            default_project_dir=data.get("default_project_dir"),
-            store_dir=data.get("store_dir"),
-            web_ui_url=data.get("web_ui_url"),
+            base_url=base_url,
+            user_email=ac.user_email,
+            agent=ac.agent,
+            permissions=list(ac.permissions),
+            company_id=ac.company_id,
+            role_id=ac.role_id,
+            access_expires_at=ac.access_expires_at,
+            auto_update=bool(ac.auto_update),
+            auto_update_cooldown_min=int(ac.auto_update_cooldown_min),
+            last_auto_update_at=ac.last_auto_update_at,
+            output_format=str(ac.output_format or "text"),
+            default_install_scope=str(ac.default_install_scope or "project"),
+            default_project_dir=ac.default_project_dir,
+            store_dir=ac.store_dir,
+            web_ui_url=ac.web_ui_url,
         )
 
     def save(self, path: Path | None = None) -> None:
+        """Записать конфиг (TOML ``~/.skills-hub/[profiles/<p>/]config.toml``).
+
+        Формат и набор ключей — байт-в-байт прежние (омит пустых опц.полей),
+        запись атомарная (``clikit``/``librarykit`` writer вместо прямого
+        ``write_text``). Каталог создаётся при отсутствии.
+        """
         actual_path = path or _default_config_file()
         actual_path.parent.mkdir(parents=True, exist_ok=True)
         data: dict[str, object] = {"base_url": self.base_url}
@@ -181,7 +242,7 @@ class ClientConfig:
             data["store_dir"] = self.store_dir
         if self.web_ui_url:
             data["web_ui_url"] = self.web_ui_url
-        actual_path.write_text(tomli_w.dumps(data), encoding="utf-8")
+        _atomic_write_text(actual_path, tomli_w.dumps(data))
 
     def has_permission(self, permission_key: str) -> bool:
         if "hub.admin" in self.permissions:

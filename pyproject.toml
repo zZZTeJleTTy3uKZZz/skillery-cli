@@ -19,6 +19,7 @@ dependencies = [
     "pydantic>=2.9",
     "pathspec>=0.12.0",
     "s-librarykit>=0.1.4",
+    "s-clikit>=0.1.4",
 ]
 
 [project.optional-dependencies]
