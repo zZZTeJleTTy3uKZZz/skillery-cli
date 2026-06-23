@@ -4,6 +4,15 @@
   ходит к своему backend напрямую).
 - Auto-refresh при 401: если есть `on_token_refresh` callback, при
   первом 401-ответе один раз пробует refresh + повторяет запрос.
+
+cli-kits W3: сетевой choke-point — ``librarykit.transport.HttpxTransport``
+(вместо прямого ``httpx.AsyncClient``). Транспорт кита несёт ОДНУ сетевую
+попытку (его собственный stamina-retry выключен политикой ``total=0``), а
+method-aware retry (W1: ретраим только идемпотентные методы), 401-refresh и
+маппинг ошибок в :class:`ApiError` остаются ЗДЕСЬ — это CLI-специфика, которую
+тонкий REST-клиент кита не покрывает (метод-осведомлённость, tuple-refresh,
+наш подкласс ошибки, multipart, ``get_text``). Сетевой сбой транспорт кита
+оборачивает в доменный ``librarykit.errors.TransportError``.
 """
 from __future__ import annotations
 
@@ -14,7 +23,9 @@ from typing import Any
 
 import httpx
 from librarykit.errors import CliError as _LkCliError
+from librarykit.errors import TransportError as _LkTransportError
 from librarykit.retry import RetryPolicy, SimpleRetryPolicy
+from librarykit.transport import HttpxTransport
 
 from skills_hub_cli import __version__ as _CLI_VERSION
 
@@ -30,13 +41,26 @@ USER_AGENT = f"skills-hub-cli/{_CLI_VERSION}"
 _IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 # Единая политика повторов к backend (канон librarykit/clikit): фиксированный
-# backoff, ретраебельные статусы 5xx+429, повтор на сетевых ошибках httpx.
+# backoff, ретраебельные статусы 5xx+429, повтор на сетевых ошибках.
 # Бюджет попыток = len(backoff)+1 (первичная + повторы).
-RETRY_POLICY = SimpleRetryPolicy()
+#
+# cli-kits W3: сетевые сбои теперь приходят как ``librarykit.errors.
+# TransportError`` (транспорт кита оборачивает httpx-ошибку), а не как голый
+# ``httpx.TransportError`` — поэтому добавляем доменный тип в ``exceptions``
+# политики, чтобы ``should_retry`` по-прежнему признавал сетевой сбой
+# ретраебельным (оба типа — на случай прямого httpx-исключения).
+RETRY_POLICY = SimpleRetryPolicy(
+    exceptions=(_LkTransportError, httpx.TransportError)
+)
 
 # Только для разбора заголовков паузы (Retry-After / *-RateLimit-Reset) —
 # header-driven логика живёт в librarykit.RetryPolicy, не дублируем парсер.
 _HEADER_POLICY = RetryPolicy()
+
+# cli-kits W3: транспорт кита делает ОДНУ сетевую попытку — повторы драйвит наш
+# method-aware ``_send`` (W1), а не stamina внутри транспорта (он не различает
+# идемпотентность метода). ``total=0`` ⇒ ``stamina_attempts()==1`` (без повторов).
+_TRANSPORT_NO_RETRY = RetryPolicy(total=0)
 
 
 def _retry_after_seconds(resp: httpx.Response) -> float | None:
@@ -99,11 +123,22 @@ class HubClient:
         trust_env = bool(
             int(os.environ.get("SKILLS_HUB_USE_SYSTEM_PROXY", "0") or "0")
         )
-        self._client = http_client or httpx.AsyncClient(
-            base_url=base_url,
-            timeout=timeout,
-            trust_env=trust_env,
-        )
+        # cli-kits W3: сетевой слой — librarykit ``HttpxTransport``. Готовый
+        # ``http_client`` (для тестов) внедряем в транспорт; иначе транспорт сам
+        # поднимает ``AsyncClient`` под наш ``base_url``/``timeout``/``trust_env``.
+        # Retry транспорта выключен (``_TRANSPORT_NO_RETRY``) — повторы драйвит
+        # наш method-aware ``_send`` (W1).
+        if http_client is not None:
+            self._transport = HttpxTransport(
+                retry=_TRANSPORT_NO_RETRY, http_client=http_client
+            )
+        else:
+            self._transport = HttpxTransport(
+                base_url=base_url,
+                retry=_TRANSPORT_NO_RETRY,
+                timeout=timeout,
+                trust_env=trust_env,
+            )
 
     def _auth_headers(self) -> dict[str, str]:
         # H-5: всегда шлём CLI User-Agent — backend помечает сессию client_type=
@@ -123,7 +158,7 @@ class HubClient:
         self._access_token = token
 
     async def close(self) -> None:
-        await self._client.aclose()
+        await self._transport.aclose()
 
     def _parse_error_response(self, resp: httpx.Response) -> ApiError:
         """Единый разбор ошибочного ответа (>=400) → ApiError.
@@ -216,10 +251,13 @@ class HubClient:
         last_resp: httpx.Response | None = None
         while True:
             try:
-                resp = await self._client.request(
+                resp = await self._transport.request(
                     method, url, headers=headers, **kwargs
                 )
-            except httpx.TransportError as exc:
+            except _LkTransportError as exc:
+                # Сетевой сбой: транспорт кита обернул httpx-ошибку в доменный
+                # ``librarykit.errors.TransportError``. Идемпотентные методы
+                # повторяем (W1), иначе — пробрасываем доменную ошибку наверх.
                 if idempotent and policy.should_retry(attempt, None, exc):
                     await asyncio.sleep(policy.delay(attempt))
                     attempt += 1
@@ -889,7 +927,7 @@ class HubClient:
             params["company_id"] = company_id
         if ids:
             params["ids"] = ids
-        resp = await self._client.request(
+        resp = await self._transport.request(
             "GET",
             "/users/export.csv",
             params=params,
@@ -1038,7 +1076,7 @@ class HubClient:
             ("screenshots", (name, content, "application/octet-stream"))
             for name, content in screenshots
         ]
-        resp = await self._client.request(
+        resp = await self._transport.request(
             "POST",
             f"/skills/{skill_id}/comments/multipart",
             data=data,
@@ -1194,7 +1232,7 @@ class HubClient:
             ("screenshots", (name, content, "application/octet-stream"))
             for name, content in screenshots
         ]
-        resp = await self._client.request(
+        resp = await self._transport.request(
             "POST",
             f"/support/tickets/{ticket_id}/messages/multipart",
             data=data,

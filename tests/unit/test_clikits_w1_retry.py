@@ -138,14 +138,19 @@ async def test_post_does_not_retry_on_5xx() -> None:
 
 @pytest.mark.asyncio
 async def test_delete_does_not_retry_on_network_error() -> None:
-    """DELETE не идемпотентен в нашем контракте → сетевая ошибка не повторяется,
-    а маппится в доменный TransportError (подкласс ApiError-иерархии китов)."""
+    """DELETE не идемпотентен в нашем контракте → сетевая ошибка не повторяется.
+
+    cli-kits W3: сетевой слой переехал на ``librarykit.transport.HttpxTransport``,
+    который оборачивает ``httpx.TransportError`` в доменный
+    ``librarykit.errors.TransportError`` (единая иерархия ошибок китов). Тип на
+    выходе теперь доменный — потребители (команды) на httpx-тип не завязаны.
+    """
     with respx.mock(base_url="http://localhost:8000") as router:
         route = router.delete("/comments/5")
         route.side_effect = httpx.ConnectError("down")
         client = HubClient(base_url="http://localhost:8000", access_token="t")
         try:
-            with pytest.raises(httpx.TransportError):
+            with pytest.raises(lk_errors.TransportError):
                 await client.delete_comment("5")
         finally:
             await client.close()
@@ -156,13 +161,18 @@ async def test_delete_does_not_retry_on_network_error() -> None:
 @pytest.mark.asyncio
 async def test_get_network_error_exhausts_budget_raises_transport_error() -> None:
     """Сетевая ошибка на КАЖДОЙ попытке GET → после бюджета пробрасываем
-    httpx.TransportError (исходное), бюджет конечен (не бесконечный цикл)."""
+    доменный TransportError, бюджет конечен (не бесконечный цикл).
+
+    cli-kits W3: транспорт кита оборачивает ``httpx.TransportError`` в
+    ``librarykit.errors.TransportError`` — его и пробрасываем по исчерпании
+    method-aware retry-бюджета.
+    """
     with respx.mock(base_url="http://localhost:8000") as router:
         route = router.get("/skills")
         route.side_effect = httpx.ConnectError("down")
         client = HubClient(base_url="http://localhost:8000", access_token="t")
         try:
-            with pytest.raises(httpx.TransportError):
+            with pytest.raises(lk_errors.TransportError):
                 await client.list_skills()
         finally:
             await client.close()
