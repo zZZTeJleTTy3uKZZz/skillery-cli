@@ -2644,6 +2644,13 @@ def build_app() -> typer.Typer:
 
     _onboard_mod.register(app)
 
+    # --- discovery suggest ---
+    # `skills-hub suggest "<query>"` — подбор навыков по свободному запросу.
+    # ALWAYS-ON, read-only: локальный стор всегда, hub-поиск при сессии.
+    from skills_hub_cli.commands import suggest as _suggest_mod
+
+    _suggest_mod.register(app)
+
     # --- E2 scaffold ---
     # `skills-hub new <slug> --kind ...` — генерация скелета навыка. ALWAYS-ON:
     # локальная генерация на диск, сети/логина не требует.
