@@ -7,12 +7,14 @@
 """
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 from typing import Any
 
 import httpx
+from librarykit.errors import CliError as _LkCliError
+from librarykit.retry import RetryPolicy, SimpleRetryPolicy
 
 from skills_hub_cli import __version__ as _CLI_VERSION
 
@@ -23,13 +25,60 @@ RefreshCallback = Callable[[], Awaitable[tuple[str, str] | None]]
 # (``skills-hub-cli`` ⇒ client_type='cli'). Версия — из метаданных пакета.
 USER_AGENT = f"skills-hub-cli/{_CLI_VERSION}"
 
+# cli-kits W1: только эти HTTP-методы идемпотентны → их безопасно повторять.
+# Мутации (POST/PATCH/PUT/DELETE) НЕ ретраим — повтор рискует двойным эффектом.
+_IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
-@dataclass
-class ApiError(Exception):
-    status_code: int
-    code: str
-    message: str
-    details: dict[str, Any]
+# Единая политика повторов к backend (канон librarykit/clikit): фиксированный
+# backoff, ретраебельные статусы 5xx+429, повтор на сетевых ошибках httpx.
+# Бюджет попыток = len(backoff)+1 (первичная + повторы).
+RETRY_POLICY = SimpleRetryPolicy()
+
+# Только для разбора заголовков паузы (Retry-After / *-RateLimit-Reset) —
+# header-driven логика живёт в librarykit.RetryPolicy, не дублируем парсер.
+_HEADER_POLICY = RetryPolicy()
+
+
+def _retry_after_seconds(resp: httpx.Response) -> float | None:
+    """Рекомендованная пауза из заголовков ответа (или ``None``).
+
+    Делегирует разбор ``Retry-After`` / rate-limit-reset в librarykit, чтобы не
+    плодить собственный парсер HTTP-date/секунд.
+    """
+    return _HEADER_POLICY.retry_after_delay(resp)
+
+
+class ApiError(_LkCliError):
+    """HTTP-ошибка CLI-транспорта (обратносовместимый публичный контракт).
+
+    cli-kits W1: теперь подкласс ``librarykit.errors.CliError`` (== librarykit
+    ``ApiError``) — попадает в общую иерархию ошибок китов, оставаясь при этом
+    100% совместимым со СВОИМ прежним контрактом, на который завязаны команды:
+    конструктор ``ApiError(status_code=, code=, message=, details=)``, атрибуты
+    ``.status_code`` / ``.code`` / ``.message`` / ``.details`` и
+    ``str(err) == "[<status>/<code>] <message>"``.
+
+    ``details`` зеркалится в librarykit-поле ``data`` (и наоборот), чтобы общий
+    код китов, читающий ``.data``, видел те же детали.
+    """
+
+    def __init__(
+        self,
+        status_code: int,
+        code: str,
+        message: str,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        details = details or {}
+        super().__init__(
+            code,
+            message,
+            status_code=status_code,
+            data=details,
+        )
+        # `status_code`/`code`/`message`/`data` уже выставлены базовым CliError;
+        # `details` — наш исторический алиас для `data`.
+        self.details = details
 
     def __str__(self) -> str:
         return f"[{self.status_code}/{self.code}] {self.message}"
@@ -148,6 +197,49 @@ class HubClient:
             details=data.get("details", {}),
         )
 
+    async def _send(
+        self, method: str, url: str, headers: dict[str, str], **kwargs: Any
+    ) -> httpx.Response:
+        """Один HTTP-вызов с ретраями librarykit (cli-kits W1).
+
+        Повторяем ТОЛЬКО идемпотентные методы (``GET``/``HEAD``/``OPTIONS``) и
+        ТОЛЬКО на ретраебельных причинах: ретраебельный статус (5xx/429) ИЛИ
+        сетевая ошибка httpx (``TransportError``). Мутации (POST/PATCH/PUT/
+        DELETE) и 4xx-кроме-429 не повторяются. На 429 уважаем ``Retry-After``
+        (политика читает заголовок), иначе — табличный backoff. По исчерпании
+        бюджета: пробрасываем последнее сетевое исключение либо отдаём последний
+        ответ (его разберёт ``_parse_error_response`` выше).
+        """
+        idempotent = method.upper() in _IDEMPOTENT_METHODS
+        policy = RETRY_POLICY
+        attempt = 0
+        last_resp: httpx.Response | None = None
+        while True:
+            try:
+                resp = await self._client.request(
+                    method, url, headers=headers, **kwargs
+                )
+            except httpx.TransportError as exc:
+                if idempotent and policy.should_retry(attempt, None, exc):
+                    await asyncio.sleep(policy.delay(attempt))
+                    attempt += 1
+                    continue
+                raise
+            last_resp = resp
+            if (
+                idempotent
+                and resp.status_code >= 400
+                and policy.should_retry(attempt, resp.status_code, None)
+            ):
+                # 429/5xx — пауза из Retry-After (если есть), иначе backoff.
+                retry_after = _retry_after_seconds(resp)
+                delay = retry_after if retry_after is not None else policy.delay(attempt)
+                await asyncio.sleep(delay)
+                attempt += 1
+                continue
+            return resp
+        return last_resp  # pragma: no cover — недостижимо (цикл всегда return/raise)
+
     async def _request(self, method: str, url: str, **kwargs: Any) -> Any:
         extra_headers = kwargs.pop("headers", None) or {}
 
@@ -156,15 +248,13 @@ class HubClient:
             h.update(extra_headers)
             return h
 
-        resp = await self._client.request(method, url, headers=_merged_headers(), **kwargs)
+        resp = await self._send(method, url, _merged_headers(), **kwargs)
         if resp.status_code == 401 and self._on_refresh is not None:
             # Auto-refresh: попробуем обменять refresh → повторить запрос
             new_tokens = await self._on_refresh()
             if new_tokens is not None:
                 self._access_token = new_tokens[0]
-                resp = await self._client.request(
-                    method, url, headers=_merged_headers(), **kwargs
-                )
+                resp = await self._send(method, url, _merged_headers(), **kwargs)
             # Если refresh не сработал — оставим 401, ниже выбросим понятный ApiError.
         if resp.status_code >= 400:
             raise self._parse_error_response(resp)
