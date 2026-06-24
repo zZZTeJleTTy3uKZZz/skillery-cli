@@ -126,6 +126,45 @@ async def _hub_candidates(
     return list(by_slug.values()), degraded
 
 
+async def _hub_candidates_semantic(
+    cfg: ClientConfig, access: str, query: str, limit: int
+) -> tuple[list[dict[str, Any]], bool]:
+    """#242 AI-ветка: один POST /skills/search-semantic вместо per-term поиска.
+
+    Возвращает ``(candidates, degraded)``. Каждый кандидат несёт ``score`` и
+    ``reason`` ОТ БЭКА (семантическая объяснимость), а также ``matched_on=[]``
+    (лексических совпадений тут нет — reason заменяет). ``degraded=True`` при
+    ошибке (токен/сеть/нет эндпоинта) — команда деградирует на локальную выдачу,
+    не валится.
+    """
+    top_k = max(1, min(limit, _MAX_HUB_SIZE))
+    client = _common.make_client(cfg, access)
+    out: list[dict[str, Any]] = []
+    try:
+        try:
+            resp = await client.search_skills_semantic(query=query, top_k=top_k)
+        except Exception:  # noqa: BLE001 — семантика недоступна ≠ провал команды
+            return [], True
+        for m in (resp or {}).get("matches") or []:
+            slug = m.get("slug") or str(m.get("skill_id") or "")
+            if not slug:
+                continue
+            out.append(
+                {
+                    "slug": slug,
+                    "title": m.get("title") or slug,
+                    "version": None,
+                    "score": float(m.get("score") or 0.0),
+                    "matched_on": [],
+                    "reason": m.get("reason") or "",
+                    "signals": normalize_query(query),
+                }
+            )
+    finally:
+        await client.close()
+    return out, False
+
+
 def _latest_version(item: dict[str, Any]) -> str | None:
     """Лучшая версия из hub-DTO (``versions[].semver``), иначе ``version``."""
     versions = item.get("versions") or []
@@ -156,20 +195,28 @@ def _render(p: dict[str, Any]) -> None:
     if not suggestions:
         console.print("[yellow]Подходящих навыков не найдено[/]")
     else:
+        # #242: колонка «причина» показывается, только если хоть один кандидат
+        # её несёт (семантический режим --ai) — лексическая выдача её не имеет.
+        show_reason = any(s.get("reason") for s in suggestions)
         table = Table(title=f"Предложения ({len(suggestions)})")
         table.add_column("slug")
         table.add_column("источник")
         table.add_column("score", justify="right")
         table.add_column("статус")
         table.add_column("в проекте")
+        if show_reason:
+            table.add_column("причина")
         for s in suggestions:
-            table.add_row(
+            row = [
                 s["slug"],
                 s["source"],
                 f"{s['score']:.1f}",
                 s["status"],
                 "✓" if s["already_enabled"] else "",
-            )
+            ]
+            if show_reason:
+                row.append(s.get("reason") or "")
+            table.add_row(*row)
         console.print(table)
         console.print(
             "[dim]Включить: команда в поле install_cmd "
@@ -189,6 +236,15 @@ def cmd_suggest(
     limit: int = typer.Option(
         10, "--limit", help="Сколько кандидатов тянуть с хаба на term (капится 20)"
     ),
+    ai: bool = typer.Option(
+        False,
+        "--ai",
+        help=(
+            "#242: семантический подбор по хабу (POST /skills/search-semantic) "
+            "вместо лексического. Требует логина; локальный стор остаётся на "
+            "лексике (оффлайн-фолбэк). При ошибке/без логина — деградирует."
+        ),
+    ),
     agent: str | None = typer.Option(None, "--agent"),
 ) -> None:
     """Подобрать навыки под свободный запрос (стор + хаб). Read-only.
@@ -197,6 +253,9 @@ def cmd_suggest(
     (``install_cmd``). Без логина работает по локальному стору (это штатно);
     hub-поиск включается при наличии сессии и деградирует при ошибке токена.
     """
+    # При прямом вызове (тесты) необъявленный флаг приходит как typer.OptionInfo
+    # (truthy) — коэрсим к строгому bool, чтобы --ai включался ТОЛЬКО явно.
+    ai = ai is True
     cfg = ClientConfig.load()
     actual_project = (
         project
@@ -212,11 +271,13 @@ def cmd_suggest(
 
     access = ""
     logged_in = cfg.is_logged_in()
-    if terms and logged_in:
+    # #242: в AI-режиме семантика гоняется по сырому query (а не terms) — токен
+    # нужен, даже если лексическая нормализация дала пусто.
+    if logged_in and (terms or ai):
         token, _ = load_tokens(cfg.user_email or "")
         access = token or ""
 
-    if not terms:
+    if not terms and not ai:
         notes.append(
             "Запрос не дал значимых слов — уточните (например: «stripe платежи»)."
         )
@@ -224,7 +285,23 @@ def cmd_suggest(
     async def _do() -> None:
         nonlocal notes
         hub: list[dict[str, Any]] = []
-        if terms and access:
+        if ai and access:
+            # #242 AI-ветка: семантический подбор по хабу (один POST). Локальный
+            # стор остаётся лексическим (оффлайн-фолбэк) — он уже посчитан выше.
+            hub, degraded = await _hub_candidates_semantic(
+                cfg, access, query, limit
+            )
+            if degraded:
+                notes.append(
+                    "Семантический поиск по хабу не удался (токен/сеть/не "
+                    "поддержан) — показаны локальные/лексические кандидаты."
+                )
+        elif ai and not logged_in:
+            notes.append(
+                "--ai требует логина (семантика считается на хабе). "
+                "Залогиньтесь (skills-hub login); пока — локальный стор."
+            )
+        elif terms and access:
             hub, degraded = await _hub_candidates(cfg, access, terms, limit)
             if degraded:
                 notes.append(
@@ -242,6 +319,14 @@ def cmd_suggest(
 
         # merge теряет score/matched_on/title/version — добираем из источников
         # (local приоритетнее: он несёт local_boost и материализованную версию).
+        # #242: ``reason`` (семантическая объяснимость) живёт ТОЛЬКО на hub-
+        # кандидатах — фиксируем отдельной картой, чтобы local-перетирание не
+        # стёрло его у both-источников.
+        reason_by_slug: dict[str, str] = {
+            item["slug"]: item.get("reason") or ""
+            for item in hub
+            if item.get("reason")
+        }
         meta_by_slug: dict[str, dict[str, Any]] = {}
         for item in hub:
             meta_by_slug[item["slug"]] = item
@@ -266,6 +351,9 @@ def cmd_suggest(
                     "source": entry["source"],
                     "score": float(src.get("score") or 0.0),
                     "matched_on": src.get("matched_on") or [],
+                    # #242: обратносовместимое расширение контракта — reason
+                    # опционален (пусто для чисто-лексической выдачи).
+                    "reason": reason_by_slug.get(slug, src.get("reason") or ""),
                     "status": status,
                     "already_enabled": bool(entry.get("already")),
                     "version": src.get("version"),

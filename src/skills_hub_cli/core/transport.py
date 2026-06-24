@@ -1420,3 +1420,20 @@ class HubClient:
             "/skills",
             params={"q": q, "size": size, "page": page, "channel": channel},
         )
+
+    async def search_skills_semantic(
+        self, *, query: str, top_k: int = 10
+    ) -> dict[str, Any]:
+        """POST /skills/search-semantic — семантический подбор навыков (#242).
+
+        Сверено с ``routes/skills.py::search_skills_semantic``: тело
+        ``{query, top_k}`` (``top_k`` капится бэком на 50), ответ —
+        ``{query, matches: [{skill_id, slug, score, reason, title}]}``. RBAC
+        тот же, что у ``GET /skills`` (видимость несёт backend); требует логина
+        для restricted-видимости, анонимно отдаёт только public.
+        """
+        return await self._request(
+            "POST",
+            "/skills/search-semantic",
+            json={"query": query, "top_k": top_k},
+        )
