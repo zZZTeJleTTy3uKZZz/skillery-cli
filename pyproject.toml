@@ -23,11 +23,8 @@ dependencies = [
     "s-skillkit>=0.1.0",
 ]
 
-# Локальные path-источники китов для разработки (editable). Прод-сборка тянет
-# s-skillkit с PyPI после публикации (см. PUBLISH-хвост: публикация s-skillkit —
-# отдельный шаг по закону порядка «опубликуй кит → потом мигрируй потребителя»).
-[tool.uv.sources]
-s-skillkit = { path = "../../skillkit", editable = true }
+# Все киты (s-librarykit/s-clikit/s-skillkit) тянутся с PyPI — CLI распространяем
+# без локальных path-источников (s-skillkit опубликован 2026-06-24).
 
 [project.optional-dependencies]
 dev = [
