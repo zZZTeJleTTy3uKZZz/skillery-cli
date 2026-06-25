@@ -705,16 +705,16 @@ wheels = [
 
 [[package]]
 name = "s-skillkit"
-version = "0.1.0"
+version = "0.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pathspec" },
     { name = "platformdirs" },
     { name = "tomli-w" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/97/32/00909f5c0c8f49dfd752f2a89aec43eea6ef6e3b01e4c0daeb6dd7486539/s_skillkit-0.1.0.tar.gz", hash = "sha256:39390d1256bf28b45bfbc284889ade9d40651e7bcfb8d7b15e46db0829e61fab", size = 56260, upload-time = "2026-06-24T12:40:06.958Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/df/87/16d5d3b0e07b22d4f18520689f21535bb8f34d90a2d4acb66de42aa2c6f2/s_skillkit-0.1.1.tar.gz", hash = "sha256:678d155e0f3b2a2cb109c2f2f94e375df93a25bfe8edb842abea4d502d4a573e", size = 56778, upload-time = "2026-06-25T17:00:13.378Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ce/b3/5c2b7de479e6a1bead6db31029c8d2dd94acddac75190ec6160082dcba9a/s_skillkit-0.1.0-py3-none-any.whl", hash = "sha256:20dab6cc207666b846b2d6b169bba6adcd518f9be8db7e55c6335a80f642d02f", size = 48817, upload-time = "2026-06-24T12:40:05.696Z" },
+    { url = "https://files.pythonhosted.org/packages/34/e9/10f200235ca54c4898e1ee20b08e574f7fc77bc0bfcae7459b39f02c0160/s_skillkit-0.1.1-py3-none-any.whl", hash = "sha256:bf60fd1e60ecef9efdb49a7806966cb2fdb303aa6d838e56bd7e755581261362", size = 49035, upload-time = "2026-06-25T17:00:12.21Z" },
 ]
 
 [[package]]
@@ -777,7 +777,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
     { name = "s-clikit", specifier = ">=0.1.4" },
     { name = "s-librarykit", specifier = ">=0.1.4" },
-    { name = "s-skillkit", specifier = ">=0.1.0" },
+    { name = "s-skillkit", specifier = ">=0.1.1" },
     { name = "tomli-w", specifier = ">=1.0" },
     { name = "typer", specifier = ">=0.15" },
 ]
