@@ -800,7 +800,9 @@ def cmd_list(
         finally:
             await client.close()
 
-        def _render(rows: list) -> None:
+        def _render(payload) -> None:
+            # backend отдаёт envelope {"items": [...]} (+ pagination); разворачиваем
+            rows = payload.get("items", payload) if isinstance(payload, dict) else payload
             table = Table(title=f"Доступные skills (channel={channel})")
             table.add_column("slug")
             table.add_column("title")
@@ -810,7 +812,9 @@ def cmd_list(
                 table.add_row(
                     s["slug"],
                     s["title"],
-                    ", ".join(s.get("tags", [])),
+                    # tags — объекты {id,label,...}, не строки
+                    ", ".join(t.get("label", "") if isinstance(t, dict) else str(t)
+                              for t in s.get("tags", [])),
                     ", ".join(v["semver"] for v in s.get("versions", [])),
                 )
             if not rows:
@@ -851,7 +855,7 @@ def cmd_show(
         def _render(d: dict) -> None:
             console.print(f"[bold]{d['title']}[/] ({d['slug']})")
             console.print(f"  description: {d['description']}")
-            console.print(f"  tags:        {', '.join(d['tags']) or '—'}")
+            console.print(f"  tags:        {', '.join(t.get('label', '') if isinstance(t, dict) else str(t) for t in d.get('tags', [])) or '—'}")
             console.print(f"  repo:        {d.get('repo_url') or '—'}")
             console.print(f"  is_super:    {d['is_super']}")
             console.print("  versions:")
