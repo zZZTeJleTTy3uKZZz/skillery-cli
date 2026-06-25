@@ -178,6 +178,18 @@ def _setup_auto_update_env(
 
     def _fake_install(self, **kw):
         install_calls.append(kw)
+        # Результат install — объект с атрибутами, которые читает _apply_tooling
+        # (slug/skill_id/store_dir) и guard (skipped). НЕ skipped по умолчанию.
+        return type(
+            "_Res",
+            (),
+            {
+                "slug": kw.get("slug"),
+                "skill_id": kw.get("skill_id"),
+                "store_dir": None,
+                "skipped": False,
+            },
+        )()
 
     monkeypatch.setattr(main_mod.SkillInstaller, "install", _fake_install)
     return main_mod, cfg, saved
@@ -235,3 +247,93 @@ def test_maybe_auto_update_installs_when_newer(
     assert len(install_calls) == 1
     assert install_calls[0]["slug"] == "demo"
     assert install_calls[0]["version"] == "1.1.0"
+
+
+# ====== gap A: auto-update переустанавливает tooling под новую версию ======
+def test_maybe_auto_update_applies_tooling_after_update(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """gap A: после УСПЕШНОГО install новой версии auto-update обязан вызвать
+    _apply_tooling (runtime_deps/CLI/MCP переустанавливаются под новый манифест).
+    Для global scope: project=None, manifest = bundle["manifest"]."""
+    install_calls: list = []
+    main_mod, cfg, _ = _setup_auto_update_env(
+        tmp_path,
+        monkeypatch,
+        installed_version="1.0.0",
+        bundle_version="1.1.0",
+        install_calls=install_calls,
+    )
+    tooling_calls: list[dict] = []
+
+    def _spy_apply_tooling(result, manifest, *, agent_target, project):
+        tooling_calls.append(
+            {"manifest": manifest, "agent_target": agent_target, "project": project}
+        )
+
+    monkeypatch.setattr(main_mod, "_apply_tooling", _spy_apply_tooling)
+
+    main_mod._maybe_auto_update(cfg)
+
+    assert len(install_calls) == 1
+    assert len(tooling_calls) == 1, "_apply_tooling должен вызваться после обновления"
+    # global scope → project=None; manifest = bundle["manifest"].
+    assert tooling_calls[0]["project"] is None
+    assert tooling_calls[0]["manifest"] == {"version": "1.1.0", "files": []}
+    assert tooling_calls[0]["agent_target"] is not None
+
+
+def test_maybe_auto_update_skips_tooling_when_no_update(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """gap A: версия не новее → install не зовётся → _apply_tooling тоже НЕ
+    зовётся (ничего не переустанавливаем зря)."""
+    install_calls: list = []
+    main_mod, cfg, _ = _setup_auto_update_env(
+        tmp_path,
+        monkeypatch,
+        installed_version="1.0.0",
+        bundle_version="1.0.0",
+        install_calls=install_calls,
+    )
+    tooling_calls: list = []
+    monkeypatch.setattr(
+        main_mod,
+        "_apply_tooling",
+        lambda *a, **k: tooling_calls.append((a, k)),
+    )
+
+    main_mod._maybe_auto_update(cfg)
+    assert install_calls == []
+    assert tooling_calls == []
+
+
+def test_maybe_auto_update_skips_tooling_when_install_skipped(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """gap A: install вернул skipped (stub-guard) → _apply_tooling НЕ зовётся."""
+    install_calls: list = []
+    main_mod, cfg, _ = _setup_auto_update_env(
+        tmp_path,
+        monkeypatch,
+        installed_version="1.0.0",
+        bundle_version="1.1.0",
+        install_calls=install_calls,
+    )
+
+    # install возвращает skipped=True → guard в auto-update делает continue.
+    def _skipped_install(self, **kw):
+        install_calls.append(kw)
+        return type("_R", (), {"slug": kw.get("slug"), "skipped": True})()
+
+    monkeypatch.setattr(main_mod.SkillInstaller, "install", _skipped_install)
+    tooling_calls: list = []
+    monkeypatch.setattr(
+        main_mod,
+        "_apply_tooling",
+        lambda *a, **k: tooling_calls.append((a, k)),
+    )
+
+    main_mod._maybe_auto_update(cfg)
+    assert len(install_calls) == 1
+    assert tooling_calls == [], "skipped install не должен переустанавливать tooling"

@@ -255,6 +255,13 @@ def _maybe_auto_update(cfg: ClientConfig) -> None:
                     )
                     if getattr(res, "skipped", False):
                         continue  # guard отказал (stub-would-clobber и т.п.)
+                    # gap A: контент обновили — обязаны переустановить tooling
+                    # (runtime_deps/CLI/MCP) под манифест НОВОЙ версии, иначе
+                    # шимы/зависимости остаются от старой. global scope →
+                    # project=None; manifest = bundle["manifest"].
+                    _apply_tooling(
+                        res, bundle["manifest"], agent_target=target, project=None
+                    )
                     err_console.print(
                         f"[dim cyan]↑ auto-update[/] {slug}: {current} → {bundle['version']}"
                     )
@@ -1954,6 +1961,12 @@ def cmd_update(
                         }
                     )
                     continue
+                # gap A: контент навыка обновлён — переустановить tooling
+                # (runtime_deps/CLI/MCP) под манифест НОВОЙ версии. manifest и
+                # project берём из контекста апдейта (как в install).
+                _apply_tooling(
+                    up, bundle["manifest"], agent_target=target, project=proj
+                )
                 results.append(
                     {
                         "slug": meta_slug,
