@@ -20,11 +20,12 @@ dependencies = [
     "pathspec>=0.12.0",
     "s-librarykit>=0.1.4",
     "s-clikit>=0.1.4",
-    "s-skillkit>=0.1.1",
+    "s-skillkit>=0.1.2",
 ]
 
 # Все киты (s-librarykit/s-clikit/s-skillkit) тянутся с PyPI — CLI распространяем
-# без локальных path-источников (s-skillkit опубликован 2026-06-24).
+# без локальных path-источников. s-skillkit>=0.1.2 несёт гард BUG-3 (#272):
+# пустой files-инвентарь не затирает стор при auto-update.
 
 [project.optional-dependencies]
 dev = [
