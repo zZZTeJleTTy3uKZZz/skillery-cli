@@ -20,7 +20,7 @@ dependencies = [
     "pathspec>=0.12.0",
     "s-librarykit>=0.1.4",
     "s-clikit>=0.1.4",
-    "s-skillkit>=0.1.2",
+    "s-skillkit>=0.1.3",
 ]
 
 # Все киты (s-librarykit/s-clikit/s-skillkit) тянутся с PyPI — CLI распространяем
