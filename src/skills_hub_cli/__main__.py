@@ -2322,6 +2322,12 @@ def cmd_publish(
             "files": manifest.files,
             "dependencies": manifest.dependencies,
             "preserved_paths": manifest.preserved_paths,
+            # Tooling-поля (kind=tooling): без них backend сохранил бы пустой
+            # cli/runtime_dependencies → install не поставил бы сам CLI-инструмент.
+            "kind": manifest.kind,
+            "cli": manifest.cli,
+            "mcp": manifest.mcp,
+            "runtime_dependencies": manifest.runtime_dependencies,
         },
     }
     if dry_run:
