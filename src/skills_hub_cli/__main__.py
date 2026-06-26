@@ -251,6 +251,7 @@ def _maybe_auto_update(cfg: ClientConfig) -> None:
                         version=bundle["version"],
                         commit_sha=bundle["commit_sha"],
                         repo_url=bundle.get("repo_url"),
+                        skill_path=bundle.get("skill_path"),
                         manifest=bundle["manifest"],
                     )
                     if getattr(res, "skipped", False):
@@ -1940,6 +1941,7 @@ def cmd_update(
                     version=bundle["version"],
                     commit_sha=bundle["commit_sha"],
                     repo_url=bundle.get("repo_url"),
+                    skill_path=bundle.get("skill_path"),
                     manifest=bundle["manifest"],
                     project=proj,
                 )
@@ -2257,6 +2259,10 @@ def cmd_publish(
     description: Optional[str] = typer.Option(None),
     tags: Optional[str] = typer.Option(None),
     repo_url: Optional[str] = typer.Option(None),
+    skill_path: Optional[str] = typer.Option(
+        None, "--skill-path",
+        help="Подпапка навыка в репо (skills/<name>/), #268. По умолчанию — корень.",
+    ),
     is_super: bool = typer.Option(False),
     commit_sha: Optional[str] = typer.Option(None, "--commit-sha"),
     dry_run: bool = typer.Option(False, "--dry-run"),
@@ -2306,6 +2312,7 @@ def cmd_publish(
             if tags else manifest.tags
         ),
         "repo_url": repo_url,
+        "skill_path": skill_path,
         "is_super": is_super,
         "manifest": {
             "version": manifest.version,
