@@ -1,4 +1,16 @@
-"""Конфигурация клиента: ~/.skills-hub/[profiles/<name>/]config.toml + keyring токены."""
+"""Конфигурация клиента: ~/.skillery/[profiles/<name>/]config.toml + keyring токены.
+
+Ребренд skills-hub→skillery: дефолтный home-каталог конфига — ``~/.skillery``.
+ОБРАТНАЯ СОВМЕСТИМОСТЬ со старыми установками (``~/.skills-hub``): если новый
+каталог ещё не создан, а старый существует — резолвер ``_default_config_dir``
+возвращает СТАРЫЙ путь (чтобы залогиненный/настроенный юзер не «потерял» свой
+config/session при апгрейде CLI). При первой ЗАПИСИ (``ClientConfig.save`` /
+``_write_tokens_file``) каталог best-effort мигрируется ``~/.skills-hub`` →
+``~/.skillery`` (rename, при неудаче — дальше пишем в новый, старый не трогаем).
+env-override ``SKILLS_HUB_CONFIG_DIR`` / ``SKILLS_HUB_STORE_DIR`` остаются
+точками переопределения (имена env вне scope ребренда) и имеют наивысший
+приоритет — fallback на legacy-каталог при заданном env НЕ применяется.
+"""
 from __future__ import annotations
 
 import base64
@@ -32,10 +44,40 @@ def active_profile() -> str | None:
     return _ACTIVE_PROFILE or os.environ.get("SKILLS_HUB_PROFILE")
 
 
+# Имена брендовых home-каталогов конфига (ребренд skills-hub→skillery).
+_NEW_HOME_DIR_NAME = ".skillery"
+_LEGACY_HOME_DIR_NAME = ".skills-hub"
+
+
+def _resolve_home_base(env_var: str, new_default: str, legacy_default: str) -> Path:
+    """База home-каталога с учётом env-override и legacy-fallback.
+
+    Приоритет:
+    1. ``env_var`` (``SKILLS_HUB_CONFIG_DIR`` / ``SKILLS_HUB_STORE_DIR``) — если
+       задан, используется как есть (override-точка, fallback НЕ применяется).
+    2. Новый дефолт ``~/.skillery[...]`` — если каталог уже существует.
+    3. Legacy ``~/.skills-hub[...]`` — если новый ещё НЕ создан, а старый ЕСТЬ
+       (обратная совместимость: не теряем config/session старой установки).
+    4. Иначе — новый дефолт (свежая установка пишет сразу в ``~/.skillery``).
+    """
+    env_val = os.environ.get(env_var)
+    if env_val:
+        return Path(env_val).expanduser()
+    new_path = Path(new_default).expanduser()
+    if new_path.exists():
+        return new_path
+    legacy_path = Path(legacy_default).expanduser()
+    if legacy_path.exists():
+        return legacy_path
+    return new_path
+
+
 def _default_config_dir() -> Path:
-    base = Path(
-        os.environ.get("SKILLS_HUB_CONFIG_DIR", "~/.skills-hub")
-    ).expanduser()
+    base = _resolve_home_base(
+        "SKILLS_HUB_CONFIG_DIR",
+        f"~/{_NEW_HOME_DIR_NAME}",
+        f"~/{_LEGACY_HOME_DIR_NAME}",
+    )
     profile = active_profile()
     if profile:
         return base / "profiles" / profile
@@ -51,9 +93,35 @@ def _default_base_url() -> str:
 
 
 def _default_store_dir() -> Path:
-    return Path(
-        os.environ.get("SKILLS_HUB_STORE_DIR", "~/.skills-hub/store")
-    ).expanduser()
+    return _resolve_home_base(
+        "SKILLS_HUB_STORE_DIR",
+        f"~/{_NEW_HOME_DIR_NAME}/store",
+        f"~/{_LEGACY_HOME_DIR_NAME}/store",
+    )
+
+
+def _maybe_migrate_legacy_home() -> None:
+    """Best-effort миграция ``~/.skills-hub`` → ``~/.skillery`` при первой записи.
+
+    Вызывается перед записью config/токенов. Срабатывает ТОЛЬКО когда:
+    env-override каталога не задан, новый каталог ``~/.skillery`` ещё не создан,
+    а legacy ``~/.skills-hub`` существует. Тогда переносим весь каталог одним
+    ``rename`` (атомарно в пределах одной ФС). Любая ошибка глотается — тогда
+    запись просто пойдёт в новый каталог (``mkdir(parents=True)`` у
+    save/_write_tokens_file его создаст), а legacy остаётся нетронутым (читать
+    мы его уже не будем, т.к. новый появится).
+    """
+    if os.environ.get("SKILLS_HUB_CONFIG_DIR"):
+        return
+    new_base = Path(f"~/{_NEW_HOME_DIR_NAME}").expanduser()
+    if new_base.exists():
+        return
+    legacy_base = Path(f"~/{_LEGACY_HOME_DIR_NAME}").expanduser()
+    if not legacy_base.exists():
+        return
+    with contextlib.suppress(OSError):
+        new_base.parent.mkdir(parents=True, exist_ok=True)
+        legacy_base.rename(new_base)
 
 
 def _keyring_namespace() -> str:
@@ -174,7 +242,8 @@ class ClientConfig:
         Конфиг-слой ClientConfig — это модель ``_HubAppConfig`` (подкласс
         ``AppConfig``): даёт fail-fast валидацию типов и env-интерполяцию
         ``${VAR}`` из коробки. Чтение нашего канонического файла
-        (``~/.skills-hub/[profiles/<p>/]config.toml``) делаем сами и BOM-safe
+        (``~/.skillery/[profiles/<p>/]config.toml``, с fallback на legacy
+        ``~/.skills-hub`` через резолвер пути) делаем сами и BOM-safe
         (``utf-8-sig``) — историческое поведение CLI (некоторые Windows-редакторы
         пишут BOM); затем интерполяция и ``model_validate`` (``extra='ignore'`` —
         незнакомые/legacy-ключи не ломают load).
@@ -209,12 +278,16 @@ class ClientConfig:
         )
 
     def save(self, path: Path | None = None) -> None:
-        """Записать конфиг (TOML ``~/.skills-hub/[profiles/<p>/]config.toml``).
+        """Записать конфиг (TOML ``~/.skillery/[profiles/<p>/]config.toml``).
 
         Формат и набор ключей — байт-в-байт прежние (омит пустых опц.полей),
         запись атомарная (``clikit``/``librarykit`` writer вместо прямого
         ``write_text``). Каталог создаётся при отсутствии.
         """
+        if path is None:
+            # Дефолтная запись: мигрируем legacy-каталог до резолва пути, чтобы
+            # config ушёл уже в ~/.skillery (а не «довывел» новый рядом со старым).
+            _maybe_migrate_legacy_home()
         actual_path = path or _default_config_file()
         actual_path.parent.mkdir(parents=True, exist_ok=True)
         data: dict[str, object] = {"base_url": self.base_url}
@@ -340,6 +413,8 @@ def _tokens_file_path() -> Path:
 
 def _write_tokens_file(user_email: str, access: str, refresh: str) -> None:
     """File-fallback хранения токенов: tokens.toml + chmod 600 (best-effort)."""
+    # Мигрируем legacy-каталог до резолва пути (session-токены ←→ config-каталог).
+    _maybe_migrate_legacy_home()
     path = _tokens_file_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -401,8 +476,9 @@ class _HubSecretStore(SecretStore):
                              ``skills-hub-cli[:<profile>]``, а не ``brand`` от
                              конструктора — старые keyring-ключи читаются);
     - ``_tokens_file_path``→ ``_tokens_file_path`` config.py (путь остаётся
-                             ``~/.skills-hub/[profiles/<p>/]tokens.toml``, а не
-                             ``platformdirs.user_config_dir``).
+                             ``~/.skillery/[profiles/<p>/]tokens.toml`` — с
+                             legacy-fallback ``~/.skills-hub`` через резолвер
+                             каталога, а не ``platformdirs.user_config_dir``).
 
     Сами алгоритмы (порядок keyring→file, partial-write cleanup, удаление stale
     файла, дочитывание файла при пустом keyring) — наследуются от SecretStore.

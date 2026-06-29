@@ -220,7 +220,7 @@ def _render(p: dict[str, Any]) -> None:
         console.print(table)
         console.print(
             "[dim]Включить: команда в поле install_cmd "
-            "(skills-hub enable <slug> --project <путь>)[/]"
+            "(skillery enable <slug> --project <путь>)[/]"
         )
     for note in p.get("notes") or []:
         console.print(f"[dim]• {note}[/]")
@@ -299,7 +299,7 @@ def cmd_suggest(
         elif ai and not logged_in:
             notes.append(
                 "--ai требует логина (семантика считается на хабе). "
-                "Залогиньтесь (skills-hub login); пока — локальный стор."
+                "Залогиньтесь (skillery login); пока — локальный стор."
             )
         elif terms and access:
             hub, degraded = await _hub_candidates(cfg, access, terms, limit)
@@ -311,7 +311,7 @@ def cmd_suggest(
         elif terms and not logged_in:
             notes.append(
                 "Не залогинены — ищем только в локальном сторе. "
-                "Залогиньтесь (skills-hub login) для поиска по хабу."
+                "Залогиньтесь (skillery login) для поиска по хабу."
             )
 
         installed = set(project_manifest.load(actual_project))
@@ -358,7 +358,7 @@ def cmd_suggest(
                     "already_enabled": bool(entry.get("already")),
                     "version": src.get("version"),
                     "install_cmd": (
-                        f"skills-hub enable {slug} --project {actual_project}"
+                        f"skillery enable {slug} --project {actual_project}"
                     ),
                 }
             )

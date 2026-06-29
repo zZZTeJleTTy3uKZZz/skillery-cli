@@ -1,4 +1,4 @@
-"""Append-only очередь events в ~/.skills-hub/events.queue.json.
+"""Append-only очередь events в ~/.skillery/events.queue.json.
 
 Формат на диске — массив объектов QueuedEvent (JSON). Каждый event
 содержит ``event_type`` + ``occurred_at`` (ISO) + опциональный
@@ -10,7 +10,7 @@
 отключаем через флаг ``use_lock=False``.
 
 Использование:
-    collector = EventCollector(queue_path=Path("~/.skills-hub/events.queue.json").expanduser())
+    collector = EventCollector(queue_path=Path("~/.skillery/events.queue.json").expanduser())
     collector.append("skill.install", resource_type="skill", resource_id="42", payload={"slug": "foo"})
     pending = collector.drain(limit=100)  # выньет до 100, оставшиеся в файле
 """

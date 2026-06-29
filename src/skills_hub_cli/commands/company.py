@@ -278,7 +278,7 @@ def cmd_company_switch(
             console.print(f"  Permissions: {len(p['permissions'])} прав")
             console.print(
                 "[dim]Токены перевыпущены — набор команд мог измениться "
-                "(`skills-hub --help`)[/]"
+                "(`skillery --help`)[/]"
             )
 
         emit_data(result, text_renderer=_render)

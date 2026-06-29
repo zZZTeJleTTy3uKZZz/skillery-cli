@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "skills-hub-cli"
+name = "skillery-cli"
 version = "0.3.1"
 description = "Skillery CLI — клиент для приватного маркетплейса AI-skills."
 readme = "README.md"
@@ -36,7 +36,7 @@ dev = [
 ]
 
 [project.scripts]
-skills-hub = "skills_hub_cli.__main__:app"
+skillery = "skills_hub_cli.__main__:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/skills_hub_cli"]

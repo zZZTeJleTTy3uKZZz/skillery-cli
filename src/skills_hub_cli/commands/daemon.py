@@ -281,7 +281,7 @@ def cmd_daemon_status() -> None:
         payload["warning"] = (
             f"демон не запущен, {queue_size} "
             f"событ{'ие' if queue_size == 1 else 'ий'} не "
-            f"отправлен{'о' if queue_size == 1 else 'о'}: skills-hub daemon start"
+            f"отправлен{'о' if queue_size == 1 else 'о'}: skillery daemon start"
         )
 
     def _render(p: dict[str, Any]) -> None:

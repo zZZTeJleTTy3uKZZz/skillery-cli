@@ -113,7 +113,7 @@ def _strip_invite_url(value: str) -> str:
 def _get_access_token() -> str:
     cfg = ClientConfig.load()
     if not cfg.user_email:
-        console.print("[red]Не авторизован.[/] Сначала: skills-hub login <invite>")
+        console.print("[red]Не авторизован.[/] Сначала: skillery login <invite>")
         raise typer.Exit(1)
     access, _ = load_tokens(cfg.user_email)
     if not access:
@@ -380,7 +380,7 @@ def cmd_login(
             console.print(f"  Роли:        {', '.join(roles_descr) or '—'}")
             console.print(f"  Permissions: {len(cfg.permissions)} прав")
             console.print(
-                "[dim]Доступные команды зависят от прав — `skills-hub --help`[/]"
+                "[dim]Доступные команды зависят от прав — `skillery --help`[/]"
             )
 
         emit_data(result, text_renderer=_render)
@@ -440,7 +440,7 @@ def cmd_passwd() -> None:
     """
     cfg = ClientConfig.load()
     if not cfg.is_logged_in():
-        emit_error("NOT_LOGGED_IN", "Сначала залогиньтесь: skills-hub login")
+        emit_error("NOT_LOGGED_IN", "Сначала залогиньтесь: skillery login")
         raise typer.Exit(1)
     access, _ = load_tokens(cfg.user_email or "")
     if not access:
@@ -480,7 +480,7 @@ def cmd_passwd() -> None:
             {"event": "password_changed"},
             text_renderer=lambda _: console.print(
                 "[green]✓[/] Пароль обновлён. Теперь логин: "
-                f"`skills-hub login --email {cfg.user_email} --password ***`"
+                f"`skillery login --email {cfg.user_email} --password ***`"
             ),
         )
 
@@ -579,7 +579,7 @@ def cmd_web(
     if not cfg.is_logged_in():
         emit_error(
             "NOT_LOGGED_IN",
-            "Сначала залогиньтесь: skills-hub login <invite-token>",
+            "Сначала залогиньтесь: skillery login <invite-token>",
         )
         raise typer.Exit(1)
     access, _refresh = load_tokens(cfg.user_email or "")
@@ -950,7 +950,7 @@ def _report_tooling(report: dict) -> None:
             if path_info.get("status") == "manual-needed":
                 emit_message(
                     "Каталог CLI не в PATH. Добавьте его: "
-                    f"{path_info.get('instruction', '')} (или `skills-hub doctor --fix-path`).",
+                    f"{path_info.get('instruction', '')} (или `skillery doctor --fix-path`).",
                     level="warn",
                 )
         elif status in ("error", "skipped"):
@@ -1421,7 +1421,7 @@ def cmd_enable(
         emit_error(
             "NOT_LOGGED_IN",
             f"Навыка «{slug}» нет в локальном сторе; для докачки из хаба "
-            "залогиньтесь: skills-hub login",
+            "залогиньтесь: skillery login",
         )
         raise typer.Exit(1)
     access = _get_access_token()
@@ -1569,7 +1569,7 @@ def cmd_sync(
         if report["missing"] and not cfg.is_logged_in():
             payload["hint"] = (
                 "вы не залогинены — докачка из хаба недоступна; что уже в "
-                "сторе — слинковано. Для докачки: skills-hub login"
+                "сторе — слинковано. Для докачки: skillery login"
             )
 
         def _render(r: dict) -> None:
@@ -1665,7 +1665,7 @@ def cmd_pull(
     """
     cfg = ClientConfig.load()
     if not cfg.is_logged_in():
-        emit_error("NOT_LOGGED_IN", "Сначала: skills-hub login <invite>")
+        emit_error("NOT_LOGGED_IN", "Сначала: skillery login <invite>")
         raise typer.Exit(1)
     access = _get_access_token()
     target = get_target(agent or cfg.agent)
@@ -2601,7 +2601,7 @@ def build_app() -> typer.Typer:
     #   2) снимаем авто-зарегистрированную команду `version` (флага --version и
     #      его callback'а достаточно — набор команд остаётся прежним).
     app = build_root_app(
-        brand="skills-hub",
+        brand="skillery",
         help="\n".join(description_lines),
         no_args_is_help=True,
     )

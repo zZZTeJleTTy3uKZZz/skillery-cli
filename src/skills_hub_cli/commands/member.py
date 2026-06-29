@@ -148,7 +148,7 @@ def cmd_members_list(
 def cmd_member_invite(
     email: str = typer.Option(..., "--email", help="Email приглашаемого"),
     role_id: str = typer.Option(
-        ..., "--role-id", help="ID роли (см. `skills-hub roles`)"
+        ..., "--role-id", help="ID роли (см. `skillery roles`)"
     ),
     name: str | None = typer.Option(
         None,
@@ -239,7 +239,7 @@ def cmd_member_remove(
 def cmd_member_change_role(
     user_id: str = typer.Argument(..., help="ID пользователя"),
     role_id: str = typer.Argument(
-        ..., help="ID новой роли (см. `skills-hub roles`)"
+        ..., help="ID новой роли (см. `skillery roles`)"
     ),
     company: str | None = typer.Option(
         None, "--company", help="ID компании (default: из вашего токена)"
@@ -378,7 +378,7 @@ def cmd_member_reset_password(
             if p.get("requires_password_change"):
                 console.print(
                     "[dim]При первом входе пользователь должен сменить "
-                    "пароль (skills-hub passwd / профиль Web UI).[/]"
+                    "пароль (skillery passwd / профиль Web UI).[/]"
                 )
 
         emit_data(r, text_renderer=_render)

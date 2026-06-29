@@ -77,7 +77,7 @@ def cmd_permissions_list(
 
 
 def cmd_role_show(
-    role_id: str = typer.Argument(..., help="ID роли (см. `skills-hub roles`)"),
+    role_id: str = typer.Argument(..., help="ID роли (см. `skillery roles`)"),
 ) -> None:
     """Права, привязанные к роли (GET /roles/{id}/permissions).
 

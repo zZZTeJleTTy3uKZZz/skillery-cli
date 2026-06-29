@@ -130,7 +130,7 @@ def _probe_login(cfg: ClientConfig) -> Result:
     return warn(
         "Hub login",
         "не авторизован — доступны автономная установка (--path/--from-git) и "
-        "локальный стор; для hub-каталога: skills-hub login",
+        "локальный стор; для hub-каталога: skillery login",
     )
 
 
@@ -142,7 +142,7 @@ def _probe_path_store() -> Result:
     return warn(
         "PATH-стор",
         f"{target} НЕ в PATH — CLI установленных навыков не позовутся из "
-        "произвольной директории. Почини: skills-hub doctor --fix-path "
+        "произвольной директории. Почини: skillery doctor --fix-path "
         "(или добавь каталог в PATH вручную)",
     )
 
@@ -158,7 +158,7 @@ def _probe_clikit() -> Result:
     return warn(
         "clikit",
         "пакет clikit не установлен (опционально — нужен навыкам с встроенным "
-        "CLI на clikit; рантайм skills-hub работает без него)",
+        "CLI на clikit; рантайм skillery работает без него)",
     )
 
 
@@ -242,7 +242,7 @@ def cmd_doctor(
                     f"[yellow]![/] PATH не удалось обновить автоматически. "
                     f"Выполни вручную: {path_fix.get('instruction', '')}"
                 )
-        table = Table(title="skills-hub · doctor")
+        table = Table(title="skillery · doctor")
         table.add_column("проверка", style="bold")
         table.add_column("статус")
         table.add_column("детали", overflow="fold")

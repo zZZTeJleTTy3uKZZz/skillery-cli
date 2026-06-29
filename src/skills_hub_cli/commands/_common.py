@@ -68,7 +68,7 @@ def get_access_token() -> str:
     """Получить access-token либо exit(1) с сообщением."""
     cfg = ClientConfig.load()
     if not cfg.user_email:
-        emit_error("NOT_LOGGED_IN", "Сначала залогиньтесь: skills-hub login")
+        emit_error("NOT_LOGGED_IN", "Сначала залогиньтесь: skillery login")
         raise typer.Exit(1)
     access, _ = load_tokens(cfg.user_email)
     if not access:

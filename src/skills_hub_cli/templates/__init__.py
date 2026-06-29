@@ -308,10 +308,10 @@ def render_readme(*, slug: str, kind: str, description: str) -> str:
         "python scripts/self_check.py",
         "```",
         "",
-        "## Публикация в Skills Hub",
+        "## Публикация в Skillery",
         "",
         "```bash",
-        "skills-hub install --path . --scope global",
+        "skillery install --path . --scope global",
         "```",
         "",
     ]
@@ -354,7 +354,7 @@ def render_skill_meta_toml(
     """
     pkg = module_name(slug)
     lines = [
-        "# Манифест навыка (E6). Backend читает его при `skills-hub publish`.",
+        "# Манифест навыка (E6). Backend читает его при `skillery publish`.",
         f"description = {_toml_quote(description)}",
         f'version = "{version}"',
         "",

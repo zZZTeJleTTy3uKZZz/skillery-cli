@@ -107,7 +107,7 @@ def _render_suggestions(p: dict[str, Any]) -> None:
             "уже включён" if s.get("already") else "",
         )
     console.print(table)
-    console.print("[dim]Включить всё в проект: skills-hub onboard --yes[/]")
+    console.print("[dim]Включить всё в проект: skillery onboard --yes[/]")
 
 
 def _render_applied(p: dict[str, Any]) -> None:

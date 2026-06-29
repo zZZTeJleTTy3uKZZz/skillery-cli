@@ -141,7 +141,7 @@ def test_suggest_local_only_no_login(
     assert s["already_enabled"] is False
     assert s["score"] > 0
     assert s["matched_on"]  # объяснимость присутствует
-    assert s["install_cmd"] == f"skills-hub enable stripe-pay --project {project.resolve()}"
+    assert s["install_cmd"] == f"skillery enable stripe-pay --project {project.resolve()}"
     # notes сообщает что сеть выключена (не залогинен)
     assert any("login" in n.lower() or "залог" in n.lower() for n in payload["notes"])
 

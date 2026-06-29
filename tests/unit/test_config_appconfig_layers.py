@@ -217,6 +217,93 @@ def test_default_path_uses_profile_subdir(
 
 
 # --------------------------------------------------------------------------
+# ребренд home-каталога ~/.skills-hub → ~/.skillery + обратная совместимость
+# --------------------------------------------------------------------------
+def _isolate_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Изолированный home (без env-override каталога) для тестов резолвера."""
+    monkeypatch.delenv("SKILLS_HUB_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("SKILLS_HUB_STORE_DIR", raising=False)
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # Windows expanduser
+    return home
+
+
+def test_fresh_install_defaults_to_skillery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Свежая установка (нет ни ~/.skillery, ни ~/.skills-hub) → ~/.skillery."""
+    home = _isolate_home(tmp_path, monkeypatch)
+    assert config_mod._default_config_dir() == home / ".skillery"
+    assert config_mod._default_store_dir() == home / ".skillery" / "store"
+
+
+def test_legacy_skills_hub_used_when_new_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Обратная совместимость: есть старый ~/.skills-hub, нового нет → legacy."""
+    home = _isolate_home(tmp_path, monkeypatch)
+    (home / ".skills-hub").mkdir()
+    assert config_mod._default_config_dir() == home / ".skills-hub"
+
+
+def test_new_skillery_wins_when_both_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Есть оба каталога → используется новый ~/.skillery."""
+    home = _isolate_home(tmp_path, monkeypatch)
+    (home / ".skills-hub").mkdir()
+    (home / ".skillery").mkdir()
+    assert config_mod._default_config_dir() == home / ".skillery"
+
+
+def test_env_override_beats_legacy_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """env ``SKILLS_HUB_CONFIG_DIR`` приоритетнее legacy-каталога (override)."""
+    home = _isolate_home(tmp_path, monkeypatch)
+    (home / ".skills-hub").mkdir()
+    override = tmp_path / "explicit-cfg"
+    monkeypatch.setenv("SKILLS_HUB_CONFIG_DIR", str(override))
+    assert config_mod._default_config_dir() == override
+
+
+def test_save_migrates_legacy_home_to_skillery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """save() мигрирует ~/.skills-hub → ~/.skillery (rename) и пишет в новый.
+
+    Старый config-файл (логин/настройки) переезжает, юзер не теряет состояние.
+    """
+    home = _isolate_home(tmp_path, monkeypatch)
+    legacy = home / ".skills-hub"
+    legacy.mkdir()
+    (legacy / "config.toml").write_text(
+        'base_url = "https://old.hub"\nuser_email = "old@hub"\n', encoding="utf-8"
+    )
+    config_mod.set_active_profile(None)
+    cfg = ClientConfig(base_url="https://new.hub", user_email="new@hub")
+    cfg.save()  # без path → дефолт + миграция
+    # Legacy перенесён в новый каталог, старый каталог исчез.
+    assert not legacy.exists()
+    assert (home / ".skillery" / "config.toml").is_file()
+    # Записан НОВЫЙ конфиг в новом каталоге.
+    assert ClientConfig.load().user_email == "new@hub"
+
+
+def test_save_fresh_writes_skillery_no_legacy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Свежая установка: save() пишет сразу в ~/.skillery (без legacy)."""
+    home = _isolate_home(tmp_path, monkeypatch)
+    config_mod.set_active_profile(None)
+    ClientConfig(base_url="http://localhost:8000", user_email="x@hub").save()
+    assert (home / ".skillery" / "config.toml").is_file()
+    assert not (home / ".skills-hub").exists()
+
+
+# --------------------------------------------------------------------------
 # методы-предикаты и derive (без изменений)
 # --------------------------------------------------------------------------
 def test_effective_store_dir_explicit() -> None:

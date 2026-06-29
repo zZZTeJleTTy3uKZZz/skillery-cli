@@ -4,9 +4,10 @@ CLI поднимает daemon как detached background process:
 - POSIX — ``os.fork`` + ``setsid`` + redirect stdio to /dev/null.
 - Windows — ``subprocess.Popen`` с ``DETACHED_PROCESS`` flag.
 
-PID + state файлы:
-- ``~/.skills-hub/daemon.pid`` — PID запущенного процесса.
-- ``~/.skills-hub/daemon.state.json`` — last_cycle_at, last_send_result.
+PID + state файлы (каталог — общий с config CLI, ``~/.skillery`` с
+legacy-fallback ``~/.skills-hub``):
+- ``~/.skillery/daemon.pid`` — PID запущенного процесса.
+- ``~/.skillery/daemon.state.json`` — last_cycle_at, last_send_result.
 """
 from __future__ import annotations
 
@@ -47,9 +48,18 @@ class DaemonState:
 
 
 def _default_skills_hub_dir() -> Path:
-    return Path(
-        os.environ.get("SKILLS_HUB_CONFIG_DIR", "~/.skills-hub")
-    ).expanduser()
+    """Каталог daemon-артефактов (pid/state/queue/guard).
+
+    Делегируем в ``config._default_config_dir`` — единый источник правды о
+    home-каталоге (ребренд ``~/.skillery`` + legacy-fallback ``~/.skills-hub`` +
+    уважение env ``SKILLS_HUB_CONFIG_DIR`` и профилей). Раньше тут была СВОЯ
+    копия env+дефолта — при рассинхроне demon писал бы pid/queue в старый
+    каталог, мимо config. Импорт ленивый, чтобы не тянуть config на уровне
+    модуля (daemon-модуль автономен в тестах).
+    """
+    from skills_hub_cli.config import _default_config_dir
+
+    return _default_config_dir()
 
 
 def default_queue_path() -> Path:

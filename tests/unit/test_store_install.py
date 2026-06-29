@@ -20,11 +20,35 @@ def test_effective_store_dir_explicit_field(tmp_path: Path) -> None:
     assert cfg.effective_store_dir() == tmp_path / "explicit"
 
 
-def test_effective_store_dir_default(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_effective_store_dir_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.delenv("SKILLS_HUB_STORE_DIR", raising=False)
+    monkeypatch.delenv("SKILLS_HUB_CONFIG_DIR", raising=False)
+    # Изолируем home: ни ~/.skillery, ни legacy ~/.skills-hub не существуют →
+    # свежая установка должна резолвить НОВЫЙ бренд ~/.skillery/store.
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setenv("USERPROFILE", str(fake_home))  # Windows expanduser
     cfg = ClientConfig()
-    # Дефолт — ~/.skills-hub/store (раскрытый).
+    # Дефолт (ребренд) — ~/.skillery/store (раскрытый).
     assert cfg.effective_store_dir().name == "store"
+    assert ".skillery" in str(cfg.effective_store_dir())
+
+
+def test_effective_store_dir_default_legacy_fallback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Обратная совместимость: если есть старый ~/.skills-hub/store, а нового
+    ~/.skillery нет — дефолт остаётся на legacy (не теряем стор установки)."""
+    monkeypatch.delenv("SKILLS_HUB_STORE_DIR", raising=False)
+    monkeypatch.delenv("SKILLS_HUB_CONFIG_DIR", raising=False)
+    fake_home = tmp_path / "home"
+    (fake_home / ".skills-hub" / "store").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setenv("USERPROFILE", str(fake_home))
+    cfg = ClientConfig()
     assert ".skills-hub" in str(cfg.effective_store_dir())
 
 

@@ -75,7 +75,7 @@ def test_apply_tooling_installs_cli_mcp_deps(monkeypatch: pytest.MonkeyPatch) ->
     )
     monkeypatch.setattr(
         ti.deps_installer, "install_runtime_dependencies",
-        lambda deps: dep_calls.append(list(deps))
+        lambda deps, *, python_executable=None: dep_calls.append(list(deps))
         or {"installed": list(deps), "skipped": [], "failed": []},
     )
 
@@ -106,7 +106,8 @@ def test_apply_ensure_on_path_called_once_for_many_clis(
     monkeypatch.setattr(ti.mcp_register, "register_mcp",
                         lambda *a, **k: {"status": "registered"})
     monkeypatch.setattr(ti.deps_installer, "install_runtime_dependencies",
-                        lambda deps: {"installed": [], "skipped": [], "failed": []})
+                        lambda deps, *, python_executable=None: {
+                            "installed": [], "skipped": [], "failed": []})
     manifest = {
         "kind": "tooling",
         "cli": [
@@ -160,7 +161,8 @@ def test_apply_cli_error_does_not_raise(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr(ti.mcp_register, "register_mcp",
                         lambda *a, **k: {"status": "registered"})
     monkeypatch.setattr(ti.deps_installer, "install_runtime_dependencies",
-                        lambda deps: {"installed": [], "skipped": [], "failed": []})
+                        lambda deps, *, python_executable=None: {
+                            "installed": [], "skipped": [], "failed": []})
     result = _FakeResult(slug="s", store_dir=Path("/store/s"),
                          manifest=_tooling_manifest())
     # Не бросает; CLI-ветка зафиксировала ошибку.
@@ -177,7 +179,9 @@ def test_apply_deps_failure_does_not_raise(monkeypatch: pytest.MonkeyPatch) -> N
                         lambda *a, **k: {"status": "registered"})
     monkeypatch.setattr(
         ti.deps_installer, "install_runtime_dependencies",
-        lambda deps: (_ for _ in ()).throw(RuntimeError("pip exploded")),
+        lambda deps, *, python_executable=None: (_ for _ in ()).throw(
+            RuntimeError("pip exploded")
+        ),
     )
     result = _FakeResult(slug="s", store_dir=Path("/store/s"),
                          manifest=_tooling_manifest())

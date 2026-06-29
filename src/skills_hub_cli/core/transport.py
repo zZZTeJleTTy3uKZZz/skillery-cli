@@ -220,7 +220,7 @@ class HubClient:
                 code="SESSION_EXPIRED",
                 message=(
                     "Сессия устарела или подпись токена не валидна. "
-                    "Сделайте login заново: `skills-hub login <invite-token>` "
+                    "Сделайте login заново: `skillery login <invite-token>` "
                     "(или попросите админа выписать новый invite)."
                 ),
                 details={"upstream": resp.text[:300]},

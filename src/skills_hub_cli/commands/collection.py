@@ -73,7 +73,7 @@ def _require_server(verb: str) -> None:
             "NOT_AVAILABLE",
             f"Серверные коллекции недоступны без логина (нужно право skill.read). "
             f"Для локальной коллекции добавьте --local: "
-            f"skills-hub collection {verb} … --local",
+            f"skillery collection {verb} … --local",
         )
         raise typer.Exit(1)
 
@@ -85,7 +85,7 @@ def _require_manage(verb: str) -> None:
             "NOT_AVAILABLE",
             f"Управление серверными коллекциями требует право catalog.manage. "
             f"Для локальной коллекции добавьте --local: "
-            f"skills-hub collection {verb} … --local.",
+            f"skillery collection {verb} … --local.",
         )
         raise typer.Exit(1)
 
@@ -505,7 +505,7 @@ def _install_local(
         if skipped and not cfg.is_logged_in():
             payload["hint"] = (
                 "вы не залогинены — недостающие в сторе навыки пропущены; "
-                "для докачки из хаба: skills-hub login"
+                "для докачки из хаба: skillery login"
             )
 
         def _render(p: dict[str, Any]) -> None:
@@ -683,7 +683,7 @@ def cmd_collection_delete(
             "USE_LOCAL_FLAG",
             "Удаление серверной коллекции из CLI не поддержано (через Web UI). "
             "Для локальной коллекции добавьте --local: "
-            "skills-hub collection delete … --local.",
+            "skillery collection delete … --local.",
         )
         raise typer.Exit(1)
     try:

@@ -138,7 +138,7 @@ def _render_session(cfg: ClientConfig, headline: str) -> None:
     if cfg.company_id:
         console.print(f"  Компания:    {cfg.company_id}")
     console.print(
-        "[dim]Доступные команды зависят от прав — `skills-hub --help`[/]"
+        "[dim]Доступные команды зависят от прав — `skillery --help`[/]"
     )
 
 
@@ -241,7 +241,7 @@ def cmd_join(
                         f"[green]✓[/] Вступили в компанию по ссылке ({cfg.user_email})"
                     ),
                     console.print(
-                        "[dim]Переключиться на компанию: skills-hub company switch "
+                        "[dim]Переключиться на компанию: skillery company switch "
                         "(или POST /me/active-company)[/]"
                     ),
                 ),

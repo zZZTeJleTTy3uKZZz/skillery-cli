@@ -200,3 +200,60 @@ def test_install_windows_task_writes_xml(tmp_path: Path) -> None:
     text = expected.read_text(encoding="utf-16")
     assert "skills-hub.exe" in text
     assert any("schtasks" in line for line in artifact.instructions)
+
+
+# ========== daemon default paths follow centralized config dir ==========
+def _isolate_home_no_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.delenv("SKILLS_HUB_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("SKILLS_HUB_STORE_DIR", raising=False)
+    monkeypatch.delenv("SKILLS_HUB_PROFILE", raising=False)
+    from skills_hub_cli import config as config_mod
+
+    config_mod.set_active_profile(None)
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    return home
+
+
+def test_daemon_default_paths_use_skillery_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """pid/state/queue/guard живут в ребренд-каталоге ~/.skillery (не хардкод)."""
+    from skills_hub_cli.daemon.daemon_runner import (
+        default_guard_path,
+        default_pid_path,
+        default_queue_path,
+        default_state_path,
+    )
+
+    home = _isolate_home_no_env(tmp_path, monkeypatch)
+    base = home / ".skillery"
+    assert default_pid_path() == base / "daemon.pid"
+    assert default_state_path() == base / "daemon.state.json"
+    assert default_queue_path() == base / "events.queue.json"
+    assert default_guard_path() == base / "events.guard.json"
+
+
+def test_daemon_default_paths_legacy_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Если есть только legacy ~/.skills-hub — daemon пишет туда (compat)."""
+    from skills_hub_cli.daemon.daemon_runner import default_queue_path
+
+    home = _isolate_home_no_env(tmp_path, monkeypatch)
+    (home / ".skills-hub").mkdir()
+    assert default_queue_path() == home / ".skills-hub" / "events.queue.json"
+
+
+def test_daemon_default_paths_respect_config_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """env ``SKILLS_HUB_CONFIG_DIR`` остаётся override-точкой и для daemon."""
+    from skills_hub_cli.daemon.daemon_runner import default_pid_path
+
+    _isolate_home_no_env(tmp_path, monkeypatch)
+    override = tmp_path / "cfg"
+    monkeypatch.setenv("SKILLS_HUB_CONFIG_DIR", str(override))
+    assert default_pid_path() == override / "daemon.pid"

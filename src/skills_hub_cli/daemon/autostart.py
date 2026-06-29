@@ -241,8 +241,8 @@ def install_windows_task(
     xml_path.write_text(content, encoding="utf-16")
     instructions = [
         f"# Сохранён Task Scheduler XML: {xml_path}",
-        f'schtasks /Create /TN "SkillsHubDaemon" /XML "{xml_path}"',
-        '# Снять с autostart: schtasks /Delete /TN "SkillsHubDaemon" /F',
+        f'schtasks /Create /TN "SkilleryDaemon" /XML "{xml_path}"',
+        '# Снять с autostart: schtasks /Delete /TN "SkilleryDaemon" /F',
     ]
     return AutostartArtifact(
         platform="windows",
@@ -323,7 +323,7 @@ def _uninstall_instructions(platform: str, unit_path: Path) -> list[str]:
     if platform == "windows":
         return [
             f"# Снят Task Scheduler XML: {unit_path}",
-            'schtasks /Delete /TN "SkillsHubDaemon" /F',
+            'schtasks /Delete /TN "SkilleryDaemon" /F',
         ]
     raise ValueError(f"Неизвестная платформа: {platform}")
 
