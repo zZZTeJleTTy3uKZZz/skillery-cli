@@ -16,26 +16,13 @@ env/config НЕ читает.
 """
 from __future__ import annotations
 
-import os
 import sys
-from pathlib import Path
 
 from skillkit import path_store as _kit_path_store
 
-
-def _cli_bin_dir() -> Path:
-    """Каталог шимов CLI: env ``SKILLS_HUB_BIN_DIR`` > ``<store>/../bin``."""
-    override = os.environ.get("SKILLS_HUB_BIN_DIR")
-    if override:
-        return Path(override).expanduser()
-    # Лениво, чтобы не тянуть config на уровне модуля (симметрия installer).
-    from skills_hub_cli.config import _default_store_dir
-
-    return _default_store_dir().parent / "bin"
-
-
-# Инъектируем CLI-провайдер bin-каталога в кит (кит сам env/config не читает).
-_kit_path_store.set_bin_dir_provider(_cli_bin_dir)
+# Конфигурируем кит под бренд skillery ОДНИМ местом (bin_dir-провайдер и прочее —
+# в core/_kit_config). Импорт = сайд-эффект skillkit.configure(...).
+from skills_hub_cli.core import _kit_config  # noqa: F401
 
 # Алиас: подменяем этот модуль на kit-модуль, чтобы attribute lookup был общим
 # (монкипатч ``path_store.IS_WINDOWS`` и пр. виден и киту, и потребителям).

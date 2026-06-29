@@ -131,7 +131,9 @@ def test_install_refuses_foreign_scope_dir_without_force(tmp_path: Path) -> None
     link = target.slug_dir("demo")
     link.mkdir(parents=True)
     (link / "hand.txt").write_text("manual", encoding="utf-8")  # чужая папка, нет meta
-    with pytest.raises(RuntimeError, match="не управляется skills-hub"):
+    # CLI конфигурирует кит на бренд skillery (core/_kit_config) → сообщение
+    # «не управляется skillery» (бренд-строка выводится из app_name).
+    with pytest.raises(RuntimeError, match="не управляется skillery"):
         inst.install(slug="demo", version="1.0.0", commit_sha="a1",
                      repo_url=None, local_src=_local_src(tmp_path),
                      manifest=_MANIFEST)

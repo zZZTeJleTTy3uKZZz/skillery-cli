@@ -15,21 +15,12 @@ Shim — АЛИАС kit-модуля в ``sys.modules`` (как ``core/linker.py
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
 from skillkit import collections as _kit_collections
 
-
-def _cli_config_dir() -> Path:
-    """Config-каталог CLI (уважает SKILLS_HUB_CONFIG_DIR + профиль)."""
-    # Лениво, чтобы профиль/env читались на момент вызова, а не импорта.
-    from skills_hub_cli.config import _default_config_dir
-
-    return _default_config_dir()
-
-
-# Инъектируем CLI-провайдер config-каталога в кит (кит сам env/config не читает).
-_kit_collections.set_config_dir_provider(_cli_config_dir)
+# Конфигурируем кит под бренд skillery ОДНИМ местом (config_dir-провайдер и
+# прочее — в core/_kit_config). Импорт = сайд-эффект skillkit.configure(...).
+from skills_hub_cli.core import _kit_config  # noqa: F401
 
 # Алиас: подменяем этот модуль на kit-модуль, чтобы attribute lookup был общим.
 sys.modules[__name__] = _kit_collections
