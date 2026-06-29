@@ -20,11 +20,11 @@ dependencies = [
     "pathspec>=0.12.0",
     "s-librarykit>=0.1.4",
     "s-clikit>=0.1.4",
-    "s-skillkit>=0.2.0",
+    "s-skillkit>=0.1.5",
 ]
 
 # Все киты (s-librarykit/s-clikit/s-skillkit) тянутся с PyPI — CLI распространяем
-# без локальных path-источников. s-skillkit>=0.2.0 несёт SkillkitConfig/configure
+# без локальных path-источников. s-skillkit>=0.1.5 несёт SkillkitConfig/configure
 # (единая брендо-конфигурация: core/_kit_config задаёт бренд skillery одним
 # вызовом — .skillery/skills.toml + legacy .skills-hub fallback). Заодно >=0.1.2
 # гард BUG-3 (#272): пустой files-инвентарь не затирает стор при auto-update.
