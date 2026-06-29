@@ -21,8 +21,14 @@ from skillkit import project as _kit_project
 _NEW_MANIFEST_REL = Path(".skillery") / "skills.toml"
 _LEGACY_MANIFEST_REL = Path(".skills-hub") / "skills.toml"
 
-_kit_project.set_manifest_rel_provider(lambda: _NEW_MANIFEST_REL)
-_kit_project.set_manifest_fallbacks((_LEGACY_MANIFEST_REL,))
+# Инъекция нового проектного пути (.skillery) провайдится в кит ТОЛЬКО если
+# установленная версия skillkit это поддерживает. Текущий кит (на PyPI) ещё
+# брендо-нейтральный и провайдеров не имеет → graceful no-op: проектный путь
+# остаётся китовым дефолтом (.skills-hub), обратная совместимость сохраняется.
+# Полный ребренд проектного пути — отдельная правка кита skillkit (см. #283).
+if hasattr(_kit_project, "set_manifest_rel_provider"):
+    _kit_project.set_manifest_rel_provider(lambda: _NEW_MANIFEST_REL)
+    _kit_project.set_manifest_fallbacks((_LEGACY_MANIFEST_REL,))
 
 from skillkit.project import (  # noqa: E402, F401
     MANIFEST_REL,

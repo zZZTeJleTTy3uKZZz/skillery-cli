@@ -37,6 +37,8 @@ dev = [
 
 [project.scripts]
 skillery = "skills_hub_cli.__main__:app"
+# Старое имя — deprecation-shim: печатает «используйте skillery» и выходит (код 2).
+skills-hub = "skills_hub_cli._deprecated_alias:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/skills_hub_cli"]
