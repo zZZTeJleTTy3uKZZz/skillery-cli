@@ -475,6 +475,15 @@ class HubClient:
             params={"channel": channel, "wait": "true"},
         )
 
+    async def yank_skill_version(
+        self, *, slug: str, semver: str, yank: bool = True
+    ) -> None:
+        """#340: снять/вернуть версию навыка (yank/unyank). 204 без тела."""
+        action = "yank" if yank else "unyank"
+        await self._request(
+            "POST", f"/skills/{slug}/versions/{semver}/{action}"
+        )
+
     async def create_company(self, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._request("POST", "/companies", json=payload)
 

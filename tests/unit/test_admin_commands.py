@@ -308,4 +308,65 @@ def test_cmd_admin_company_create_has_no_max_users_param() -> None:
 
     params = inspect.signature(main_mod.cmd_admin_company_create).parameters
     assert "max_users" not in params
+
+
+# === #340: yank/unyank версии навыка ===
+
+
+@pytest.mark.asyncio
+async def test_yank_skill_version_posts_yank_endpoint() -> None:
+    import respx
+    from httpx import Response
+
+    from skills_hub_cli.core.transport import HubClient
+
+    with respx.mock(base_url="http://localhost:8000") as router:
+        route = router.post("/skills/demo/versions/1.1.0/yank").mock(
+            return_value=Response(204)
+        )
+        client = HubClient(base_url="http://localhost:8000")
+        try:
+            await client.yank_skill_version(
+                slug="demo", semver="1.1.0", yank=True
+            )
+        finally:
+            await client.close()
+        assert route.called
+        assert (
+            route.calls.last.request.url.path
+            == "/skills/demo/versions/1.1.0/yank"
+        )
+
+
+@pytest.mark.asyncio
+async def test_unyank_posts_unyank_endpoint() -> None:
+    import respx
+    from httpx import Response
+
+    from skills_hub_cli.core.transport import HubClient
+
+    with respx.mock(base_url="http://localhost:8000") as router:
+        route = router.post("/skills/demo/versions/1.1.0/unyank").mock(
+            return_value=Response(204)
+        )
+        client = HubClient(base_url="http://localhost:8000")
+        try:
+            await client.yank_skill_version(
+                slug="demo", semver="1.1.0", yank=False
+            )
+        finally:
+            await client.close()
+        assert route.called
+
+
+def test_cmd_admin_yank_signature() -> None:
+    """Команда yank зарегистрирована с ожидаемыми параметрами."""
+    import inspect
+
+    from skills_hub_cli import __main__ as main_mod
+
+    params = inspect.signature(main_mod.cmd_admin_yank).parameters
+    assert "slug" in params
+    assert "version" in params
+    assert "unyank" in params
     assert "slug" in params

@@ -2392,6 +2392,45 @@ def cmd_admin_sync(
     _run(_do())
 
 
+def cmd_admin_yank(
+    slug: str = typer.Argument(
+        ..., metavar="ID_ИЛИ_SLUG", help="id-или-slug навыка"
+    ),
+    version: str = typer.Argument(..., metavar="SEMVER", help="версия, напр. 1.0.0"),
+    unyank: bool = typer.Option(
+        False, "--unyank", help="Вернуть ранее снятую версию"
+    ),
+) -> None:
+    """[skill.manage] Снять (yank) версию навыка — исключить из latest/install.
+
+    Снятая версия остаётся в истории; `--unyank` возвращает её обратно (#340).
+    """
+    cfg = ClientConfig.load()
+    access = _get_access_token()
+
+    async def _do() -> None:
+        client = HubClient(
+            base_url=cfg.base_url,
+            access_token=access,
+            on_token_refresh=_make_refresh_callback(cfg),
+        )
+        try:
+            await client.yank_skill_version(
+                slug=slug, semver=version, yank=not unyank
+            )
+        finally:
+            await client.close()
+        verb = "Возвращена" if unyank else "Снята"
+        emit_data(
+            {"slug": slug, "version": version, "yanked": not unyank},
+            text_renderer=lambda _p: console.print(
+                f"[green]✓[/] {verb} версия {slug}@{version}"
+            ),
+        )
+
+    _run(_do())
+
+
 def cmd_admin_company_create(
     name: str = typer.Option(...),
     owner_email: str = typer.Option(..., "--owner-email"),
@@ -2832,7 +2871,8 @@ def build_app() -> typer.Typer:
     can_sync = cfg.has_permission("hub.admin")
     can_company_create = cfg.has_permission("hub.company_create")
     can_invite = cfg.has_permission("invite.manage") or cfg.is_hub_admin()
-    if can_sync or can_company_create or can_invite:
+    can_yank = cfg.has_permission("skill.manage") or cfg.is_hub_admin()
+    if can_sync or can_company_create or can_invite or can_yank:
         admin_app = typer.Typer(
             no_args_is_help=True,
             help="Admin команды (зависят от ваших прав)",
@@ -2845,6 +2885,9 @@ def build_app() -> typer.Typer:
         gated(admin_app, permission="sync-skill",
               has_permission=lambda _p: can_sync,
               name="sync-skill")(cmd_admin_sync)
+        gated(admin_app, permission="yank",
+              has_permission=lambda _p: can_yank,
+              name="yank")(cmd_admin_yank)
         gated(admin_app, permission="company-create",
               has_permission=lambda _p: can_company_create,
               name="company-create")(cmd_admin_company_create)
