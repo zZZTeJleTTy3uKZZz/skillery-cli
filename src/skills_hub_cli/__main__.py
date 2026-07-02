@@ -2300,6 +2300,15 @@ def cmd_publish(
     version = tag.lstrip("v")
     manifest = build_manifest(skill_dir, version=version)
     actual_commit = commit_sha or git_commit_sha(skill_dir) or ("0" * 7)
+
+    # Парсинг тегов: очищаем скобки [ ] { }, дробим по запятой.
+    def _parse_tags(tags_str: str) -> list[str]:
+        # Убираем квадратные и фигурные скобки со скобок
+        clean = tags_str.strip()
+        clean = clean.lstrip("[{").rstrip("]}")
+        # Дробим по запятой, стриппим каждый
+        return [t.strip() for t in clean.split(",") if t.strip()]
+
     payload = {
         "slug": slug,
         "title": title or manifest.description.split("\n", 1)[0][:255] or slug,
@@ -2308,7 +2317,7 @@ def cmd_publish(
         "channel": channel,
         "commit_sha": actual_commit,
         "tags": (
-            [t.strip() for t in tags.split(",") if t.strip()]
+            _parse_tags(tags)
             if tags else manifest.tags
         ),
         "repo_url": repo_url,
