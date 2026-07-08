@@ -21,9 +21,9 @@ import json
 
 import pytest
 
-from skills_hub_cli import __main__ as main_mod
-from skills_hub_cli import output as output_module
-from skills_hub_cli.core.transport import ApiError
+from skillery_cli import __main__ as main_mod
+from skillery_cli import output as output_module
+from skillery_cli.core.transport import ApiError
 
 
 def _last_json_line(stream_text: str) -> dict:

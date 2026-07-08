@@ -15,9 +15,9 @@ from pathlib import Path
 
 import pytest
 
-from skills_hub_cli.core import linker
-from skills_hub_cli.core.agents import ClaudeCodeTarget
-from skills_hub_cli.core.installer import SkillInstaller, read_meta
+from skillery_cli.core import linker
+from skillery_cli.core.agents import ClaudeCodeTarget
+from skillery_cli.core.installer import SkillInstaller, read_meta
 
 _GIT = shutil.which("git")
 pytestmark = pytest.mark.skipif(_GIT is None, reason="git не установлен")

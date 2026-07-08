@@ -1,4 +1,4 @@
-"""Тесты ``skills-hub rate`` + ``rating-summary`` (E23)."""
+"""Тесты ``skillery rate`` + ``rating-summary`` (E23)."""
 from __future__ import annotations
 
 from typing import Any
@@ -8,10 +8,10 @@ import pytest
 import respx
 from httpx import Response
 
-from skills_hub_cli import output as output_module
-from skills_hub_cli.commands import _common, rate as rate_mod
-from skills_hub_cli.config import ClientConfig
-from skills_hub_cli.core.transport import HubClient
+from skillery_cli import output as output_module
+from skillery_cli.commands import _common, rate as rate_mod
+from skillery_cli.config import ClientConfig
+from skillery_cli.core.transport import HubClient
 
 
 def _text_mode() -> None:
@@ -174,7 +174,7 @@ def test_cmd_rate_registered_when_has_skill_rate_perm(
         permissions=["skill.read", "skill.rate"],
     )
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
-    from skills_hub_cli.__main__ import build_app
+    from skillery_cli.__main__ import build_app
 
     app = build_app()
     names = [cmd.name for cmd in app.registered_commands]
@@ -191,7 +191,7 @@ def test_cmd_rate_not_registered_without_perm(
         permissions=["skill.read"],  # без skill.rate
     )
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
-    from skills_hub_cli.__main__ import build_app
+    from skillery_cli.__main__ import build_app
 
     app = build_app()
     names = [cmd.name for cmd in app.registered_commands]

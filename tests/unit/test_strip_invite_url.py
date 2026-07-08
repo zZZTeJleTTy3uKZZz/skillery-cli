@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from skills_hub_cli.__main__ import _strip_invite_url
+from skillery_cli.__main__ import _strip_invite_url
 
 
 @pytest.mark.parametrize(

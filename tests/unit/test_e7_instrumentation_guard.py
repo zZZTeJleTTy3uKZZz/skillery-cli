@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from skills_hub_cli.daemon import instrumentation as instr
-from skills_hub_cli.daemon.event_collector import EventCollector
+from skillery_cli.daemon import instrumentation as instr
+from skillery_cli.daemon.event_collector import EventCollector
 
 
 def _wire(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> EventCollector:

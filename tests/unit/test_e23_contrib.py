@@ -1,4 +1,4 @@
-"""Тесты ``skills-hub contributors`` (E23 / E7)."""
+"""Тесты ``skillery contributors`` (E23 / E7)."""
 from __future__ import annotations
 
 from typing import Any
@@ -8,10 +8,10 @@ import pytest
 import respx
 from httpx import Response
 
-from skills_hub_cli import output as output_module
-from skills_hub_cli.commands import _common, contrib as contrib_mod
-from skills_hub_cli.config import ClientConfig
-from skills_hub_cli.core.transport import HubClient
+from skillery_cli import output as output_module
+from skillery_cli.commands import _common, contrib as contrib_mod
+from skillery_cli.config import ClientConfig
+from skillery_cli.core.transport import HubClient
 
 
 def _text_mode() -> None:

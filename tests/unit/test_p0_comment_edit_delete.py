@@ -1,4 +1,4 @@
-"""Тесты ``skills-hub comment-edit`` + ``comment-delete`` (P0).
+"""Тесты ``skillery comment-edit`` + ``comment-delete`` (P0).
 
 Backend адресует comment по числовому id (``PATCH /comments/{id}`` /
 ``DELETE /comments/{id}``) — резолв скилла НЕ нужен. Ответ — bare
@@ -11,9 +11,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from skills_hub_cli import output as output_module
-from skills_hub_cli.commands import _common, comment as comment_mod
-from skills_hub_cli.config import ClientConfig
+from skillery_cli import output as output_module
+from skillery_cli.commands import _common, comment as comment_mod
+from skillery_cli.config import ClientConfig
 
 
 def _text_mode() -> None:
@@ -121,7 +121,7 @@ def test_comment_edit_delete_registered_with_perms(
         permissions=["skill.read", "comment.edit_own", "comment.delete_own"],
     )
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
-    from skills_hub_cli.__main__ import build_app
+    from skillery_cli.__main__ import build_app
 
     app = build_app()
     names = [cmd.name for cmd in app.registered_commands]
@@ -137,7 +137,7 @@ def test_comment_edit_gated_by_edit_own(monkeypatch: pytest.MonkeyPatch) -> None
         permissions=["skill.read"],
     )
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
-    from skills_hub_cli.__main__ import build_app
+    from skillery_cli.__main__ import build_app
 
     app = build_app()
     names = [cmd.name for cmd in app.registered_commands]
@@ -155,7 +155,7 @@ def test_comment_delete_gated_independently(
         permissions=["skill.read", "comment.edit_own"],
     )
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
-    from skills_hub_cli.__main__ import build_app
+    from skillery_cli.__main__ import build_app
 
     app = build_app()
     names = [cmd.name for cmd in app.registered_commands]

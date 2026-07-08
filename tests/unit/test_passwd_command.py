@@ -1,4 +1,4 @@
-"""Тесты команды `skills-hub passwd` — смена пароля."""
+"""Тесты команды `skillery passwd` — смена пароля."""
 from __future__ import annotations
 
 from typing import Any
@@ -6,8 +6,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from skills_hub_cli import output as output_module
-from skills_hub_cli.config import ClientConfig
+from skillery_cli import output as output_module
+from skillery_cli.config import ClientConfig
 
 
 def _patch_output_text_mode() -> None:
@@ -20,7 +20,7 @@ async def test_hubclient_set_password_posts_correct_endpoint() -> None:
     import respx
     from httpx import Response
 
-    from skills_hub_cli.core.transport import HubClient
+    from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
         route = router.post("/me/password").mock(return_value=Response(204))
@@ -41,7 +41,7 @@ async def test_hubclient_set_password_posts_correct_endpoint() -> None:
 def test_passwd_requires_login(monkeypatch: pytest.MonkeyPatch) -> None:
     import typer
 
-    from skills_hub_cli import __main__ as main_mod
+    from skillery_cli import __main__ as main_mod
 
     _patch_output_text_mode()
     empty_cfg = ClientConfig(base_url="http://localhost:8000")
@@ -55,7 +55,7 @@ def test_passwd_requires_login(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_passwd_no_token_emits_error(monkeypatch: pytest.MonkeyPatch) -> None:
     import typer
 
-    from skills_hub_cli import __main__ as main_mod
+    from skillery_cli import __main__ as main_mod
 
     _patch_output_text_mode()
     cfg = ClientConfig(
@@ -72,7 +72,7 @@ def test_passwd_no_token_emits_error(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_passwd_happy_path_calls_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
-    from skills_hub_cli import __main__ as main_mod
+    from skillery_cli import __main__ as main_mod
 
     _patch_output_text_mode()
     cfg = ClientConfig(
@@ -113,7 +113,7 @@ def test_passwd_rejects_mismatched_confirmation(
 ) -> None:
     import typer
 
-    from skills_hub_cli import __main__ as main_mod
+    from skillery_cli import __main__ as main_mod
 
     _patch_output_text_mode()
     cfg = ClientConfig(
@@ -139,7 +139,7 @@ def test_passwd_rejects_mismatched_confirmation(
 def test_passwd_rejects_short_password(monkeypatch: pytest.MonkeyPatch) -> None:
     import typer
 
-    from skills_hub_cli import __main__ as main_mod
+    from skillery_cli import __main__ as main_mod
 
     _patch_output_text_mode()
     cfg = ClientConfig(
@@ -171,7 +171,7 @@ def test_passwd_registered_in_app_when_logged_in(
         permissions=["skill.read"],
     )
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
-    from skills_hub_cli.__main__ import build_app
+    from skillery_cli.__main__ import build_app
 
     app = build_app()
     names = [cmd.name for cmd in app.registered_commands]
@@ -184,7 +184,7 @@ def test_passwd_not_registered_when_not_logged_in(
     """passwd доступен только после login (требует access-токен)."""
     cfg = ClientConfig(base_url="http://localhost:8000")
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
-    from skills_hub_cli.__main__ import build_app
+    from skillery_cli.__main__ import build_app
 
     app = build_app()
     names = [cmd.name for cmd in app.registered_commands]

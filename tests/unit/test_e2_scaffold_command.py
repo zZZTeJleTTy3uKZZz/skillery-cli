@@ -1,4 +1,4 @@
-"""E2 — тесты команды ``skills-hub new <slug> --kind ...`` (scaffold).
+"""E2 — тесты команды ``skillery new <slug> --kind ...`` (scaffold).
 
 Команда генерит ПАПКУ НАВЫКА по типу (prompt/comprehensive/tooling) в tmp_path.
 Проверяем структуру каждого типа, наличие онбординг-триады в КАЖДОМ навыке,
@@ -15,9 +15,9 @@ from pathlib import Path
 import pytest
 import typer
 
-from skills_hub_cli import output as output_module
-from skills_hub_cli.commands import scaffold as scaffold_mod
-from skills_hub_cli.config import ClientConfig
+from skillery_cli import output as output_module
+from skillery_cli.commands import scaffold as scaffold_mod
+from skillery_cli.config import ClientConfig
 
 
 def _text_mode() -> None:
@@ -31,7 +31,7 @@ def test_new_command_registered_always_on(monkeypatch: pytest.MonkeyPatch) -> No
     # даже без логина команда `new` должна быть зарегистрирована
     cfg = ClientConfig(base_url="http://localhost:8000")
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
-    from skills_hub_cli.__main__ import build_app
+    from skillery_cli.__main__ import build_app
 
     app = build_app()
     names = [cmd.name for cmd in app.registered_commands]

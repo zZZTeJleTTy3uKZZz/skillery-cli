@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from skills_hub_cli.core import tooling_install as ti
+from skillery_cli.core import tooling_install as ti
 
 
 class _FakeResult:

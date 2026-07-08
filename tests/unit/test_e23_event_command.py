@@ -1,4 +1,4 @@
-"""Тесты ``skills-hub event track / queue / flush`` (E23).
+"""Тесты ``skillery event track / queue / flush`` (E23).
 
 Эти команды редактируют локальную очередь — fixture'ируем её через
 override ``default_queue_path`` функцией.
@@ -9,10 +9,10 @@ from pathlib import Path
 
 import pytest
 
-from skills_hub_cli import output as output_module
-from skills_hub_cli.commands import event as event_mod
-from skills_hub_cli.config import ClientConfig
-from skills_hub_cli.daemon.event_collector import EventCollector
+from skillery_cli import output as output_module
+from skillery_cli.commands import event as event_mod
+from skillery_cli.config import ClientConfig
+from skillery_cli.daemon.event_collector import EventCollector
 
 
 def _text_mode() -> None:
@@ -98,7 +98,7 @@ def test_cmd_event_flush_calls_sender(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """flush должен прозвонить sender один раз и вернуть SendResult."""
-    from skills_hub_cli.commands import _common
+    from skillery_cli.commands import _common
     from unittest.mock import MagicMock
 
     _text_mode()

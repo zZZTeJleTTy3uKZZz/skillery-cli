@@ -4,12 +4,12 @@
 ``save_tokens``/``load_tokens``/``clear_tokens`` переписаны поверх
 ``librarykit.secret_store.SecretStore``, но СОХРАНЯЮТ прежний контракт хранения:
 
-- keyring-namespace = ``skills-hub-cli`` (или ``skills-hub-cli:<profile>``) —
+- keyring-namespace = ``skillery-cli`` (или ``skillery-cli:<profile>``) —
   тот же, что был → ранее записанные keyring-ключи читаются как есть;
 - ключи keyring = ``"{email}:access"`` / ``"{email}:refresh"`` — без изменений;
-- file-fallback = ``~/.skills-hub/[profiles/<p>/]tokens.toml`` тот же путь +
+- file-fallback = ``~/.skillery/[profiles/<p>/]tokens.toml`` тот же путь +
   формат ``{user_email, access, refresh}`` → уже сохранённый файл читается;
-- env-override ``SKILLS_HUB_ACCESS_TOKEN`` / ``SKILLS_HUB_REFRESH_TOKEN``
+- env-override ``SKILLERY_ACCESS_TOKEN`` / ``SKILLERY_REFRESH_TOKEN``
   читается ПЕРВЫМ (как раньше).
 
 Эти тесты доказывают: СТАРЫЙ tokens.toml + СТАРЫЕ keyring-ключи читаются новым
@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 import tomli_w
 
-from skills_hub_cli import config as config_module
+from skillery_cli import config as config_module
 
 EMAIL = "cemon345rus@gmail.com"
 LONG_ACCESS = "eyJ." + "a" * 1600
@@ -53,10 +53,10 @@ class _FakeKeyring:
 
 @pytest.fixture()
 def isolated_config_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setenv("SKILLS_HUB_CONFIG_DIR", str(tmp_path))
-    monkeypatch.delenv("SKILLS_HUB_ACCESS_TOKEN", raising=False)
-    monkeypatch.delenv("SKILLS_HUB_REFRESH_TOKEN", raising=False)
-    monkeypatch.delenv("SKILLS_HUB_PROFILE", raising=False)
+    monkeypatch.setenv("SKILLERY_CONFIG_DIR", str(tmp_path))
+    monkeypatch.delenv("SKILLERY_ACCESS_TOKEN", raising=False)
+    monkeypatch.delenv("SKILLERY_REFRESH_TOKEN", raising=False)
+    monkeypatch.delenv("SKILLERY_PROFILE", raising=False)
     monkeypatch.setattr(config_module, "_ACTIVE_PROFILE", None)
     return tmp_path
 
@@ -85,7 +85,7 @@ def test_save_tokens_built_on_librarykit_secretstore() -> None:
 def test_legacy_tokens_toml_is_read_by_new_load_tokens(
     isolated_config_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Существующий ``~/.skills-hub/tokens.toml`` (старый формат и путь).
+    """Существующий ``~/.skillery/tokens.toml`` (старый формат и путь).
 
     Записан ДО апдейта CLI — новый load_tokens обязан вернуть ту же пару
     (иначе прод-юзер разлогинится). keyring пуст → читается файл.
@@ -110,7 +110,7 @@ def test_legacy_tokens_toml_is_read_by_new_load_tokens(
 def test_legacy_keyring_keys_are_read_by_new_load_tokens(
     isolated_config_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """СТАРЫЕ keyring-ключи (namespace ``skills-hub-cli``, ключи
+    """СТАРЫЕ keyring-ключи (namespace ``skillery-cli``, ключи
     ``{email}:access``/``{email}:refresh``) читаются новым кодом as-is.
     """
     fake = _FakeKeyring()
@@ -163,8 +163,8 @@ def test_roundtrip_via_file_fallback_when_no_keyring(
 def test_env_override_wins_over_stored(
     isolated_config_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SKILLS_HUB_ACCESS_TOKEN", "ENV_A")
-    monkeypatch.setenv("SKILLS_HUB_REFRESH_TOKEN", "ENV_R")
+    monkeypatch.setenv("SKILLERY_ACCESS_TOKEN", "ENV_A")
+    monkeypatch.setenv("SKILLERY_REFRESH_TOKEN", "ENV_R")
     fake = _FakeKeyring()
     fake.storage[(config_module.KEYRING_SERVICE, f"{EMAIL}:access")] = "KR_A"
     monkeypatch.setattr(config_module, "_try_keyring", lambda: fake)
@@ -178,7 +178,7 @@ def test_env_override_wins_over_stored(
 def test_profile_uses_namespaced_keyring(
     isolated_config_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Активный профиль → namespace ``skills-hub-cli:<profile>`` (как раньше)."""
+    """Активный профиль → namespace ``skillery-cli:<profile>`` (как раньше)."""
     config_module.set_active_profile("work")
     try:
         fake = _FakeKeyring()

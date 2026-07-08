@@ -1,4 +1,4 @@
-"""Тесты команды `skills-hub web` — handoff в Web UI."""
+"""Тесты команды `skillery web` — handoff в Web UI."""
 from __future__ import annotations
 
 import json
@@ -8,8 +8,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from skills_hub_cli import output as output_module
-from skills_hub_cli.config import ClientConfig
+from skillery_cli import output as output_module
+from skillery_cli.config import ClientConfig
 
 
 # ---------------------- effective_web_ui_url ----------------------
@@ -55,7 +55,7 @@ async def test_hubclient_exchange_create_posts_correct_endpoint() -> None:
     import respx
     from httpx import Response
 
-    from skills_hub_cli.core.transport import HubClient
+    from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
         route = router.post("/auth/exchanges").mock(
@@ -93,7 +93,7 @@ def test_web_requires_login(monkeypatch: pytest.MonkeyPatch) -> None:
     """Без user_email/permissions — emit_error NOT_LOGGED_IN + typer.Exit(1)."""
     import typer
 
-    from skills_hub_cli import __main__ as main_mod
+    from skillery_cli import __main__ as main_mod
 
     _patch_output_text_mode()
     empty_cfg = ClientConfig(base_url="https://api.hub.example")
@@ -108,7 +108,7 @@ def test_web_no_token_emits_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """Залогинен по permissions, но keyring пуст → NO_TOKEN."""
     import typer
 
-    from skills_hub_cli import __main__ as main_mod
+    from skillery_cli import __main__ as main_mod
 
     _patch_output_text_mode()
     cfg = ClientConfig(
@@ -126,7 +126,7 @@ def test_web_no_token_emits_error(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_web_calls_exchange_and_opens_browser(monkeypatch: pytest.MonkeyPatch) -> None:
     """Happy path: exchange_create → webbrowser.open с правильным URL."""
-    from skills_hub_cli import __main__ as main_mod
+    from skillery_cli import __main__ as main_mod
 
     _patch_output_text_mode()
     cfg = ClientConfig(
@@ -168,7 +168,7 @@ def test_web_calls_exchange_and_opens_browser(monkeypatch: pytest.MonkeyPatch) -
 
 def test_web_no_browser_flag_skips_open(monkeypatch: pytest.MonkeyPatch) -> None:
     """--no-browser → webbrowser.open НЕ вызывается, но URL всё равно посчитан."""
-    from skills_hub_cli import __main__ as main_mod
+    from skillery_cli import __main__ as main_mod
 
     _patch_output_text_mode()
     cfg = ClientConfig(
@@ -205,7 +205,7 @@ def test_web_json_mode_emits_structured(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """В json-режиме stdout содержит JSON {url, code, expires_at, opened_browser}."""
-    from skills_hub_cli import __main__ as main_mod
+    from skillery_cli import __main__ as main_mod
 
     output_module._mode = "json"
     try:
@@ -250,7 +250,7 @@ def test_web_json_mode_emits_structured(
 
 def test_web_command_registered_in_app() -> None:
     """build_app() должна регистрировать 'web' даже без логина (always-on)."""
-    from skills_hub_cli.__main__ import build_app
+    from skillery_cli.__main__ import build_app
 
     app = build_app()
     names = [cmd.name for cmd in app.registered_commands]

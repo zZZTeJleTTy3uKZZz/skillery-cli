@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from skills_hub_cli.core.installer import PathTraversalError, safe_copy_tree
+from skillery_cli.core.installer import PathTraversalError, safe_copy_tree
 
 
 def _make_junction(link: Path, target: Path) -> None:
@@ -116,7 +116,7 @@ def test_safe_copy_tree_allows_internal_symlink(tmp_path: Path) -> None:
 
 def test_assert_within_rejects_dotdot_escape(tmp_path: Path) -> None:
     """`_assert_within` отвергает путь с `..`, вырывающийся за base (все платформы)."""
-    from skills_hub_cli.core.installer import _assert_within
+    from skillery_cli.core.installer import _assert_within
 
     dst = tmp_path / "dst"
     dst.mkdir()
@@ -131,7 +131,7 @@ def test_assert_within_rejects_dotdot_escape(tmp_path: Path) -> None:
 
 def test_assert_within_rejects_absolute_outside(tmp_path: Path) -> None:
     """Абсолютный путь вне base отвергается."""
-    from skills_hub_cli.core.installer import _assert_within
+    from skillery_cli.core.installer import _assert_within
 
     dst = tmp_path / "dst"
     dst.mkdir()
@@ -143,7 +143,7 @@ def test_assert_within_rejects_absolute_outside(tmp_path: Path) -> None:
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows-only: разные диски")
 def test_assert_within_rejects_different_drive(tmp_path: Path) -> None:
     """Windows: путь на другом диске → traversal (commonpath ValueError)."""
-    from skills_hub_cli.core.installer import _assert_within
+    from skillery_cli.core.installer import _assert_within
 
     dst = tmp_path / "dst"
     dst.mkdir()
@@ -216,7 +216,7 @@ def test_safe_copy_file_rejects_junction_parent(tmp_path: Path) -> None:
     Junction в компоненте пути не ловится ``Path.is_symlink()``, поэтому src
     выглядит обычным файлом — реальную цель надо резолвить и проверять.
     """
-    from skills_hub_cli.core.installer import _safe_copy_file
+    from skillery_cli.core.installer import _safe_copy_file
 
     outside = tmp_path / "outside"
     outside.mkdir()

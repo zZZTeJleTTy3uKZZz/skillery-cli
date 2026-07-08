@@ -19,7 +19,7 @@ from __future__ import annotations
 import pytest
 from typer.testing import CliRunner
 
-from skills_hub_cli.config import ClientConfig
+from skillery_cli.config import ClientConfig
 
 
 def _build(monkeypatch: pytest.MonkeyPatch, perms: list[str] | None):  # noqa: ANN202
@@ -33,7 +33,7 @@ def _build(monkeypatch: pytest.MonkeyPatch, perms: list[str] | None):  # noqa: A
             company_id="1",
         )
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
-    from skills_hub_cli.__main__ import build_app
+    from skillery_cli.__main__ import build_app
 
     return build_app()
 

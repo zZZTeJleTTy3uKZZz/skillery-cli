@@ -26,10 +26,10 @@ from unittest.mock import MagicMock
 import pytest
 import typer
 
-from skills_hub_cli import output as output_module
-from skills_hub_cli.commands import _common
-from skills_hub_cli.commands import account as account_mod
-from skills_hub_cli.config import ClientConfig
+from skillery_cli import output as output_module
+from skillery_cli.commands import _common
+from skillery_cli.commands import account as account_mod
+from skillery_cli.config import ClientConfig
 
 
 async def _no_perms() -> list[str]:
@@ -107,7 +107,7 @@ async def test_hubclient_register_posts_to_auth_register() -> None:
     import respx
     from httpx import Response
 
-    from skills_hub_cli.core.transport import HubClient
+    from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
         route = router.post("/auth/register").mock(
@@ -138,7 +138,7 @@ async def test_hubclient_register_with_link_posts_token() -> None:
     import respx
     from httpx import Response
 
-    from skills_hub_cli.core.transport import HubClient
+    from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
         route = router.post("/auth/register-with-link").mock(
@@ -172,7 +172,7 @@ async def test_hubclient_accept_invite_link_returns_none_on_204() -> None:
     import respx
     from httpx import Response
 
-    from skills_hub_cli.core.transport import HubClient
+    from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
         route = router.post("/invite-links/accept").mock(
@@ -336,7 +336,7 @@ def test_cmd_register_email_taken_exits_1(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """409 EMAIL_TAKEN от бэка → читабельная ошибка + exit 1."""
-    from skills_hub_cli.core.transport import ApiError
+    from skillery_cli.core.transport import ApiError
 
     _text_mode()
     _patch_cfg(monkeypatch)
@@ -369,7 +369,7 @@ def test_cmd_register_api_error_json_mode_emits_error_event(
     """В json-режиме ApiError → {"event":"error",...} в stderr, stdout чист."""
     import json as _json
 
-    from skills_hub_cli.core.transport import ApiError
+    from skillery_cli.core.transport import ApiError
 
     _json_mode()
     _patch_cfg(monkeypatch)
@@ -450,7 +450,7 @@ def test_cmd_join_logged_in_link_unusable_exits_1(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """409 LINK_UNUSABLE (исчерпана/отозвана) → exit 1."""
-    from skills_hub_cli.core.transport import ApiError
+    from skillery_cli.core.transport import ApiError
 
     _text_mode()
     _patch_cfg(
@@ -485,7 +485,7 @@ def test_cmd_join_logged_in_link_not_found_exits_1(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """404 NOT_FOUND (невалидная ссылка) → exit 1."""
-    from skills_hub_cli.core.transport import ApiError
+    from skillery_cli.core.transport import ApiError
 
     _text_mode()
     _patch_cfg(
@@ -607,7 +607,7 @@ def test_cmd_join_register_with_link_invalid_link_exits_1(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """404 LINK_NOT_FOUND при регистрации по мёртвой ссылке → exit 1."""
-    from skills_hub_cli.core.transport import ApiError
+    from skillery_cli.core.transport import ApiError
 
     _text_mode()
     _patch_cfg(monkeypatch)
@@ -661,7 +661,7 @@ def test_register_and_join_present_when_logged_out(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_cfg(monkeypatch)  # без user_email → не залогинен
-    from skills_hub_cli.__main__ import build_app
+    from skillery_cli.__main__ import build_app
 
     app = build_app()
     names = [c.name for c in app.registered_commands]
@@ -675,7 +675,7 @@ def test_register_and_join_present_when_logged_in(
     _patch_cfg(
         monkeypatch, user_email="u@example.com", permissions=["skill.read"]
     )
-    from skills_hub_cli.__main__ import build_app
+    from skillery_cli.__main__ import build_app
 
     app = build_app()
     names = [c.name for c in app.registered_commands]

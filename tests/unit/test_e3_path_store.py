@@ -2,7 +2,7 @@
 
 Цель: CLI установленного навыка («command_name» из E6 ``[[cli]]``) должен
 зваться из ЛЮБОЙ директории. Для этого path_store:
-- кладёт исполняемый shim в bin-каталог стора (``~/.skills-hub/bin``);
+- кладёт исполняемый shim в bin-каталог стора (``~/.skillery/bin``);
 - умеет убрать shim (disable/remove навыка);
 - кроссплатформенно гарантирует bin-каталог в PATH (idempotent);
 - перечисляет, какие CLI установлены.
@@ -18,14 +18,14 @@ from pathlib import Path
 
 import pytest
 
-from skills_hub_cli.core import path_store
+from skillery_cli.core import path_store
 
 
 @pytest.fixture()
 def bin_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Изолированный bin-каталог через env-override SKILLS_HUB_BIN_DIR."""
-    d = tmp_path / "skills-hub" / "bin"
-    monkeypatch.setenv("SKILLS_HUB_BIN_DIR", str(d))
+    """Изолированный bin-каталог через env-override SKILLERY_BIN_DIR."""
+    d = tmp_path / "skillery" / "bin"
+    monkeypatch.setenv("SKILLERY_BIN_DIR", str(d))
     return d
 
 
@@ -34,9 +34,9 @@ def bin_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 # --------------------------------------------------------------------------
 def test_bin_dir_default_is_store_parent_bin(monkeypatch: pytest.MonkeyPatch) -> None:
     """По умолчанию bin = effective_store_dir().parent / 'bin'."""
-    monkeypatch.delenv("SKILLS_HUB_BIN_DIR", raising=False)
-    monkeypatch.setenv("SKILLS_HUB_STORE_DIR", str(Path.home() / ".skills-hub" / "store"))
-    expected = (Path.home() / ".skills-hub" / "store").parent / "bin"
+    monkeypatch.delenv("SKILLERY_BIN_DIR", raising=False)
+    monkeypatch.setenv("SKILLERY_STORE_DIR", str(Path.home() / ".skillery" / "store"))
+    expected = (Path.home() / ".skillery" / "store").parent / "bin"
     assert path_store.bin_dir() == expected
 
 

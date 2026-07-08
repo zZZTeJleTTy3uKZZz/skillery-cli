@@ -11,8 +11,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from skills_hub_cli import output as output_module
-from skills_hub_cli.config import ClientConfig
+from skillery_cli import output as output_module
+from skillery_cli.config import ClientConfig
 
 
 def _patch_text_mode() -> None:
@@ -38,7 +38,7 @@ def _cfg(
 def _fake_factory(
     monkeypatch: pytest.MonkeyPatch, fake_client: MagicMock
 ) -> None:
-    from skills_hub_cli.commands import _common
+    from skillery_cli.commands import _common
 
     monkeypatch.setattr(_common, "HubClient", lambda **kw: fake_client)
     monkeypatch.setattr(_common, "load_tokens", lambda email: ("a", "r"))
@@ -62,7 +62,7 @@ def _bulk_ok() -> dict[str, Any]:
 # M-3 — member suspend / activate / revoke-sessions
 # ============================================================
 def test_cmd_member_suspend_calls_bulk(monkeypatch: pytest.MonkeyPatch) -> None:
-    from skills_hub_cli.commands import member as member_mod
+    from skillery_cli.commands import member as member_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["user.lock"])
@@ -82,7 +82,7 @@ def test_cmd_member_suspend_calls_bulk(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_cmd_member_activate_calls_bulk(monkeypatch: pytest.MonkeyPatch) -> None:
-    from skills_hub_cli.commands import member as member_mod
+    from skillery_cli.commands import member as member_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["user.lock"])
@@ -104,7 +104,7 @@ def test_cmd_member_activate_calls_bulk(monkeypatch: pytest.MonkeyPatch) -> None
 def test_cmd_member_revoke_sessions_calls_transport(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from skills_hub_cli.commands import member as member_mod
+    from skillery_cli.commands import member as member_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["user.lock"])
@@ -129,7 +129,7 @@ def test_cmd_member_revoke_sessions_calls_transport(
 def test_cmd_member_create_passes_fields(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from skills_hub_cli.commands import member as member_mod
+    from skillery_cli.commands import member as member_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["user.create"], company_id="7")
@@ -160,7 +160,7 @@ def test_cmd_member_create_passes_fields(
 
 
 def test_cmd_member_create_derives_name(monkeypatch: pytest.MonkeyPatch) -> None:
-    from skills_hub_cli.commands import member as member_mod
+    from skillery_cli.commands import member as member_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["user.create"], company_id="7")
@@ -192,12 +192,12 @@ def test_cmd_member_create_requires_company(
 ) -> None:
     import typer
 
-    from skills_hub_cli.commands import member as member_mod
+    from skillery_cli.commands import member as member_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["user.create"], company_id=None)
     monkeypatch.setattr(
-        "skills_hub_cli.commands._common.load_tokens", lambda email: ("a", "r")
+        "skillery_cli.commands._common.load_tokens", lambda email: ("a", "r")
     )
     with pytest.raises(typer.Exit) as exc:
         member_mod.cmd_member_create(
@@ -213,7 +213,7 @@ def test_cmd_member_create_requires_company(
 
 
 def test_cmd_member_edit_builds_payload(monkeypatch: pytest.MonkeyPatch) -> None:
-    from skills_hub_cli.commands import member as member_mod
+    from skillery_cli.commands import member as member_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["user.update"])
@@ -241,12 +241,12 @@ def test_cmd_member_edit_rejects_empty_payload(
 ) -> None:
     import typer
 
-    from skills_hub_cli.commands import member as member_mod
+    from skillery_cli.commands import member as member_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["user.update"])
     monkeypatch.setattr(
-        "skills_hub_cli.commands._common.load_tokens", lambda email: ("a", "r")
+        "skillery_cli.commands._common.load_tokens", lambda email: ("a", "r")
     )
     with pytest.raises(typer.Exit):
         member_mod.cmd_member_edit(
@@ -259,12 +259,12 @@ def test_cmd_member_edit_rejects_bad_status(
 ) -> None:
     import typer
 
-    from skills_hub_cli.commands import member as member_mod
+    from skillery_cli.commands import member as member_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["user.update"])
     monkeypatch.setattr(
-        "skills_hub_cli.commands._common.load_tokens", lambda email: ("a", "r")
+        "skillery_cli.commands._common.load_tokens", lambda email: ("a", "r")
     )
     with pytest.raises(typer.Exit):
         member_mod.cmd_member_edit(
@@ -275,7 +275,7 @@ def test_cmd_member_edit_rejects_bad_status(
 def test_cmd_member_delete_calls_transport(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from skills_hub_cli.commands import member as member_mod
+    from skillery_cli.commands import member as member_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["user.delete"])
@@ -297,7 +297,7 @@ def test_cmd_member_delete_calls_transport(
 def test_cmd_member_transfer_passes_args(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from skills_hub_cli.commands import member as member_mod
+    from skillery_cli.commands import member as member_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["hub.admin"])
@@ -333,7 +333,7 @@ def test_cmd_member_transfer_passes_args(
 def test_cmd_member_export_writes_file(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
-    from skills_hub_cli.commands import member as member_mod
+    from skillery_cli.commands import member as member_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["hub.admin"])
@@ -361,14 +361,14 @@ def test_cmd_member_export_writes_file(
 # M-2 — collection server CRUD (create / add / remove / tags)
 # ============================================================
 def _enable_collection_server(can_manage: bool = True) -> None:
-    from skills_hub_cli.commands import collection as coll_mod
+    from skillery_cli.commands import collection as coll_mod
 
     coll_mod._SERVER_ENABLED = True
     coll_mod._CAN_MANAGE = can_manage
 
 
 def test_cmd_collection_create_server(monkeypatch: pytest.MonkeyPatch) -> None:
-    from skills_hub_cli.commands import collection as coll_mod
+    from skillery_cli.commands import collection as coll_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["catalog.manage"])
@@ -403,13 +403,13 @@ def test_cmd_collection_create_server_gated(
     """Без catalog.manage серверный create → exit 1 (подсказка про --local)."""
     import typer
 
-    from skills_hub_cli.commands import collection as coll_mod
+    from skillery_cli.commands import collection as coll_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["skill.read"])
     _enable_collection_server(can_manage=False)
     monkeypatch.setattr(
-        "skills_hub_cli.commands._common.load_tokens", lambda email: ("a", "r")
+        "skillery_cli.commands._common.load_tokens", lambda email: ("a", "r")
     )
     with pytest.raises(typer.Exit) as exc:
         coll_mod.cmd_collection_create(
@@ -426,7 +426,7 @@ def test_cmd_collection_create_server_gated(
 def test_cmd_collection_add_server_resolves_skill(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from skills_hub_cli.commands import collection as coll_mod
+    from skillery_cli.commands import collection as coll_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["catalog.manage"])
@@ -456,7 +456,7 @@ def test_cmd_collection_add_server_resolves_skill(
 
 
 def test_cmd_collection_remove_server(monkeypatch: pytest.MonkeyPatch) -> None:
-    from skills_hub_cli.commands import collection as coll_mod
+    from skillery_cli.commands import collection as coll_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["catalog.manage"])
@@ -477,7 +477,7 @@ def test_cmd_collection_remove_server(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_cmd_collection_tags_server(monkeypatch: pytest.MonkeyPatch) -> None:
-    from skills_hub_cli.commands import collection as coll_mod
+    from skillery_cli.commands import collection as coll_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["catalog.manage"])
@@ -502,13 +502,13 @@ def test_cmd_collection_tags_rejects_non_numeric(
 ) -> None:
     import typer
 
-    from skills_hub_cli.commands import collection as coll_mod
+    from skillery_cli.commands import collection as coll_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["catalog.manage"])
     _enable_collection_server()
     monkeypatch.setattr(
-        "skills_hub_cli.commands._common.load_tokens", lambda email: ("a", "r")
+        "skillery_cli.commands._common.load_tokens", lambda email: ("a", "r")
     )
     with pytest.raises(typer.Exit):
         coll_mod.cmd_collection_tags(name="kit", tag_ids="1,abc")
@@ -518,7 +518,7 @@ def test_cmd_collection_tags_rejects_non_numeric(
 # M-4 — permissions list / role show / role set-permissions
 # ============================================================
 def test_cmd_permissions_list(monkeypatch: pytest.MonkeyPatch) -> None:
-    from skills_hub_cli.commands import permission as perm_mod
+    from skillery_cli.commands import permission as perm_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["hub.admin"])
@@ -545,7 +545,7 @@ def test_cmd_permissions_list(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_cmd_role_show(monkeypatch: pytest.MonkeyPatch) -> None:
-    from skills_hub_cli.commands import permission as perm_mod
+    from skillery_cli.commands import permission as perm_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["hub.admin"])
@@ -567,7 +567,7 @@ def test_cmd_role_show(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_cmd_role_set_permissions_splits_perms(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from skills_hub_cli.commands import permission as perm_mod
+    from skillery_cli.commands import permission as perm_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["hub.admin"])
@@ -591,7 +591,7 @@ def test_cmd_role_set_permissions_empty_clears(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """--perms "" → пустой набор (снять все права)."""
-    from skills_hub_cli.commands import permission as perm_mod
+    from skillery_cli.commands import permission as perm_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["hub.admin"])
@@ -620,7 +620,7 @@ def _build_app(monkeypatch: pytest.MonkeyPatch, perms: list[str]):  # noqa: ANN2
         permissions=perms,
     )
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
-    from skills_hub_cli.__main__ import build_app
+    from skillery_cli.__main__ import build_app
 
     return build_app()
 

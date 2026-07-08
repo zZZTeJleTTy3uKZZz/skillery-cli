@@ -1,9 +1,9 @@
 """cli-kits W4: ClientConfig.load/save поверх ``clikit.config.AppConfig``.
 
 Проверяем, что перевод конфиг-слоя на 4-слойный AppConfig (defaults → файл
-``~/.skills-hub/config.toml`` → env → overrides) НЕ ломает публичный контракт
+``~/.skillery/config.toml`` → env → overrides) НЕ ломает публичный контракт
 ClientConfig: те же поля, дефолты, сигнатуры, TOML-формат файла, env-override
-(``SKILLS_HUB_BASE_URL`` / ``SKILLS_HUB_STORE_DIR``), профили и derive web_ui.
+(``SKILLERY_BASE_URL`` / ``SKILLERY_STORE_DIR``), профили и derive web_ui.
 
 Токен-функции (save/load/clear_tokens, W2) — НЕ предмет этих тестов.
 """
@@ -14,18 +14,18 @@ from pathlib import Path
 
 import pytest
 
-from skills_hub_cli import config as config_mod
-from skills_hub_cli.config import ClientConfig
+from skillery_cli import config as config_mod
+from skillery_cli.config import ClientConfig
 
 
 @pytest.fixture(autouse=True)
 def _isolate_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Сбросить env/профиль, чтобы тесты не зависели от окружения хоста."""
     for var in (
-        "SKILLS_HUB_BASE_URL",
-        "SKILLS_HUB_STORE_DIR",
-        "SKILLS_HUB_CONFIG_DIR",
-        "SKILLS_HUB_PROFILE",
+        "SKILLERY_BASE_URL",
+        "SKILLERY_STORE_DIR",
+        "SKILLERY_CONFIG_DIR",
+        "SKILLERY_PROFILE",
     ):
         monkeypatch.delenv(var, raising=False)
     config_mod.set_active_profile(None)
@@ -54,8 +54,8 @@ def test_defaults_unchanged() -> None:
 
 
 def test_base_url_env_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Пустой base_url берётся из SKILLS_HUB_BASE_URL (исторический контракт)."""
-    monkeypatch.setenv("SKILLS_HUB_BASE_URL", "https://api.example.com")
+    """Пустой base_url берётся из SKILLERY_BASE_URL (исторический контракт)."""
+    monkeypatch.setenv("SKILLERY_BASE_URL", "https://api.example.com")
     assert ClientConfig().base_url == "https://api.example.com"
 
 
@@ -159,7 +159,7 @@ def test_load_explicit_path_ignores_env_base_url(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """base_url из файла приоритетнее env-дефолта для load(path)."""
-    monkeypatch.setenv("SKILLS_HUB_BASE_URL", "https://env.example")
+    monkeypatch.setenv("SKILLERY_BASE_URL", "https://env.example")
     p = tmp_path / "config.toml"
     p.write_text('base_url = "https://file.example"\n', encoding="utf-8")
     assert ClientConfig.load(p).base_url == "https://file.example"
@@ -193,7 +193,7 @@ def test_load_ignores_unknown_keys(tmp_path: Path) -> None:
 def test_default_config_path_respects_config_dir_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SKILLS_HUB_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("SKILLERY_CONFIG_DIR", str(tmp_path))
     config_mod.set_active_profile(None)
     cfg = ClientConfig(base_url="http://localhost:8000", user_email="x@hub")
     cfg.save()  # без path → дефолтный файл
@@ -205,7 +205,7 @@ def test_default_config_path_respects_config_dir_env(
 def test_default_path_uses_profile_subdir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SKILLS_HUB_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("SKILLERY_CONFIG_DIR", str(tmp_path))
     config_mod.set_active_profile("work")
     try:
         cfg = ClientConfig(base_url="http://localhost:8000", user_email="w@hub")
@@ -217,12 +217,12 @@ def test_default_path_uses_profile_subdir(
 
 
 # --------------------------------------------------------------------------
-# ребренд home-каталога ~/.skills-hub → ~/.skillery + обратная совместимость
+# ребренд home-каталога ~/.skillery → ~/.skillery + обратная совместимость
 # --------------------------------------------------------------------------
 def _isolate_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Изолированный home (без env-override каталога) для тестов резолвера."""
-    monkeypatch.delenv("SKILLS_HUB_CONFIG_DIR", raising=False)
-    monkeypatch.delenv("SKILLS_HUB_STORE_DIR", raising=False)
+    monkeypatch.delenv("SKILLERY_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("SKILLERY_STORE_DIR", raising=False)
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
@@ -233,7 +233,7 @@ def _isolate_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def test_fresh_install_defaults_to_skillery(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Свежая установка (нет ни ~/.skillery, ни ~/.skills-hub) → ~/.skillery."""
+    """Свежая установка (нет ни ~/.skillery, ни ~/.skillery) → ~/.skillery."""
     home = _isolate_home(tmp_path, monkeypatch)
     assert config_mod._default_config_dir() == home / ".skillery"
     assert config_mod._default_store_dir() == home / ".skillery" / "store"
@@ -242,18 +242,8 @@ def test_fresh_install_defaults_to_skillery(
 def test_legacy_skills_hub_used_when_new_absent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Обратная совместимость: есть старый ~/.skills-hub, нового нет → legacy."""
+    """Обратная совместимость: есть старый ~/.skillery, нового нет → legacy."""
     home = _isolate_home(tmp_path, monkeypatch)
-    (home / ".skills-hub").mkdir()
-    assert config_mod._default_config_dir() == home / ".skills-hub"
-
-
-def test_new_skillery_wins_when_both_present(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Есть оба каталога → используется новый ~/.skillery."""
-    home = _isolate_home(tmp_path, monkeypatch)
-    (home / ".skills-hub").mkdir()
     (home / ".skillery").mkdir()
     assert config_mod._default_config_dir() == home / ".skillery"
 
@@ -261,46 +251,23 @@ def test_new_skillery_wins_when_both_present(
 def test_env_override_beats_legacy_fallback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """env ``SKILLS_HUB_CONFIG_DIR`` приоритетнее legacy-каталога (override)."""
+    """env ``SKILLERY_CONFIG_DIR`` приоритетнее legacy-каталога (override)."""
     home = _isolate_home(tmp_path, monkeypatch)
-    (home / ".skills-hub").mkdir()
+    (home / ".skillery").mkdir()
     override = tmp_path / "explicit-cfg"
-    monkeypatch.setenv("SKILLS_HUB_CONFIG_DIR", str(override))
+    monkeypatch.setenv("SKILLERY_CONFIG_DIR", str(override))
     assert config_mod._default_config_dir() == override
 
 
-def test_save_migrates_legacy_home_to_skillery(
+def test_save_fresh_writes_skillery(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """save() мигрирует ~/.skills-hub → ~/.skillery (rename) и пишет в новый.
-
-    Старый config-файл (логин/настройки) переезжает, юзер не теряет состояние.
-    """
-    home = _isolate_home(tmp_path, monkeypatch)
-    legacy = home / ".skills-hub"
-    legacy.mkdir()
-    (legacy / "config.toml").write_text(
-        'base_url = "https://old.hub"\nuser_email = "old@hub"\n', encoding="utf-8"
-    )
-    config_mod.set_active_profile(None)
-    cfg = ClientConfig(base_url="https://new.hub", user_email="new@hub")
-    cfg.save()  # без path → дефолт + миграция
-    # Legacy перенесён в новый каталог, старый каталог исчез.
-    assert not legacy.exists()
-    assert (home / ".skillery" / "config.toml").is_file()
-    # Записан НОВЫЙ конфиг в новом каталоге.
-    assert ClientConfig.load().user_email == "new@hub"
-
-
-def test_save_fresh_writes_skillery_no_legacy(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Свежая установка: save() пишет сразу в ~/.skillery (без legacy)."""
+    """save() пишет config в ~/.skillery."""
     home = _isolate_home(tmp_path, monkeypatch)
     config_mod.set_active_profile(None)
     ClientConfig(base_url="http://localhost:8000", user_email="x@hub").save()
     assert (home / ".skillery" / "config.toml").is_file()
-    assert not (home / ".skills-hub").exists()
+    assert ClientConfig.load().user_email == "x@hub"
 
 
 # --------------------------------------------------------------------------
@@ -312,7 +279,7 @@ def test_effective_store_dir_explicit() -> None:
 
 
 def test_effective_store_dir_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SKILLS_HUB_STORE_DIR", "/env/store")
+    monkeypatch.setenv("SKILLERY_STORE_DIR", "/env/store")
     cfg = ClientConfig()
     assert cfg.effective_store_dir() == Path("/env/store")
 

@@ -12,9 +12,9 @@ from pathlib import Path
 
 import pytest
 
-from skills_hub_cli.daemon.daemon_runner import DaemonRunner
-from skills_hub_cli.daemon.event_collector import EventCollector
-from skills_hub_cli.daemon.event_sender import EventSender
+from skillery_cli.daemon.daemon_runner import DaemonRunner
+from skillery_cli.daemon.event_collector import EventCollector
+from skillery_cli.daemon.event_sender import EventSender
 
 
 class _ScriptedSender:
@@ -56,7 +56,7 @@ def _run_n_cycles(runner: DaemonRunner, n: int, waits: list[float]) -> None:
 
 
 def _make_result(*, requeued: int, accepted: int):  # noqa: ANN202
-    from skills_hub_cli.daemon.event_sender import SendResult
+    from skillery_cli.daemon.event_sender import SendResult
 
     return SendResult(
         sent=requeued + accepted, accepted=accepted, skipped=0,

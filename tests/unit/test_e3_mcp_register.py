@@ -20,9 +20,9 @@ import json
 
 import pytest
 
-from skills_hub_cli.core import mcp_register as mr
-from skills_hub_cli.core.agents.claude_code import ClaudeCodeTarget
-from skills_hub_cli.core.agents.codex import CodexTarget
+from skillery_cli.core import mcp_register as mr
+from skillery_cli.core.agents.claude_code import ClaudeCodeTarget
+from skillery_cli.core.agents.codex import CodexTarget
 
 
 # --------------------------------------------------------------------------

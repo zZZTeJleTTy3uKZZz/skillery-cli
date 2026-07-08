@@ -8,10 +8,10 @@ import pytest
 
 
 def _setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    import skills_hub_cli.__main__ as main_mod
-    from skills_hub_cli.config import ClientConfig
-    from skills_hub_cli.core.agents import ClaudeCodeTarget
-    from skills_hub_cli import output as out_mod
+    import skillery_cli.__main__ as main_mod
+    from skillery_cli.config import ClientConfig
+    from skillery_cli.core.agents import ClaudeCodeTarget
+    from skillery_cli import output as out_mod
 
     target = ClaudeCodeTarget(root=tmp_path / ".claude")
     store = tmp_path / "store"
@@ -41,7 +41,7 @@ def _setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 def test_enable_links_and_writes_manifest(tmp_path, monkeypatch, capsys):
     main_mod, target, store, project = _setup(tmp_path, monkeypatch)
-    from skills_hub_cli.core import linker, project_manifest as pm
+    from skillery_cli.core import linker, project_manifest as pm
 
     main_mod.cmd_enable(slug="bitrix24", project=project, agent=None,
                         force=False, channel="published")
@@ -53,7 +53,7 @@ def test_enable_links_and_writes_manifest(tmp_path, monkeypatch, capsys):
 
 def test_disable_unlinks_and_removes_manifest(tmp_path, monkeypatch, capsys):
     main_mod, target, store, project = _setup(tmp_path, monkeypatch)
-    from skills_hub_cli.core import linker, project_manifest as pm
+    from skillery_cli.core import linker, project_manifest as pm
 
     main_mod.cmd_enable(slug="bitrix24", project=project, agent=None,
                         force=False, channel="published")

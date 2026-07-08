@@ -6,9 +6,9 @@ from typing import Any
 
 import pytest
 
-from skills_hub_cli.core.agents import ClaudeCodeTarget
-from skills_hub_cli.core import installer as installer_mod
-from skills_hub_cli.core.installer import SkillInstaller, read_meta
+from skillery_cli.core.agents import ClaudeCodeTarget
+from skillery_cli.core import installer as installer_mod
+from skillery_cli.core.installer import SkillInstaller, read_meta
 
 
 def _make_fake_clone(file_layout: dict[str, str]):

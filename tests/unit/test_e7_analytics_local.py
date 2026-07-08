@@ -1,4 +1,4 @@
-"""E7 доп. метрики — `skills-hub analytics local` (read-only локальная картина).
+"""E7 доп. метрики — `skillery analytics local` (read-only локальная картина).
 
 Показывает БЕЗ сети и логина:
 - что материализовано в сторе (slug, версия, КАКОЙ агент ставил, source);
@@ -15,12 +15,12 @@ from pathlib import Path
 
 import pytest
 
-from skills_hub_cli import output as out_mod
-from skills_hub_cli.commands import analytics as an_mod
-from skills_hub_cli.config import ClientConfig
-from skills_hub_cli.core.agents import CodexTarget
-from skills_hub_cli.core.installer import SkillInstaller
-from skills_hub_cli.daemon.event_collector import EventCollector
+from skillery_cli import output as out_mod
+from skillery_cli.commands import analytics as an_mod
+from skillery_cli.config import ClientConfig
+from skillery_cli.core.agents import CodexTarget
+from skillery_cli.core.installer import SkillInstaller
+from skillery_cli.daemon.event_collector import EventCollector
 
 
 def _make_skill_dir(tmp_path: Path, name: str, version: str) -> Path:

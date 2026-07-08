@@ -9,9 +9,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from skills_hub_cli.core.transport import ApiError
-from skills_hub_cli.daemon.event_collector import EventCollector
-from skills_hub_cli.daemon.event_sender import EventSender
+from skillery_cli.core.transport import ApiError
+from skillery_cli.daemon.event_collector import EventCollector
+from skillery_cli.daemon.event_sender import EventSender
 
 
 @pytest.mark.asyncio

@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from skills_hub_cli.core.agents import ClaudeCodeTarget
-from skills_hub_cli.core.installer import SkillInstaller, read_meta
+from skillery_cli.core.agents import ClaudeCodeTarget
+from skillery_cli.core.installer import SkillInstaller, read_meta
 
 
 def test_install_without_repo_creates_stub(tmp_path: Path) -> None:

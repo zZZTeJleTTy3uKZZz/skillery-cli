@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from skills_hub_cli.core import linker, project_manifest as pm
-from skills_hub_cli.core.agents import ClaudeCodeTarget
-from skills_hub_cli.core.installer import SkillInstaller
+from skillery_cli.core import linker, project_manifest as pm
+from skillery_cli.core.agents import ClaudeCodeTarget
+from skillery_cli.core.installer import SkillInstaller
 
 _MANIFEST = {"version": "1.0.0", "description": "x", "files": []}
 
@@ -42,9 +42,9 @@ def test_link_existing_none_when_not_in_store(tmp_path: Path) -> None:
 def test_cmd_sync_links_manifest_and_prunes_ours_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
 ) -> None:
-    import skills_hub_cli.__main__ as main_mod
-    from skills_hub_cli.config import ClientConfig
-    from skills_hub_cli import output as out_mod
+    import skillery_cli.__main__ as main_mod
+    from skillery_cli.config import ClientConfig
+    from skillery_cli import output as out_mod
 
     target = ClaudeCodeTarget(root=tmp_path / ".claude")
     store = tmp_path / "store"
@@ -84,7 +84,7 @@ def test_cmd_sync_links_manifest_and_prunes_ours_only(
 
 
 def test_scan_installed_marks_linked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import skills_hub_cli.__main__ as main_mod
+    import skillery_cli.__main__ as main_mod
 
     target = ClaudeCodeTarget(root=tmp_path / ".claude")
     store = tmp_path / "store"
@@ -99,9 +99,9 @@ def test_scan_installed_marks_linked(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
 
 def test_cmd_store_list_and_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
-    import skills_hub_cli.__main__ as main_mod
-    from skills_hub_cli.config import ClientConfig
-    from skills_hub_cli import output as out_mod
+    import skillery_cli.__main__ as main_mod
+    from skillery_cli.config import ClientConfig
+    from skillery_cli import output as out_mod
 
     store = tmp_path / "store"
     _seed_store(store, "bitrix24")
@@ -125,9 +125,9 @@ def test_cmd_store_gc_dry_run_lists_orphans(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
 ) -> None:
     """--dry-run остаётся алиасом дефолта (фикс B9: дефолт тоже не удаляет)."""
-    import skills_hub_cli.__main__ as main_mod
-    from skills_hub_cli.config import ClientConfig
-    from skills_hub_cli import output as out_mod
+    import skillery_cli.__main__ as main_mod
+    from skillery_cli.config import ClientConfig
+    from skillery_cli import output as out_mod
 
     target = ClaudeCodeTarget(root=tmp_path / ".claude")
     store = tmp_path / "store"

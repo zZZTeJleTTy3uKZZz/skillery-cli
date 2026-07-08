@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from skills_hub_cli.__main__ import _is_newer
+from skillery_cli.__main__ import _is_newer
 
 
 # ---------------------- _is_newer: основные сравнения ----------------------
@@ -118,9 +118,9 @@ def _setup_auto_update_env(
     """Готовит окружение для прогона `_maybe_auto_update` с одним установленным
     навыком и застабленным `install_bundle`, отдающим `bundle_version`.
     Любой вызов `SkillInstaller.install` пишется в `install_calls`."""
-    import skills_hub_cli.__main__ as main_mod
-    from skills_hub_cli.config import ClientConfig
-    from skills_hub_cli.core.agents import ClaudeCodeTarget
+    import skillery_cli.__main__ as main_mod
+    from skillery_cli.config import ClientConfig
+    from skillery_cli.core.agents import ClaudeCodeTarget
 
     # Global scope с одним «установленным» навыком demo@installed_version.
     target = ClaudeCodeTarget(root=tmp_path / ".claude")

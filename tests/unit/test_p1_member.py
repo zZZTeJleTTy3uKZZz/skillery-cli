@@ -31,9 +31,9 @@ import pytest
 import respx
 from httpx import Response
 
-from skills_hub_cli import output as output_module
-from skills_hub_cli.config import ClientConfig
-from skills_hub_cli.core.transport import HubClient
+from skillery_cli import output as output_module
+from skillery_cli.config import ClientConfig
+from skillery_cli.core.transport import HubClient
 
 
 def _patch_text_mode() -> None:
@@ -282,7 +282,7 @@ def _cfg(
 def _fake_factory(
     monkeypatch: pytest.MonkeyPatch, fake_client: MagicMock
 ) -> None:
-    from skills_hub_cli.commands import _common
+    from skillery_cli.commands import _common
 
     monkeypatch.setattr(_common, "HubClient", lambda **kw: fake_client)
     monkeypatch.setattr(_common, "load_tokens", lambda email: ("a", "r"))
@@ -292,7 +292,7 @@ def test_cmd_members_list_defaults_company_from_cfg(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Без --company company_id берётся из cfg (JWT)."""
-    from skills_hub_cli.commands import member as member_mod
+    from skillery_cli.commands import member as member_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["skill.read"], company_id="7")
@@ -322,7 +322,7 @@ def test_cmd_members_list_defaults_company_from_cfg(
 def test_cmd_members_list_explicit_company_overrides(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from skills_hub_cli.commands import member as member_mod
+    from skillery_cli.commands import member as member_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["hub.admin"], company_id="7")
@@ -352,7 +352,7 @@ def test_cmd_member_invite_reuses_issue_invite(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """member invite зовёт СУЩЕСТВУЮЩИЙ transport.issue_invite (не дубль)."""
-    from skills_hub_cli.commands import member as member_mod
+    from skillery_cli.commands import member as member_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["user.invite"], company_id="7")
@@ -400,7 +400,7 @@ def test_cmd_member_invite_derives_name_from_email(
 ) -> None:
     """Бэк требует email+display_name ВМЕСТЕ (422) → без --name CLI
     подставляет local-part email'а."""
-    from skills_hub_cli.commands import member as member_mod
+    from skillery_cli.commands import member as member_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["user.invite"], company_id="7")
@@ -439,12 +439,12 @@ def test_cmd_member_invite_requires_company(
     """Нет ни --company, ни company_id в cfg (hub-admin без компании) → exit 1."""
     import typer
 
-    from skills_hub_cli.commands import member as member_mod
+    from skillery_cli.commands import member as member_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["user.invite"], company_id=None)
     monkeypatch.setattr(
-        "skills_hub_cli.commands._common.load_tokens", lambda email: ("a", "r")
+        "skillery_cli.commands._common.load_tokens", lambda email: ("a", "r")
     )
 
     with pytest.raises(typer.Exit) as exc:
@@ -457,7 +457,7 @@ def test_cmd_member_invite_requires_company(
 def test_cmd_member_remove_calls_transport(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from skills_hub_cli.commands import member as member_mod
+    from skillery_cli.commands import member as member_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["user.remove"], company_id="7")
@@ -485,12 +485,12 @@ def test_cmd_member_remove_requires_company(
 ) -> None:
     import typer
 
-    from skills_hub_cli.commands import member as member_mod
+    from skillery_cli.commands import member as member_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["user.remove"], company_id=None)
     monkeypatch.setattr(
-        "skills_hub_cli.commands._common.load_tokens", lambda email: ("a", "r")
+        "skillery_cli.commands._common.load_tokens", lambda email: ("a", "r")
     )
 
     with pytest.raises(typer.Exit) as exc:
@@ -502,7 +502,7 @@ def test_cmd_member_change_role_single_user_via_bulk(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """change-role одного user'а идёт через bulk-эндпоинт c user_ids=[id]."""
-    from skills_hub_cli.commands import member as member_mod
+    from skillery_cli.commands import member as member_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["role.manage"], company_id="7")
@@ -536,7 +536,7 @@ def test_cmd_member_change_role_single_user_via_bulk(
 def test_cmd_member_lock_passes_reason(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from skills_hub_cli.commands import member as member_mod
+    from skillery_cli.commands import member as member_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["user.lock"], company_id="7")
@@ -560,7 +560,7 @@ def test_cmd_member_lock_passes_reason(
 
 
 def test_cmd_member_unlock(monkeypatch: pytest.MonkeyPatch) -> None:
-    from skills_hub_cli.commands import member as member_mod
+    from skillery_cli.commands import member as member_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["user.lock"], company_id="7")
@@ -587,7 +587,7 @@ def test_cmd_member_reset_password_prints_one_time_password(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """one-time пароль выводится КРУПНО + предупреждение «один раз»."""
-    from skills_hub_cli.commands import member as member_mod
+    from skillery_cli.commands import member as member_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["company.manage"], company_id="7")
@@ -623,7 +623,7 @@ def _build_app(monkeypatch: pytest.MonkeyPatch, perms: list[str]):  # noqa: ANN2
         permissions=perms,
     )
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
-    from skills_hub_cli.__main__ import build_app
+    from skillery_cli.__main__ import build_app
 
     return build_app()
 
@@ -711,7 +711,7 @@ def test_member_commands_absent_when_logged_out(
 ) -> None:
     cfg = ClientConfig(base_url="http://localhost:8000")
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
-    from skills_hub_cli.__main__ import build_app
+    from skillery_cli.__main__ import build_app
 
     app = build_app()
     names = [c.name for c in app.registered_commands]
@@ -722,7 +722,7 @@ def test_member_commands_absent_when_logged_out(
 
 def test_cmd_roles_renders_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
     """roles выводит id/slug/name/is_assignable_by_company из paged-ответа."""
-    from skills_hub_cli.commands import member as member_mod
+    from skillery_cli.commands import member as member_mod
 
     _patch_text_mode()
     _cfg(monkeypatch, ["skill.read"], company_id="7")

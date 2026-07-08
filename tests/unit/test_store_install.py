@@ -6,11 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from skills_hub_cli.config import ClientConfig
+from skillery_cli.config import ClientConfig
 
 
 def test_effective_store_dir_env_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("SKILLS_HUB_STORE_DIR", str(tmp_path / "custom-store"))
+    monkeypatch.setenv("SKILLERY_STORE_DIR", str(tmp_path / "custom-store"))
     cfg = ClientConfig()
     assert cfg.effective_store_dir() == tmp_path / "custom-store"
 
@@ -23,9 +23,9 @@ def test_effective_store_dir_explicit_field(tmp_path: Path) -> None:
 def test_effective_store_dir_default(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.delenv("SKILLS_HUB_STORE_DIR", raising=False)
-    monkeypatch.delenv("SKILLS_HUB_CONFIG_DIR", raising=False)
-    # Изолируем home: ни ~/.skillery, ни legacy ~/.skills-hub не существуют →
+    monkeypatch.delenv("SKILLERY_STORE_DIR", raising=False)
+    monkeypatch.delenv("SKILLERY_CONFIG_DIR", raising=False)
+    # Изолируем home: ни ~/.skillery, ни legacy ~/.skillery не существуют →
     # свежая установка должна резолвить НОВЫЙ бренд ~/.skillery/store.
     fake_home = tmp_path / "home"
     fake_home.mkdir()
@@ -40,21 +40,21 @@ def test_effective_store_dir_default(
 def test_effective_store_dir_default_legacy_fallback(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Обратная совместимость: если есть старый ~/.skills-hub/store, а нового
+    """Обратная совместимость: если есть старый ~/.skillery/store, а нового
     ~/.skillery нет — дефолт остаётся на legacy (не теряем стор установки)."""
-    monkeypatch.delenv("SKILLS_HUB_STORE_DIR", raising=False)
-    monkeypatch.delenv("SKILLS_HUB_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("SKILLERY_STORE_DIR", raising=False)
+    monkeypatch.delenv("SKILLERY_CONFIG_DIR", raising=False)
     fake_home = tmp_path / "home"
-    (fake_home / ".skills-hub" / "store").mkdir(parents=True)
+    (fake_home / ".skillery" / "store").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(fake_home))
     monkeypatch.setenv("USERPROFILE", str(fake_home))
     cfg = ClientConfig()
-    assert ".skills-hub" in str(cfg.effective_store_dir())
+    assert ".skillery" in str(cfg.effective_store_dir())
 
 
-from skills_hub_cli.core import linker
-from skills_hub_cli.core.agents import ClaudeCodeTarget
-from skills_hub_cli.core.installer import SkillInstaller, read_meta
+from skillery_cli.core import linker
+from skillery_cli.core.agents import ClaudeCodeTarget
+from skillery_cli.core.installer import SkillInstaller, read_meta
 
 _MANIFEST = {"version": "1.0.0", "description": "x", "files": []}
 
@@ -168,12 +168,12 @@ def test_install_stub_refuses_foreign_scope_dir_even_with_force(tmp_path: Path) 
 def test_cmd_install_project_writes_manifest(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
 ) -> None:
-    """cmd_install в project scope линкует И пишет .skills-hub/skills.toml."""
-    import skills_hub_cli.__main__ as main_mod
-    from skills_hub_cli.config import ClientConfig
-    from skills_hub_cli.core import project_manifest as pm
-    from skills_hub_cli.core.agents import ClaudeCodeTarget
-    from skills_hub_cli import output as out_mod
+    """cmd_install в project scope линкует И пишет .skillery/skills.toml."""
+    import skillery_cli.__main__ as main_mod
+    from skillery_cli.config import ClientConfig
+    from skillery_cli.core import project_manifest as pm
+    from skillery_cli.core.agents import ClaudeCodeTarget
+    from skillery_cli import output as out_mod
 
     target = ClaudeCodeTarget(root=tmp_path / ".claude")
     store = tmp_path / "store"

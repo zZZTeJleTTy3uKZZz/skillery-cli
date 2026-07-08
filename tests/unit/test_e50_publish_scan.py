@@ -10,8 +10,8 @@ from pathlib import Path
 import pytest
 import typer
 
-import skills_hub_cli.__main__ as cli
-from skills_hub_cli.core.secret_scan import Finding, ScanResult
+import skillery_cli.__main__ as cli
+from skillery_cli.core.secret_scan import Finding, ScanResult
 
 AWS_EXAMPLE_KEY = "AKIAIOSFODNN7EXAMPLE"
 

@@ -14,7 +14,7 @@ import pytest
 import respx
 from httpx import Response
 
-from skills_hub_cli.core.transport import HubClient
+from skillery_cli.core.transport import HubClient
 
 
 # ---------------------- ticket reply (JSON) ----------------------

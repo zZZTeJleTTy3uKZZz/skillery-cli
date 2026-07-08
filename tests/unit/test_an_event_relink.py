@@ -12,12 +12,12 @@ from typing import Any
 
 import pytest
 
-from skills_hub_cli import output as out_mod
-from skills_hub_cli.commands import _common
-from skills_hub_cli.commands import onboard as onboard_mod
-from skills_hub_cli.config import ClientConfig
-from skills_hub_cli.core.agents import ClaudeCodeTarget
-from skills_hub_cli.core.installer import write_meta
+from skillery_cli import output as out_mod
+from skillery_cli.commands import _common
+from skillery_cli.commands import onboard as onboard_mod
+from skillery_cli.config import ClientConfig
+from skillery_cli.core.agents import ClaudeCodeTarget
+from skillery_cli.core.installer import write_meta
 
 
 def _events_of(events: list, etype: str) -> list:
@@ -78,9 +78,9 @@ def test_onboard_relink_emits_enable_not_install(
 def test_collection_install_relink_emits_enable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from skills_hub_cli.commands import collection as coll_mod
-    from skills_hub_cli.core import agents as agents_mod
-    from skills_hub_cli.core import local_collections
+    from skillery_cli.commands import collection as coll_mod
+    from skillery_cli.core import agents as agents_mod
+    from skillery_cli.core import local_collections
 
     target = ClaudeCodeTarget(root=tmp_path / ".claude")
     store = tmp_path / "store"

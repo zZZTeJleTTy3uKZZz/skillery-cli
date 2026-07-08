@@ -11,8 +11,8 @@ import pytest
 import respx
 from httpx import Response
 
-from skills_hub_cli.commands import _common
-from skills_hub_cli.core.transport import ApiError, HubClient
+from skillery_cli.commands import _common
+from skillery_cli.core.transport import ApiError, HubClient
 
 
 @pytest.mark.asyncio
