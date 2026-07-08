@@ -34,7 +34,13 @@ from skills_hub_cli.config import (
     set_active_profile,
 )
 from skills_hub_cli.core import linker, project_manifest, tooling_install
-from skills_hub_cli.core.agents import detect_agent, get_target
+from skills_hub_cli.core.agents import (
+    AntigravityTarget,
+    ClaudeCodeTarget,
+    CodexTarget,
+    detect_agent,
+    get_target,
+)
 from skills_hub_cli.core.installer import SkillInstaller, read_meta
 from skills_hub_cli.core.manifest_builder import build_manifest, git_commit_sha
 from skills_hub_cli.core.secret_scan import scan_dir as secret_scan_dir
@@ -1223,12 +1229,27 @@ async def _install_chain(
         await client.close()
 
 
+# Порядок = приоритет detection в ките (claude_code → codex → antigravity).
+# Держим локально (не тянем приватный _CHAIN кита), классы уже экспортируются.
+_ALL_AGENT_NAMES: tuple[str, ...] = (
+    ClaudeCodeTarget.name,
+    CodexTarget.name,
+    AntigravityTarget.name,
+)
+
+
 def cmd_install(
     slug: str = typer.Argument(
         ..., metavar="ID_ИЛИ_SLUG", help="id-или-slug скилла (backend принимает оба)"
     ),
     channel: str = typer.Option("published"),
     agent: Optional[str] = typer.Option(None),
+    all_agents: bool = typer.Option(
+        False, "--all-agents",
+        help="Поставить навык под ВСЕ поддерживаемые агенты "
+             "(claude_code+codex+antigravity) за один вызов. "
+             "Взаимоисключающе с --agent.",
+    ),
     scope: Optional[str] = typer.Option(
         None, "--scope", help="global | project (default из config.default_install_scope)"
     ),
@@ -1267,12 +1288,20 @@ def cmd_install(
     cfg = ClientConfig.load()
     actual_scope, project_path = _resolve_install_scope(cfg, scope, project)
 
+    # При прямом вызове функции (юнит-тесты) незаданный typer.Option приходит
+    # sentinel'ом ``OptionInfo`` (он truthy!) — нормализуем в чистый bool,
+    # чтобы многотаргет включался ТОЛЬКО на явном True.
+    all_agents = all_agents is True
+
     # --- разбор источника + взаимоисключение флагов ---
     if path is not None and from_git is not None:
         emit_error("VALIDATION", "--path и --from-git взаимоисключающие")
         raise typer.Exit(1)
     if ref is not None and from_git is None:
         emit_error("VALIDATION", "--ref имеет смысл только вместе с --from-git")
+        raise typer.Exit(1)
+    if all_agents and agent is not None:
+        emit_error("VALIDATION", "--all-agents и --agent взаимоисключающие")
         raise typer.Exit(1)
 
     source: dict | None = None
@@ -1281,7 +1310,11 @@ def cmd_install(
     elif from_git is not None:
         source = {"kind": "git", "slug": slug, "url": from_git, "ref": ref}
 
-    target = get_target(agent or cfg.agent)
+    # Один навык → один или несколько агент-таргетов (--all-agents).
+    if all_agents:
+        targets = [get_target(name) for name in _ALL_AGENT_NAMES]
+    else:
+        targets = [get_target(agent or cfg.agent)]
     _ = actual_scope  # передаётся через project_path
 
     # Hub-режим (источник не задан) требует login+токен; локальные — нет.
@@ -1291,11 +1324,18 @@ def cmd_install(
         access = _get_access_token()
 
     async def _do() -> None:
-        installed_chain = await _install_chain(
-            cfg, access, slug=slug, channel=channel, scope=actual_scope,
-            project_path=project_path, force=force, agent_target=target,
-            source=source,
-        )
+        installed_chain: list[dict] = []
+        multi = len(targets) > 1
+        for tgt in targets:
+            chain = await _install_chain(
+                cfg, access, slug=slug, channel=channel, scope=actual_scope,
+                project_path=project_path, force=force, agent_target=tgt,
+                source=source,
+            )
+            if multi:
+                for item in chain:
+                    item["agent"] = tgt.name
+            installed_chain.extend(chain)
         # project scope → фиксируем набор в манифесте проекта.
         if project_path is not None:
             for item in installed_chain:
@@ -1322,16 +1362,17 @@ def cmd_install(
 
         def _render(items: list) -> None:
             for item in items:
+                agent_tag = f"[{item['agent']}] " if item.get("agent") else ""
                 if item.get("skipped"):
                     console.print(
-                        f"[yellow]→ Пропущен[/] ({item['scope']}) "
+                        f"[yellow]→ Пропущен[/] {agent_tag}({item['scope']}) "
                         f"{item['slug']}@{item['version']}: {item.get('skip_reason')}"
                     )
                     continue
                 action = "Обновлён" if item["is_update"] else "Установлен"
                 mount = "📎" if item["linked"] else "📄"
                 console.print(
-                    f"[green]✓[/] {action} ({item['scope']}) {mount} "
+                    f"[green]✓[/] {action} {agent_tag}({item['scope']}) {mount} "
                     f"{item['slug']}@{item['version']} → {item['target_dir']}"
                 )
 
