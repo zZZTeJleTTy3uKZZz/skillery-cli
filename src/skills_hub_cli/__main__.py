@@ -1737,6 +1737,107 @@ def cmd_pull(
     _run(_do())
 
 
+def _collect_store_skills(store_dir: Path) -> list[dict]:
+    """Перечислить навыки локального стора → ``[{ref, skill_id, source, version}]``.
+
+    ``ref`` = идентичность папки стора (slug, для slug-less — числовой id, как в
+    ``_reconcile_hub_installs``). Только папки с ``_skill_meta.json`` (наши
+    материализованные навыки) — чужие копии без меты игнорируются.
+    """
+    out: list[dict] = []
+    if not store_dir.is_dir():
+        return out
+    for d in sorted(store_dir.iterdir(), key=lambda p: p.name):
+        if not d.is_dir():
+            continue
+        meta = read_meta(d)
+        if meta is None:
+            continue
+        ref = str(meta.get("slug") or d.name)
+        out.append({
+            "ref": ref,
+            "skill_id": meta.get("skill_id"),
+            "source": meta.get("source"),
+            "version": meta.get("version"),
+        })
+    return out
+
+
+def cmd_push(
+    channel: str = typer.Option("published"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Показать что было бы отмечено, ничего не слать",
+    ),
+) -> None:
+    """Отметить локальный набор навыков установленным в хабе (вторая половина sync).
+
+    Зеркало ``pull``: ``pull`` тянет ``/me/installs`` → локальный стор; ``push``
+    берёт локальный стор → помечает каждый навык установленным в хабе
+    (``POST /skills/{slug}/install``), чтобы он попал в ``/me/installs`` и
+    подтянулся ``pull``'ом на другом устройстве. Так личный набор навыков
+    синхронизируется между устройствами через хаб-хранилище (A → хаб → B).
+
+    Навыки, которых нет в хабе (авторские local-path/git, ещё не
+    опубликованные) → 404 → в ``skipped`` (сначала ``skillery publish``). Нужен
+    login.
+    """
+    cfg = ClientConfig.load()
+    if not cfg.is_logged_in():
+        emit_error("NOT_LOGGED_IN", "Сначала: skillery login")
+        raise typer.Exit(1)
+    access = _get_access_token()
+    skills = _collect_store_skills(cfg.effective_store_dir())
+    report: dict[str, list] = {"pushed": [], "skipped": [], "failed": []}
+
+    if dry_run:
+        report["pushed"] = [s["ref"] for s in skills]
+        emit_data(
+            {**report, "dry_run": True},
+            text_renderer=lambda r: console.print(
+                f"[green]push --dry-run[/]: отметил бы {len(r['pushed'])} навык(ов): "
+                + ", ".join(r["pushed"])
+            ),
+        )
+        return
+
+    async def _do() -> None:
+        client = HubClient(
+            base_url=cfg.base_url, access_token=access,
+            on_token_refresh=_make_refresh_callback(cfg),
+        )
+        try:
+            for s in skills:
+                ref = s["ref"]
+                try:
+                    await client.install_skill(ref, channel=channel)
+                    report["pushed"].append(ref)
+                except ApiError as e:
+                    # 404 = навыка нет в хабе (не опубликован) → skip, не fail.
+                    if e.status_code == 404:
+                        report["skipped"].append(ref)
+                    else:
+                        report["failed"].append(ref)
+        finally:
+            await client.close()
+
+        def _render(r: dict) -> None:
+            console.print(
+                f"[green]push[/]: ↑pushed {len(r['pushed'])}  "
+                f"={len(r['skipped'])} skipped (нет в хабе)  "
+                f"✗{len(r['failed'])} failed"
+            )
+            for s in r["skipped"]:
+                console.print(
+                    f"  [yellow]∅ нет в хабе:[/] {s} — сначала skillery publish"
+                )
+            for s in r["failed"]:
+                console.print(f"  [red]✗ не удалось отметить:[/] {s}")
+
+        emit_data(report, text_renderer=_render)
+
+    _run(_do())
+
+
 def cmd_migrate(
     scope: str = typer.Option("all", "--scope", help="all | global | project"),
     project: Optional[Path] = typer.Option(None, "--project"),
@@ -2763,6 +2864,9 @@ def build_app() -> typer.Typer:
     # pull — докачка навыков, помеченных установленными в вебе (/me/installs).
     # Hub-режим: внутри сам требует login.
     app.command(name="pull")(cmd_pull)
+    # push — зеркало pull: отметить локальный набор установленным в хабе, чтобы
+    # он подтянулся pull'ом на другом устройстве (кросс-девайс sync через хаб).
+    app.command(name="push")(cmd_push)
     app.command(name="migrate")(cmd_migrate)
     store_app = typer.Typer(no_args_is_help=True, help="Центральный стор навыков")
     app.add_typer(store_app, name="store")
