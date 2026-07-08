@@ -399,6 +399,25 @@ class HubClient:
             "POST", "/invite-links/accept", json={"token": token}
         )
 
+    async def accept_invite(self, *, token: str) -> None:
+        """POST /invites/accept — залогиненный принимает ОДНОРАЗОВЫЙ invite.
+
+        Сверено с ``routes/invites.py::accept_invite``: body ``{token}``,
+        auth (Bearer), 204. Errors: 404 NOT_FOUND; 409 INVITE_UNUSABLE.
+        """
+        await self._request("POST", "/invites/accept", json={"token": token})
+
+    async def register_device(
+        self, *, name: str, platform: str
+    ) -> dict[str, Any]:
+        """POST /me/devices — регистрация CLI-устройства (E-D web↔CLI мост).
+
+        Сверено с ``routes/me.py::register_device``: body ``{name, platform}``,
+        auth, 201. Upsert по (user, name)."""
+        return await self._request(
+            "POST", "/me/devices", json={"name": name, "platform": platform}
+        )
+
     async def set_password(self, *, new_password: str) -> None:
         """POST /me/password — установка/смена пароля для текущего user'а."""
         await self._request(

@@ -40,7 +40,10 @@ from skills_hub_cli.core.manifest_builder import build_manifest, git_commit_sha
 from skills_hub_cli.core.secret_scan import scan_dir as secret_scan_dir
 from skills_hub_cli.daemon.instrumentation import track_skill_event
 from skills_hub_cli.core.transport import ApiError, HubClient
-from skills_hub_cli.commands._common import hydrate_session_permissions
+from skills_hub_cli.commands._common import (
+    hydrate_session_permissions,
+    register_device_best_effort,
+)
 from skills_hub_cli.output import (
     emit_data,
     emit_error,
@@ -348,6 +351,8 @@ def cmd_login(
             )
             # JWT-slim: права — из /me/permissions (токен их не несёт).
             await hydrate_session_permissions(client, cfg, data["access_token"])
+            # E-D: регистрируем эту машину как устройство (best-effort).
+            await register_device_best_effort(client)
         finally:
             await client.close()
         save_tokens(email, data["access_token"], data["refresh_token"])
@@ -396,6 +401,8 @@ def _do_password_login(cfg: ClientConfig, *, email: str, password: str) -> None:
             # JWT-slim: токен не несёт прав — забираем эффективные из
             # /me/permissions тем же (теперь авторизованным) клиентом.
             await hydrate_session_permissions(client, cfg, data["access_token"])
+            # E-D: регистрируем эту машину как устройство (best-effort).
+            await register_device_best_effort(client)
         finally:
             await client.close()
         save_tokens(email, data["access_token"], data["refresh_token"])

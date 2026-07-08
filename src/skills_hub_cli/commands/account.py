@@ -288,7 +288,70 @@ def cmd_join(
     _run(_do_register())
 
 
+def cmd_accept_invite(
+    token: str = typer.Argument(
+        ...,
+        metavar="TOKEN",
+        help="Одноразовый invite-токен (выдаётся `skillery member invite`)",
+    ),
+    base_url: Optional[str] = typer.Option(None),
+) -> None:
+    """Принять ОДНОРАЗОВЫЙ invite и вступить в компанию (E-A).
+
+    В отличие от ``join`` (переиспользуемая ссылка ``/invite-links/accept``) —
+    это одноразовый invite (``POST /invites/accept``), выданный
+    ``member invite``. Требует логина: токен = авторизация вступления, но
+    membership привязывается к текущему юзеру. После вступления —
+    ``skillery company switch`` для переключения на компанию.
+    """
+    cfg = ClientConfig.load()
+    if base_url:
+        cfg.base_url = base_url
+
+    if not cfg.is_logged_in():
+        if is_json():
+            emit_error(
+                "NOT_LOGGED_IN",
+                "Одноразовый invite принимает только залогиненный юзер — "
+                "сначала `skillery login` или `skillery register`",
+            )
+        else:
+            console.print(
+                "[red]Нужен логин.[/] Одноразовый invite вступает от имени "
+                "текущего юзера — выполните `skillery login` или "
+                "`skillery register`, затем повторите."
+            )
+        raise typer.Exit(1)
+
+    access = _common.get_access_token()
+
+    async def _do_accept() -> None:
+        client = _common.make_client(cfg, access)
+        try:
+            await client.accept_invite(token=token)
+        finally:
+            await client.close()
+        emit_data(
+            {
+                "event": "joined",
+                "method": "invite",
+                "user_email": cfg.user_email,
+            },
+            text_renderer=lambda _: (
+                console.print(
+                    f"[green]✓[/] Вступили в компанию по инвайту ({cfg.user_email})"
+                ),
+                console.print(
+                    "[dim]Переключиться на компанию: skillery company switch[/]"
+                ),
+            ),
+        )
+
+    _run(_do_accept())
+
+
 def register(app: typer.Typer) -> None:
-    """Регистрирует always-on команды register/join (зовётся из ``build_app``)."""
+    """Регистрирует always-on команды register/join/accept-invite (``build_app``)."""
     app.command(name="register")(cmd_register)
     app.command(name="join")(cmd_join)
+    app.command(name="accept-invite")(cmd_accept_invite)

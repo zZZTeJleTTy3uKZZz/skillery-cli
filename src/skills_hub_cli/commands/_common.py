@@ -64,6 +64,34 @@ async def hydrate_session_permissions(
         cfg.permissions = []
 
 
+def local_device_identity() -> tuple[str, str]:
+    """(name, platform) текущей машины для регистрации устройства.
+
+    name = hostname (обрезан до 120 симв, дефолт ``cli``); platform = ОС
+    в нижнем регистре (``linux``/``windows``/``darwin``)."""
+    import platform as _pf
+    import socket as _sock
+
+    name = (_sock.gethostname() or "").strip()[:120] or "cli"
+    plat = (_pf.system() or "unknown").strip().lower() or "unknown"
+    return name, plat
+
+
+async def register_device_best_effort(client: HubClient) -> None:
+    """E-D web↔CLI-мост: зарегистрировать эту машину как устройство.
+
+    Зовётся ПОСЛЕ успешного login на уже авторизованном клиенте (после
+    ``hydrate_session_permissions``, который проставил токен). Любую
+    ошибку — сеть, API, старый backend без ``/me/devices`` — глотаем:
+    логин уже состоялся, регистрацию устройства не даём его завалить.
+    """
+    name, plat = local_device_identity()
+    try:
+        await client.register_device(name=name, platform=plat)
+    except Exception:  # noqa: BLE001 — best-effort, login важнее
+        pass
+
+
 def get_access_token() -> str:
     """Получить access-token либо exit(1) с сообщением."""
     cfg = ClientConfig.load()
