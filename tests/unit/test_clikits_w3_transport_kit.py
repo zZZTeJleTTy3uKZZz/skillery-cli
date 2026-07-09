@@ -23,7 +23,7 @@ import respx
 from httpx import Response
 from librarykit.transport import HttpxTransport
 
-from skills_hub_cli.core.transport import USER_AGENT, ApiError, HubClient
+from skillery_cli.core.transport import USER_AGENT, ApiError, HubClient
 
 
 def test_hubclient_network_layer_is_librarykit_transport() -> None:

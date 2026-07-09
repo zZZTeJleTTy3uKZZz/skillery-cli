@@ -1,4 +1,4 @@
-"""Тесты ``skills-hub ticket reply`` + ``ticket status`` (P0).
+"""Тесты ``skillery ticket reply`` + ``ticket status`` (P0).
 
 Статусы сверены с доменом ``TicketStatus`` (backend):
 ``new | in_progress | scheduled | done | rejected``.
@@ -11,9 +11,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from skills_hub_cli import output as output_module
-from skills_hub_cli.commands import _common, ticket as ticket_mod
-from skills_hub_cli.config import ClientConfig
+from skillery_cli import output as output_module
+from skillery_cli.commands import _common, ticket as ticket_mod
+from skillery_cli.config import ClientConfig
 
 
 def _text_mode() -> None:
@@ -237,7 +237,7 @@ def test_ticket_reply_status_registered_with_update_perm(
         permissions=["ticket.create", "ticket.update_status"],
     )
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
-    from skills_hub_cli.__main__ import build_app
+    from skillery_cli.__main__ import build_app
 
     app = build_app()
     ticket_group = next(t for t in app.registered_groups if t.name == "ticket")
@@ -256,7 +256,7 @@ def test_ticket_reply_present_status_absent_without_update_perm(
         permissions=["ticket.create"],
     )
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
-    from skills_hub_cli.__main__ import build_app
+    from skillery_cli.__main__ import build_app
 
     app = build_app()
     ticket_group = next(t for t in app.registered_groups if t.name == "ticket")

@@ -18,7 +18,7 @@ import pytest
 import respx
 from httpx import Response
 
-from skills_hub_cli.core.transport import ApiError, HubClient
+from skillery_cli.core.transport import ApiError, HubClient
 
 
 # ------------------------------------------------------------------
@@ -106,13 +106,13 @@ async def test_api_error_top_level_code_still_works() -> None:
 #  2. _common.run — канон json-контракта (зеркало __main__._run)
 # ------------------------------------------------------------------
 def _json_mode(monkeypatch: pytest.MonkeyPatch) -> None:
-    from skills_hub_cli import output as out_mod
+    from skillery_cli import output as out_mod
 
     monkeypatch.setattr(out_mod, "_mode", "json")
 
 
 def test_common_run_api_error_json_mode(monkeypatch, capsys) -> None:
-    from skills_hub_cli.commands import _common
+    from skillery_cli.commands import _common
 
     _json_mode(monkeypatch)
 
@@ -131,8 +131,8 @@ def test_common_run_api_error_json_mode(monkeypatch, capsys) -> None:
 
 
 def test_common_run_api_error_text_mode_readable(monkeypatch, capsys) -> None:
-    from skills_hub_cli import output as out_mod
-    from skills_hub_cli.commands import _common
+    from skillery_cli import output as out_mod
+    from skillery_cli.commands import _common
 
     monkeypatch.setattr(out_mod, "_mode", "text")
 
@@ -151,7 +151,7 @@ def test_common_run_typer_exit_passthrough(monkeypatch, capsys) -> None:
     RuntimeError)."""
     import typer
 
-    from skills_hub_cli.commands import _common
+    from skillery_cli.commands import _common
 
     _json_mode(monkeypatch)
 
@@ -168,10 +168,10 @@ def test_common_run_typer_exit_passthrough(monkeypatch, capsys) -> None:
 #  3. local-path: frontmatter tags/description → manifest меты
 # ------------------------------------------------------------------
 def test_install_path_carries_tags_and_description(tmp_path: Path, monkeypatch) -> None:
-    import skills_hub_cli.__main__ as main_mod
-    from skills_hub_cli.config import ClientConfig
-    from skills_hub_cli.core.agents import ClaudeCodeTarget
-    from skills_hub_cli.core.installer import read_meta
+    import skillery_cli.__main__ as main_mod
+    from skillery_cli.config import ClientConfig
+    from skillery_cli.core.agents import ClaudeCodeTarget
+    from skillery_cli.core.installer import read_meta
 
     src = tmp_path / "fixture-skill"
     src.mkdir()

@@ -1,4 +1,4 @@
-"""E3 фаза 1 — ``skills-hub doctor`` (self-check окружения, образец reverse-factory).
+"""E3 фаза 1 — ``skillery doctor`` (self-check окружения, образец reverse-factory).
 
 Команда always-on (как status): проверяет окружение и печатает pass/warn/fail.
 ``--strict`` ужесточает warn→fail (для CI). JSON-режим даёт машинную структуру.
@@ -17,9 +17,9 @@ import json as _json
 
 import pytest
 
-from skills_hub_cli import output as out_mod
-from skills_hub_cli.commands import doctor as doc
-from skills_hub_cli.config import ClientConfig
+from skillery_cli import output as out_mod
+from skillery_cli.commands import doctor as doc
+from skillery_cli.config import ClientConfig
 
 
 @pytest.fixture()
@@ -246,7 +246,7 @@ def test_cmd_doctor_fix_path_invokes_ensure_and_reports(
 
     def _fake_ensure() -> dict[str, str]:
         calls.append(True)
-        return {"status": "added", "bin_dir": "/home/u/.skills-hub/bin"}
+        return {"status": "added", "bin_dir": "/home/u/.skillery/bin"}
 
     monkeypatch.setattr(doc.path_store, "ensure_on_path", _fake_ensure)
     doc.cmd_doctor(strict=False, fix_path=True)
@@ -278,7 +278,7 @@ def test_cmd_doctor_no_fix_path_skips_ensure(
 def test_doctor_registered_always_on(monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = ClientConfig(base_url="http://localhost:8000")  # не залогинен
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
-    from skills_hub_cli.__main__ import build_app
+    from skillery_cli.__main__ import build_app
 
     app = build_app()
     names = [cmd.name for cmd in app.registered_commands]

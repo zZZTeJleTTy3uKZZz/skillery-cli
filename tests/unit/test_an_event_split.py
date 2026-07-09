@@ -18,10 +18,10 @@ from pathlib import Path
 
 import pytest
 
-import skills_hub_cli.__main__ as main_mod
-from skills_hub_cli import output as out_mod
-from skills_hub_cli.config import ClientConfig
-from skills_hub_cli.core.agents import ClaudeCodeTarget
+import skillery_cli.__main__ as main_mod
+from skillery_cli import output as out_mod
+from skillery_cli.config import ClientConfig
+from skillery_cli.core.agents import ClaudeCodeTarget
 
 
 def _events_of(events: list, etype: str) -> list:
@@ -234,7 +234,7 @@ def test_enable_store_first_emits_enable_with_meta_source(
                       repo_url=None, local_src=src,
                       manifest={"version": "1.2.3", "files": []},
                       project=None, force=False)
-    from skills_hub_cli.core.installer import read_meta, write_meta
+    from skillery_cli.core.installer import read_meta, write_meta
     store_dir = cfg.effective_store_dir() / "demo"
     meta = read_meta(store_dir)
     meta["source"] = "git-url"
@@ -262,7 +262,7 @@ def test_sync_emits_enable_per_relink(
                       repo_url=None, local_src=src,
                       manifest={"version": "1.2.3", "files": []},
                       project=None, force=False)
-    from skills_hub_cli.core import project_manifest as pm
+    from skillery_cli.core import project_manifest as pm
     pm.add(project, "demo")
 
     main_mod.cmd_sync(project=project, prune=False, agent=None,

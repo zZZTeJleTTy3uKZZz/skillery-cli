@@ -14,12 +14,12 @@ from pathlib import Path
 import pytest
 import typer
 
-import skills_hub_cli.__main__ as main_mod
-from skills_hub_cli import output as out_mod
-from skills_hub_cli.config import ClientConfig
-from skills_hub_cli.core import project_manifest as pm
-from skills_hub_cli.core.agents import ClaudeCodeTarget
-from skills_hub_cli.core.installer import read_meta
+import skillery_cli.__main__ as main_mod
+from skillery_cli import output as out_mod
+from skillery_cli.config import ClientConfig
+from skillery_cli.core import project_manifest as pm
+from skillery_cli.core.agents import ClaudeCodeTarget
+from skillery_cli.core.installer import read_meta
 
 
 class _ExplodingClient:

@@ -2,7 +2,7 @@
 мёртвом демоне.
 
 План: если ``alive=false`` И ``queue_size>0`` → явное предупреждение «демон не
-запущен, N событий не отправлены: skills-hub daemon start» + JSON-поле
+запущен, N событий не отправлены: skillery daemon start» + JSON-поле
 (``warning`` / ``stalled_events``), чтобы автоматика тоже это видела.
 """
 from __future__ import annotations
@@ -12,9 +12,9 @@ from pathlib import Path
 
 import pytest
 
-from skills_hub_cli import output as out_mod
-from skills_hub_cli.commands import daemon as daemon_mod
-from skills_hub_cli.daemon.event_collector import EventCollector
+from skillery_cli import output as out_mod
+from skillery_cli.commands import daemon as daemon_mod
+from skillery_cli.daemon.event_collector import EventCollector
 
 
 def _wire(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *,

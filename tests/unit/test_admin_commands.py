@@ -17,8 +17,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from skills_hub_cli import output as output_module
-from skills_hub_cli.config import ClientConfig
+from skillery_cli import output as output_module
+from skillery_cli.config import ClientConfig
 
 
 def _patch_text_mode() -> None:
@@ -33,7 +33,7 @@ async def test_issue_invite_posts_flat_invites_endpoint() -> None:
     import respx
     from httpx import Response
 
-    from skills_hub_cli.core.transport import HubClient
+    from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
         route = router.post("/invites").mock(
@@ -75,7 +75,7 @@ async def test_issue_invite_includes_email_when_provided() -> None:
     import respx
     from httpx import Response
 
-    from skills_hub_cli.core.transport import HubClient
+    from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
         route = router.post("/invites").mock(
@@ -114,7 +114,7 @@ def test_cmd_admin_invite_calls_issue_invite_flat(
 ) -> None:
     """cmd_admin_invite больше не принимает --groups и читает invite_token из
     flat-ответа."""
-    from skills_hub_cli import __main__ as main_mod
+    from skillery_cli import __main__ as main_mod
 
     _patch_text_mode()
     cfg = ClientConfig(base_url="http://localhost:8000")
@@ -165,7 +165,7 @@ def test_cmd_admin_invite_has_no_groups_param() -> None:
     """Регрессия B1: параметр --groups удалён из сигнатуры команды."""
     import inspect
 
-    from skills_hub_cli import __main__ as main_mod
+    from skillery_cli import __main__ as main_mod
 
     params = inspect.signature(main_mod.cmd_admin_invite).parameters
     assert "group_ids" not in params
@@ -183,7 +183,7 @@ async def test_create_company_body_has_no_max_users() -> None:
     import respx
     from httpx import Response
 
-    from skills_hub_cli.core.transport import HubClient
+    from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
         route = router.post("/companies").mock(
@@ -219,7 +219,7 @@ def test_cmd_admin_company_create_omits_slug_when_not_given(
 ) -> None:
     """slug опционален: если --slug не задан, ключ slug НЕ уходит в payload
     (backend создаст компанию slug-less)."""
-    from skills_hub_cli import __main__ as main_mod
+    from skillery_cli import __main__ as main_mod
 
     _patch_text_mode()
     cfg = ClientConfig(base_url="http://localhost:8000")
@@ -263,7 +263,7 @@ def test_cmd_admin_company_create_omits_slug_when_not_given(
 def test_cmd_admin_company_create_sends_slug_when_given(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from skills_hub_cli import __main__ as main_mod
+    from skillery_cli import __main__ as main_mod
 
     _patch_text_mode()
     cfg = ClientConfig(base_url="http://localhost:8000")
@@ -304,7 +304,7 @@ def test_cmd_admin_company_create_has_no_max_users_param() -> None:
     """Регрессия B2: параметр max_users удалён из сигнатуры команды."""
     import inspect
 
-    from skills_hub_cli import __main__ as main_mod
+    from skillery_cli import __main__ as main_mod
 
     params = inspect.signature(main_mod.cmd_admin_company_create).parameters
     assert "max_users" not in params
@@ -318,7 +318,7 @@ async def test_yank_skill_version_posts_yank_endpoint() -> None:
     import respx
     from httpx import Response
 
-    from skills_hub_cli.core.transport import HubClient
+    from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
         route = router.post("/skills/demo/versions/1.1.0/yank").mock(
@@ -343,7 +343,7 @@ async def test_unyank_posts_unyank_endpoint() -> None:
     import respx
     from httpx import Response
 
-    from skills_hub_cli.core.transport import HubClient
+    from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
         route = router.post("/skills/demo/versions/1.1.0/unyank").mock(
@@ -363,7 +363,7 @@ def test_cmd_admin_yank_signature() -> None:
     """Команда yank зарегистрирована с ожидаемыми параметрами."""
     import inspect
 
-    from skills_hub_cli import __main__ as main_mod
+    from skillery_cli import __main__ as main_mod
 
     params = inspect.signature(main_mod.cmd_admin_yank).parameters
     assert "slug" in params

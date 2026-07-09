@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from skills_hub_cli.core.agents import (
+from skillery_cli.core.agents import (
     ClaudeCodeTarget,
     CodexTarget,
     get_target,

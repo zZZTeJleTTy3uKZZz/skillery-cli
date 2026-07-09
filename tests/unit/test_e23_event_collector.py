@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from skills_hub_cli.daemon.event_collector import EventCollector, QueuedEvent
+from skillery_cli.daemon.event_collector import EventCollector, QueuedEvent
 
 
 def _make_collector(tmp_path: Path, **kwargs) -> EventCollector:  # noqa: ANN003

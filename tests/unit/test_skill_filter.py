@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from skills_hub_cli.core.skill_filter import (
+from skillery_cli.core.skill_filter import (
     apply_skill_filter,
     parse_skill_md_files_allowlist,
 )

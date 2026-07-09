@@ -4,12 +4,22 @@ build-backend = "hatchling.build"
 
 [project]
 name = "skillery-cli"
-version = "0.3.1"
-description = "Skillery CLI — клиент для приватного маркетплейса AI-skills."
+version = "0.5.0"
+description = "Skillery CLI — клиент маркетплейса AI-навыков для агентов (Claude Code, Codex)."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "Proprietary" }
+license = { text = "MIT" }
 authors = [{ name = "Dmitry" }]
+keywords = ["skillery", "ai", "skills", "claude-code", "codex", "cli"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Environment :: Console",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Developers",
+]
 dependencies = [
     "typer>=0.15",
     "httpx>=0.28",
@@ -38,12 +48,12 @@ dev = [
 ]
 
 [project.scripts]
-skillery = "skills_hub_cli.__main__:app"
+skillery = "skillery_cli.__main__:app"
 # Старое имя — deprecation-shim: печатает «используйте skillery» и выходит (код 2).
-skills-hub = "skills_hub_cli._deprecated_alias:main"
+skills-hub = "skillery_cli._deprecated_alias:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/skills_hub_cli"]
+packages = ["src/skillery_cli"]
 
 [tool.ruff]
 line-length = 100

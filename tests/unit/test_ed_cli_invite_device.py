@@ -20,10 +20,10 @@ from unittest.mock import MagicMock
 import pytest
 import typer
 
-from skills_hub_cli import output as output_module
-from skills_hub_cli.commands import _common
-from skills_hub_cli.commands import account as account_mod
-from skills_hub_cli.config import ClientConfig
+from skillery_cli import output as output_module
+from skillery_cli.commands import _common
+from skillery_cli.commands import account as account_mod
+from skillery_cli.config import ClientConfig
 
 
 @pytest.fixture(autouse=True)
@@ -63,7 +63,7 @@ async def test_hubclient_accept_invite_posts_token_with_auth() -> None:
     import respx
     from httpx import Response
 
-    from skills_hub_cli.core.transport import HubClient
+    from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
         route = router.post("/invites/accept").mock(return_value=Response(204))
@@ -87,7 +87,7 @@ async def test_hubclient_register_device_posts_name_platform() -> None:
     import respx
     from httpx import Response
 
-    from skills_hub_cli.core.transport import HubClient
+    from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
         route = router.post("/me/devices").mock(
@@ -165,7 +165,7 @@ def test_cmd_accept_invite_unusable_exits_1(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """409 INVITE_UNUSABLE → читабельная ошибка + exit 1."""
-    from skills_hub_cli.core.transport import ApiError
+    from skillery_cli.core.transport import ApiError
 
     output_module._mode = "text"
     _patch_cfg(
@@ -218,7 +218,7 @@ async def test_register_device_best_effort_calls_client() -> None:
 @pytest.mark.asyncio
 async def test_register_device_best_effort_swallows_api_error() -> None:
     """Старый backend без /me/devices / сеть → login не валим."""
-    from skills_hub_cli.core.transport import ApiError
+    from skillery_cli.core.transport import ApiError
 
     fake_client = MagicMock()
 
@@ -246,7 +246,7 @@ def test_accept_invite_command_registered(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_cfg(monkeypatch)
-    from skills_hub_cli.__main__ import build_app
+    from skillery_cli.__main__ import build_app
 
     app = build_app()
     names = [c.name for c in app.registered_commands]

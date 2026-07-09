@@ -10,7 +10,7 @@ import tomllib
 
 import pytest
 
-from skills_hub_cli import templates as tpl
+from skillery_cli import templates as tpl
 
 
 # ======================================================

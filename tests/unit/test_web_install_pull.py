@@ -1,4 +1,4 @@
-"""`skills-hub pull`: докачка навыков, помеченных установленными в вебе.
+"""`skillery pull`: докачка навыков, помеченных установленными в вебе.
 
 Поток «нажал Установить в вебе → CLI скачал»:
 - ``GET /me/installs`` → для каждого отсутствующего/устаревшего навыка
@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 
-from skills_hub_cli.core.agents import ClaudeCodeTarget
+from skillery_cli.core.agents import ClaudeCodeTarget
 
 
 class _FakeHubClient:
@@ -50,9 +50,9 @@ def _wire(
     installs: list[dict[str, Any]],
 ) -> tuple[Any, list[dict[str, Any]]]:
     """Поднять cfg+target+моки; вернуть (main_mod, recorded_install_calls)."""
-    import skills_hub_cli.__main__ as main_mod
-    from skills_hub_cli.config import ClientConfig
-    from skills_hub_cli import output as out_mod
+    import skillery_cli.__main__ as main_mod
+    from skillery_cli.config import ClientConfig
+    from skillery_cli import output as out_mod
 
     store = tmp_path / "store"
     store.mkdir(exist_ok=True)
@@ -176,8 +176,8 @@ def test_reconcile_helper_returns_report(
             {"slug": "b", "skill_id": "2", "installed_version": "1.0.0"},
         ],
     )
-    from skills_hub_cli.config import ClientConfig
-    from skills_hub_cli.core.agents import get_target  # noqa: F401
+    from skillery_cli.config import ClientConfig
+    from skillery_cli.core.agents import get_target  # noqa: F401
 
     cfg = ClientConfig.load()
     target = ClaudeCodeTarget(root=tmp_path / ".claude")

@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from skills_hub_cli.core.agents import ClaudeCodeTarget
-from skills_hub_cli.core.installer import InstallResult
+from skillery_cli.core.agents import ClaudeCodeTarget
+from skillery_cli.core.installer import InstallResult
 
 
 def _setup_update_env(
@@ -22,8 +22,8 @@ def _setup_update_env(
     *,
     install_result: InstallResult,
 ):
-    import skills_hub_cli.__main__ as main_mod
-    from skills_hub_cli.config import ClientConfig
+    import skillery_cli.__main__ as main_mod
+    from skillery_cli.config import ClientConfig
 
     target = ClaudeCodeTarget(root=tmp_path / ".claude")
     skill_dir = target.slug_dir("demo")

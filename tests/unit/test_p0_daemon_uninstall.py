@@ -11,9 +11,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from skills_hub_cli import output as output_module
-from skills_hub_cli.commands import daemon as daemon_mod
-from skills_hub_cli.daemon.autostart import (
+from skillery_cli import output as output_module
+from skillery_cli.commands import daemon as daemon_mod
+from skillery_cli.daemon.autostart import (
     AutostartUninstallResult,
     install_for_platform,
     uninstall_for_platform,
@@ -27,8 +27,8 @@ def _text_mode() -> None:
 # ==================== autostart uninstall (filesystem) ====================
 def test_uninstall_macos_removes_plist(tmp_path: Path) -> None:
     # Сначала ставим, потом снимаем — файл должен исчезнуть.
-    install_for_platform("macos", home_dir=tmp_path, binary="/opt/skills-hub")
-    plist = tmp_path / "Library" / "LaunchAgents" / "com.skills-hub.daemon.plist"
+    install_for_platform("macos", home_dir=tmp_path, binary="/opt/skillery")
+    plist = tmp_path / "Library" / "LaunchAgents" / "com.skillery.daemon.plist"
     assert plist.exists()
 
     result = uninstall_for_platform("macos", home_dir=tmp_path)
@@ -41,8 +41,8 @@ def test_uninstall_macos_removes_plist(tmp_path: Path) -> None:
 
 
 def test_uninstall_linux_removes_systemd_unit(tmp_path: Path) -> None:
-    install_for_platform("linux", home_dir=tmp_path, binary="/opt/skills-hub")
-    unit = tmp_path / ".config" / "systemd" / "user" / "skills-hub-daemon.service"
+    install_for_platform("linux", home_dir=tmp_path, binary="/opt/skillery")
+    unit = tmp_path / ".config" / "systemd" / "user" / "skillery-daemon.service"
     assert unit.exists()
 
     result = uninstall_for_platform("linux", home_dir=tmp_path)
@@ -53,8 +53,8 @@ def test_uninstall_linux_removes_systemd_unit(tmp_path: Path) -> None:
 
 
 def test_uninstall_windows_removes_task_xml(tmp_path: Path) -> None:
-    install_for_platform("windows", home_dir=tmp_path, binary=r"C:\Tools\skills-hub.exe")
-    xml = tmp_path / ".skills-hub" / "tasks" / "skills-hub-daemon.xml"
+    install_for_platform("windows", home_dir=tmp_path, binary=r"C:\Tools\skillery.exe")
+    xml = tmp_path / ".skillery" / "tasks" / "skillery-daemon.xml"
     assert xml.exists()
 
     result = uninstall_for_platform("windows", home_dir=tmp_path)
@@ -83,8 +83,8 @@ def test_cmd_daemon_uninstall_removes_and_reports(
 ) -> None:
     _text_mode()
     # Ставим под Linux в фейковый home.
-    install_for_platform("linux", home_dir=tmp_path, binary="/opt/skills-hub")
-    unit = tmp_path / ".config" / "systemd" / "user" / "skills-hub-daemon.service"
+    install_for_platform("linux", home_dir=tmp_path, binary="/opt/skillery")
+    unit = tmp_path / ".config" / "systemd" / "user" / "skillery-daemon.service"
     assert unit.exists()
 
     daemon_mod.cmd_daemon_uninstall(platform="linux", home=tmp_path)
@@ -107,7 +107,7 @@ def test_cmd_daemon_uninstall_json_payload(
 
     output_module._mode = "json"
     try:
-        install_for_platform("linux", home_dir=tmp_path, binary="/opt/skills-hub")
+        install_for_platform("linux", home_dir=tmp_path, binary="/opt/skillery")
         daemon_mod.cmd_daemon_uninstall(platform="linux", home=tmp_path)
         out = capsys.readouterr().out.strip().splitlines()[-1]
         payload: dict[str, Any] = json.loads(out)
@@ -121,7 +121,7 @@ def test_cmd_daemon_uninstall_json_payload(
 def test_daemon_uninstall_registered(monkeypatch: pytest.MonkeyPatch) -> None:
     cfg_obj = MagicMock()
     # build_app требует залогиненного user'а для daemon sub-app.
-    from skills_hub_cli.config import ClientConfig
+    from skillery_cli.config import ClientConfig
 
     cfg = ClientConfig(
         base_url="http://localhost:8000",
@@ -130,7 +130,7 @@ def test_daemon_uninstall_registered(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
     _ = cfg_obj
-    from skills_hub_cli.__main__ import build_app
+    from skillery_cli.__main__ import build_app
 
     app = build_app()
     daemon_group = next(t for t in app.registered_groups if t.name == "daemon")

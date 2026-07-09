@@ -4,8 +4,8 @@ from __future__ import annotations
 import pytest
 from typer.testing import CliRunner
 
-from skills_hub_cli import __version__
-from skills_hub_cli.config import ClientConfig
+from skillery_cli import __version__
+from skillery_cli.config import ClientConfig
 
 
 def test_version_flag_prints_version_and_exits(
@@ -14,7 +14,7 @@ def test_version_flag_prints_version_and_exits(
     # Версия должна печататься даже БЕЗ логина (always-on).
     empty_cfg = ClientConfig(base_url="http://localhost:8000")
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: empty_cfg))
-    from skills_hub_cli.__main__ import build_app
+    from skillery_cli.__main__ import build_app
 
     app = build_app()
     runner = CliRunner()
@@ -32,7 +32,7 @@ def test_version_flag_works_when_logged_in(
         permissions=["skill.read"],
     )
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
-    from skills_hub_cli.__main__ import build_app
+    from skillery_cli.__main__ import build_app
 
     app = build_app()
     runner = CliRunner()

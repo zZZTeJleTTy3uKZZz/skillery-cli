@@ -1,4 +1,4 @@
-"""Тесты P1 эпика C5 — ``skills-hub onboard`` (онбординг проекта, E11).
+"""Тесты P1 эпика C5 — ``skillery onboard`` (онбординг проекта, E11).
 
 Чистые функции (``core/onboarding.py``): ``detect_signals`` /
 ``match_store`` / ``merge_suggestions`` — на Path-фикстурах, без CLI и сети.
@@ -17,14 +17,14 @@ from unittest.mock import MagicMock
 import pytest
 import typer
 
-from skills_hub_cli import output as out_mod
-from skills_hub_cli.commands import _common
-from skills_hub_cli.commands import onboard as onboard_mod
-from skills_hub_cli.config import ClientConfig
-from skills_hub_cli.core import linker, project_manifest as pm
-from skills_hub_cli.core.agents import ClaudeCodeTarget
-from skills_hub_cli.core.installer import write_meta
-from skills_hub_cli.core.onboarding import (
+from skillery_cli import output as out_mod
+from skillery_cli.commands import _common
+from skillery_cli.commands import onboard as onboard_mod
+from skillery_cli.config import ClientConfig
+from skillery_cli.core import linker, project_manifest as pm
+from skillery_cli.core.agents import ClaudeCodeTarget
+from skillery_cli.core.installer import write_meta
+from skillery_cli.core.onboarding import (
     detect_signals,
     match_store,
     merge_suggestions,
@@ -451,7 +451,7 @@ def test_onboard_registered_always_on(monkeypatch: pytest.MonkeyPatch) -> None:
     """Команда onboard видна и БЕЗ логина (always-on блок build_app)."""
     cfg = ClientConfig(base_url="http://localhost:8000")
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
-    from skills_hub_cli.__main__ import build_app
+    from skillery_cli.__main__ import build_app
 
     app = build_app()
     names = [c.name for c in app.registered_commands]

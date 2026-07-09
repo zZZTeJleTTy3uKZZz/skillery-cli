@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from skills_hub_cli.daemon.event_collector import EventCollector, QueuedEvent
+from skillery_cli.daemon.event_collector import EventCollector, QueuedEvent
 
 
 def test_append_overflow_drops_oldest_keeps_newest(tmp_path: Path) -> None:

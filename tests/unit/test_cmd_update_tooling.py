@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from skills_hub_cli.core.agents import ClaudeCodeTarget
-from skills_hub_cli.core.installer import InstallResult
+from skillery_cli.core.agents import ClaudeCodeTarget
+from skillery_cli.core.installer import InstallResult
 
 
 def _setup_update_env(
@@ -27,8 +27,8 @@ def _setup_update_env(
     repo_url: str | None = "https://git.example/demo.git",
     tooling_calls: list | None = None,
 ):
-    import skills_hub_cli.__main__ as main_mod
-    from skills_hub_cli.config import ClientConfig
+    import skillery_cli.__main__ as main_mod
+    from skillery_cli.config import ClientConfig
 
     target = ClaudeCodeTarget(root=tmp_path / ".claude")
     skill_dir = target.slug_dir("demo")
@@ -157,7 +157,7 @@ def test_cmd_update_applies_tooling_with_project_scope(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """gap A: project-scope обновление → _apply_tooling получает project=<proj>."""
-    import skills_hub_cli.__main__ as main_mod  # noqa: F401  (импорт ниже через setup)
+    import skillery_cli.__main__ as main_mod  # noqa: F401  (импорт ниже через setup)
     tooling_calls: list = []
     real = InstallResult(
         slug="demo", version="9.9.9", target_dir=tmp_path / "x",

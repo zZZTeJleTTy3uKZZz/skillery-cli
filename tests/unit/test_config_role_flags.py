@@ -10,7 +10,7 @@ import base64
 import json
 from pathlib import Path
 
-from skills_hub_cli.config import ClientConfig, populate_from_jwt
+from skillery_cli.config import ClientConfig, populate_from_jwt
 
 
 def _make_jwt(claims: dict) -> str:

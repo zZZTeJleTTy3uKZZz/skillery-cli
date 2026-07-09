@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from skills_hub_cli.daemon.backoff import BackoffPolicy
+from skillery_cli.daemon.backoff import BackoffPolicy
 
 
 def test_backoff_base_when_no_failures() -> None:

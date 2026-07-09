@@ -1,6 +1,6 @@
 """E7 анти-спам — `EventGuard`: дедуп по идемпотентности + throttle по rate.
 
-Каждый ``skills-hub`` вызов — отдельный процесс, поэтому окно дедупа/throttle
+Каждый ``skillery`` вызов — отдельный процесс, поэтому окно дедупа/throttle
 персистится в sidecar-файле рядом с очередью (``events.guard.json``). Guard —
 чистый «принять/отклонить» решатель ПЕРЕД append'ом:
 
@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from skills_hub_cli.daemon.event_guard import EventGuard
+from skillery_cli.daemon.event_guard import EventGuard
 
 
 def _guard(tmp_path: Path, **kw) -> EventGuard:  # noqa: ANN003

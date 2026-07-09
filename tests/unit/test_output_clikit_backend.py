@@ -15,7 +15,7 @@ import json
 import pytest
 
 import clikit.output as clikit_output
-from skills_hub_cli import output as out
+from skillery_cli import output as out
 
 
 @pytest.fixture(autouse=True)
@@ -66,7 +66,7 @@ def test_config_format_json_when_no_flag() -> None:
 
 
 def test_env_overrides_config(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SKILLS_HUB_OUTPUT", "json")
+    monkeypatch.setenv("SKILLERY_OUTPUT", "json")
     out.init_output_mode(json_flag=False, config_format="text")
     assert out.is_json() is True
 

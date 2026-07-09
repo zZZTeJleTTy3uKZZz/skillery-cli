@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from skills_hub_cli.core import linker
+from skillery_cli.core import linker
 
 
 def _make_store(tmp_path: Path) -> Path:

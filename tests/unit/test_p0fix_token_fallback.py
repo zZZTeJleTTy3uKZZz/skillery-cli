@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 import tomli_w
 
-from skills_hub_cli import config as config_module
+from skillery_cli import config as config_module
 
 EMAIL = "admin@hub.ru"
 # Реалистичная длина: hub_admin access-JWT с живого стенда = 1519 символов.
@@ -67,10 +67,10 @@ class _FakeKeyring:
 def isolated_config_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> Path:
-    monkeypatch.setenv("SKILLS_HUB_CONFIG_DIR", str(tmp_path))
-    monkeypatch.delenv("SKILLS_HUB_ACCESS_TOKEN", raising=False)
-    monkeypatch.delenv("SKILLS_HUB_REFRESH_TOKEN", raising=False)
-    monkeypatch.delenv("SKILLS_HUB_PROFILE", raising=False)
+    monkeypatch.setenv("SKILLERY_CONFIG_DIR", str(tmp_path))
+    monkeypatch.delenv("SKILLERY_ACCESS_TOKEN", raising=False)
+    monkeypatch.delenv("SKILLERY_REFRESH_TOKEN", raising=False)
+    monkeypatch.delenv("SKILLERY_PROFILE", raising=False)
     monkeypatch.setattr(config_module, "_ACTIVE_PROFILE", None)
     return tmp_path
 

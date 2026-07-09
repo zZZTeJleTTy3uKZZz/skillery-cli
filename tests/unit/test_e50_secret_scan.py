@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from skills_hub_cli.core import secret_scan
-from skills_hub_cli.core.secret_scan import (
+from skillery_cli.core import secret_scan
+from skillery_cli.core.secret_scan import (
     Finding,
     mask_secret,
     regex_scan_dir,

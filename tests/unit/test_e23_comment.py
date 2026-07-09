@@ -1,4 +1,4 @@
-"""Тесты ``skills-hub comment`` + ``skills-hub comments`` (E23)."""
+"""Тесты ``skillery comment`` + ``skillery comments`` (E23)."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -9,10 +9,10 @@ import pytest
 import respx
 from httpx import Response
 
-from skills_hub_cli import output as output_module
-from skills_hub_cli.commands import _common, comment as comment_mod
-from skills_hub_cli.config import ClientConfig
-from skills_hub_cli.core.transport import HubClient
+from skillery_cli import output as output_module
+from skillery_cli.commands import _common, comment as comment_mod
+from skillery_cli.config import ClientConfig
+from skillery_cli.core.transport import HubClient
 
 
 def _text_mode() -> None:
@@ -317,7 +317,7 @@ def test_comments_registered_with_skill_read_only(monkeypatch: pytest.MonkeyPatc
         permissions=["skill.read"],
     )
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
-    from skills_hub_cli.__main__ import build_app
+    from skillery_cli.__main__ import build_app
 
     app = build_app()
     names = [cmd.name for cmd in app.registered_commands]

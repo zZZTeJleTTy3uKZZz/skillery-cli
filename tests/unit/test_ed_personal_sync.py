@@ -16,11 +16,11 @@ from pathlib import Path
 
 import pytest
 
-import skills_hub_cli.__main__ as main_mod
-from skills_hub_cli import output as out_mod
-from skills_hub_cli.config import ClientConfig
-from skills_hub_cli.core.installer import write_meta
-from skills_hub_cli.core.transport import ApiError
+import skillery_cli.__main__ as main_mod
+from skillery_cli import output as out_mod
+from skillery_cli.config import ClientConfig
+from skillery_cli.core.installer import write_meta
+from skillery_cli.core.transport import ApiError
 
 
 class _Hub:

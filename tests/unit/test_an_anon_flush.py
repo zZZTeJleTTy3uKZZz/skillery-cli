@@ -14,13 +14,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from skills_hub_cli import output as out_mod
-from skills_hub_cli.commands import _common
-from skills_hub_cli.commands import event as event_mod
-from skills_hub_cli.config import ClientConfig
-from skills_hub_cli.core.transport import ApiError
-from skills_hub_cli.daemon.event_collector import EventCollector
-from skills_hub_cli.daemon.event_sender import EventSender
+from skillery_cli import output as out_mod
+from skillery_cli.commands import _common
+from skillery_cli.commands import event as event_mod
+from skillery_cli.config import ClientConfig
+from skillery_cli.core.transport import ApiError
+from skillery_cli.daemon.event_collector import EventCollector
+from skillery_cli.daemon.event_sender import EventSender
 
 
 def _override_queue(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
@@ -85,11 +85,11 @@ def test_flush_with_expired_token_does_not_exit(
     cfg = ClientConfig(base_url="http://x", user_email="u@e.io")
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
     # keyring/файл пусты → токена нет. ВАЖНО: cmd_event_flush делает локальный
-    # импорт `from skills_hub_cli.config import load_tokens`, поэтому патчить
+    # импорт `from skillery_cli.config import load_tokens`, поэтому патчить
     # надо ИСТОЧНИК (config), а не _common — иначе мок мимо, и читается реальный
     # keyring пользователя (тест «флейчил» в зависимости от сохранённой сессии).
     monkeypatch.setattr(
-        "skills_hub_cli.config.load_tokens", lambda email: (None, None)
+        "skillery_cli.config.load_tokens", lambda email: (None, None)
     )
 
     seen_tokens: list = []

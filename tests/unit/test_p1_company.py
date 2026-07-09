@@ -40,8 +40,8 @@ from unittest.mock import MagicMock
 import pytest
 import typer
 
-from skills_hub_cli import output as output_module
-from skills_hub_cli.config import ClientConfig
+from skillery_cli import output as output_module
+from skillery_cli.config import ClientConfig
 
 
 def _text_mode() -> None:
@@ -65,7 +65,7 @@ async def test_list_companies_sends_pagination_params() -> None:
     import respx
     from httpx import Response
 
-    from skills_hub_cli.core.transport import HubClient
+    from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
         route = router.get("/companies").mock(
@@ -93,7 +93,7 @@ async def test_list_companies_omits_unset_params() -> None:
     import respx
     from httpx import Response
 
-    from skills_hub_cli.core.transport import HubClient
+    from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
         route = router.get("/companies").mock(
@@ -116,7 +116,7 @@ async def test_get_company_detail_path() -> None:
     import respx
     from httpx import Response
 
-    from skills_hub_cli.core.transport import HubClient
+    from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
         route = router.get("/companies/7").mock(
@@ -149,7 +149,7 @@ async def test_update_company_sends_merge_patch_body() -> None:
     import respx
     from httpx import Response
 
-    from skills_hub_cli.core.transport import HubClient
+    from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
         route = router.patch("/companies/7").mock(
@@ -183,7 +183,7 @@ async def test_switch_active_company_posts_me_active_company() -> None:
     import respx
     from httpx import Response
 
-    from skills_hub_cli.core.transport import HubClient
+    from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
         route = router.post("/me/active-company").mock(
@@ -214,7 +214,7 @@ async def test_list_invite_links_path() -> None:
     import respx
     from httpx import Response
 
-    from skills_hub_cli.core.transport import HubClient
+    from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
         route = router.get("/companies/7/invite-links").mock(
@@ -234,7 +234,7 @@ async def test_create_invite_link_full_body() -> None:
     import respx
     from httpx import Response
 
-    from skills_hub_cli.core.transport import HubClient
+    from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
         route = router.post("/companies/7/invite-links").mock(
@@ -269,7 +269,7 @@ async def test_create_invite_link_omits_optional_fields() -> None:
     import respx
     from httpx import Response
 
-    from skills_hub_cli.core.transport import HubClient
+    from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
         route = router.post("/companies/7/invite-links").mock(
@@ -303,7 +303,7 @@ async def test_revoke_invite_link_delete_204() -> None:
     import respx
     from httpx import Response
 
-    from skills_hub_cli.core.transport import HubClient
+    from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
         route = router.delete("/companies/7/invite-links/3").mock(
@@ -323,7 +323,7 @@ async def test_get_company_catalog_path() -> None:
     import respx
     from httpx import Response
 
-    from skills_hub_cli.core.transport import HubClient
+    from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
         route = router.get("/companies/7/catalog").mock(
@@ -351,7 +351,7 @@ async def test_grant_catalog_skill_posts_numeric_skill_id() -> None:
     import respx
     from httpx import Response
 
-    from skills_hub_cli.core.transport import HubClient
+    from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
         route = router.post("/companies/7/catalog/skills").mock(
@@ -372,7 +372,7 @@ async def test_revoke_catalog_skill_path_accepts_slug() -> None:
     import respx
     from httpx import Response
 
-    from skills_hub_cli.core.transport import HubClient
+    from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
         route = router.delete("/companies/7/catalog/skills/demo-test").mock(
@@ -391,7 +391,7 @@ async def test_grant_and_revoke_catalog_collection_contract() -> None:
     import respx
     from httpx import Response
 
-    from skills_hub_cli.core.transport import HubClient
+    from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
         post_route = router.post("/companies/7/catalog/collections").mock(
@@ -433,7 +433,7 @@ def _cfg(
 
 
 def _fake_factory(monkeypatch: pytest.MonkeyPatch, fake_client: MagicMock) -> None:
-    from skills_hub_cli.commands import _common
+    from skillery_cli.commands import _common
 
     monkeypatch.setattr(_common, "HubClient", lambda **kw: fake_client)
     monkeypatch.setattr(_common, "load_tokens", lambda email: ("a", "r"))
@@ -448,7 +448,7 @@ def test_cmd_company_switch_saves_new_token_pair(
 ) -> None:
     """switch: ответ несёт новую пару токенов → save_tokens +
     populate_from_jwt + cfg.save; вывод активной компании из нового JWT."""
-    from skills_hub_cli.commands import company as company_mod
+    from skillery_cli.commands import company as company_mod
 
     _text_mode()
     cfg = _cfg(monkeypatch, ["skill.read"], company_id="7")
@@ -511,7 +511,7 @@ def test_cmd_invite_links_create_prints_join_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """create печатает ГОТОВЫЙ join-URL: <web_ui>/join/<token> (как Web)."""
-    from skills_hub_cli.commands import company as company_mod
+    from skillery_cli.commands import company as company_mod
 
     _text_mode()
     _cfg(
@@ -564,7 +564,7 @@ def test_cmd_invite_links_create_prints_join_url(
 def test_cmd_invite_links_list_defaults_company_from_cfg(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from skills_hub_cli.commands import company as company_mod
+    from skillery_cli.commands import company as company_mod
 
     _text_mode()
     _cfg(monkeypatch, ["company.manage"], company_id="7")
@@ -586,7 +586,7 @@ def test_cmd_invite_links_list_defaults_company_from_cfg(
 
 def test_company_option_missing_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     """Нет --company и нет company_id в cfg → внятная ошибка + exit 1."""
-    from skills_hub_cli.commands import company as company_mod
+    from skillery_cli.commands import company as company_mod
 
     _text_mode()
     _cfg(monkeypatch, ["company.manage"], company_id=None)
@@ -598,7 +598,7 @@ def test_company_option_missing_errors(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_cmd_invite_links_revoke_passes_ids(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from skills_hub_cli.commands import company as company_mod
+    from skillery_cli.commands import company as company_mod
 
     _text_mode()
     _cfg(monkeypatch, ["company.manage"], company_id="7")
@@ -623,7 +623,7 @@ def test_cmd_catalog_grant_skill_resolves_slug_to_numeric_id(
 ) -> None:
     """POST /catalog/skills требует ЧИСЛОВОЙ skill_id (catalog.py:154 →
     _int_id) — slug резолвится через GET /skills/{slug}."""
-    from skills_hub_cli.commands import company as company_mod
+    from skillery_cli.commands import company as company_mod
 
     _text_mode()
     _cfg(monkeypatch, ["catalog.manage"], company_id="7")
@@ -651,7 +651,7 @@ def test_cmd_catalog_grant_skill_resolves_slug_to_numeric_id(
 def test_cmd_catalog_grant_skill_numeric_id_skips_resolve(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from skills_hub_cli.commands import company as company_mod
+    from skillery_cli.commands import company as company_mod
 
     _text_mode()
     _cfg(monkeypatch, ["catalog.manage"], company_id="7")
@@ -680,7 +680,7 @@ def test_cmd_catalog_grant_collection_flag(
 ) -> None:
     """--collection переключает на collections-эндпоинт; slug коллекции
     резолвится через GET /collections/{slug} → collection.id."""
-    from skills_hub_cli.commands import company as company_mod
+    from skillery_cli.commands import company as company_mod
 
     _text_mode()
     _cfg(monkeypatch, ["catalog.manage"], company_id="7")
@@ -717,7 +717,7 @@ def test_cmd_catalog_revoke_skill_passes_ref_raw(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """DELETE /catalog/skills/{slug} принимает id-или-slug — резолв не нужен."""
-    from skills_hub_cli.commands import company as company_mod
+    from skillery_cli.commands import company as company_mod
 
     _text_mode()
     _cfg(monkeypatch, ["catalog.manage"], company_id="7")
@@ -741,7 +741,7 @@ def test_cmd_catalog_revoke_collection_resolves_slug(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """DELETE /catalog/collections/{id} — строго числовой id (catalog.py:225)."""
-    from skills_hub_cli.commands import company as company_mod
+    from skillery_cli.commands import company as company_mod
 
     _text_mode()
     _cfg(monkeypatch, ["catalog.manage"], company_id="7")
@@ -776,7 +776,7 @@ def test_cmd_catalog_revoke_collection_resolves_slug(
 def test_cmd_catalog_list_uses_company_catalog(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from skills_hub_cli.commands import company as company_mod
+    from skillery_cli.commands import company as company_mod
 
     _text_mode()
     _cfg(monkeypatch, ["catalog.view_all"], company_id="7")
@@ -806,7 +806,7 @@ def test_cmd_company_create_reuses_create_company_and_omits_slug(
 ) -> None:
     """company create — переиспользует transport.create_company; без --slug
     ключ slug не уходит (slug-less компания)."""
-    from skills_hub_cli.commands import company as company_mod
+    from skillery_cli.commands import company as company_mod
 
     _text_mode()
     _cfg(monkeypatch, ["hub.company_create"], company_id=None)
@@ -842,7 +842,7 @@ def test_cmd_company_create_reuses_create_company_and_omits_slug(
 def test_cmd_company_edit_builds_patch_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from skills_hub_cli.commands import company as company_mod
+    from skillery_cli.commands import company as company_mod
 
     _text_mode()
     _cfg(monkeypatch, ["company.manage"], company_id="7")
@@ -876,7 +876,7 @@ def test_cmd_company_edit_builds_patch_payload(
 def test_cmd_company_edit_requires_at_least_one_field(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from skills_hub_cli.commands import company as company_mod
+    from skillery_cli.commands import company as company_mod
 
     _text_mode()
     _cfg(monkeypatch, ["company.manage"], company_id="7")
@@ -888,7 +888,7 @@ def test_cmd_company_edit_requires_at_least_one_field(
 def test_cmd_company_list_passes_filters(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from skills_hub_cli.commands import company as company_mod
+    from skillery_cli.commands import company as company_mod
 
     _text_mode()
     _cfg(monkeypatch, ["hub.admin"], company_id=None)
@@ -916,7 +916,7 @@ def test_cmd_company_list_passes_filters(
 def test_cmd_company_show_fetches_detail(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from skills_hub_cli.commands import company as company_mod
+    from skillery_cli.commands import company as company_mod
 
     _text_mode()
     _cfg(monkeypatch, ["skill.read"], company_id="7")
@@ -962,7 +962,7 @@ def _company_subcommands(app: typer.Typer) -> set[str]:
 
 
 def test_register_minimal_member_gets_show_and_switch_only() -> None:
-    from skills_hub_cli.commands import company as company_mod
+    from skillery_cli.commands import company as company_mod
 
     app = typer.Typer()
     company_mod.register(app)
@@ -971,7 +971,7 @@ def test_register_minimal_member_gets_show_and_switch_only() -> None:
 
 
 def test_register_full_gates_enable_all_subcommands() -> None:
-    from skills_hub_cli.commands import company as company_mod
+    from skillery_cli.commands import company as company_mod
 
     app = typer.Typer()
     company_mod.register(
@@ -996,7 +996,7 @@ def test_register_full_gates_enable_all_subcommands() -> None:
 
 
 def test_register_catalog_view_without_manage_hides_grant_revoke() -> None:
-    from skills_hub_cli.commands import company as company_mod
+    from skillery_cli.commands import company as company_mod
 
     app = typer.Typer()
     company_mod.register(app, can_catalog_view=True, can_catalog_manage=False)
@@ -1015,7 +1015,7 @@ def test_build_app_registers_company_for_logged_in_user(
 ) -> None:
     """build_app: блок `# --- P1 company ---` регистрирует sub-app company
     для любого залогиненного (show/switch always-on; бэк сам режет)."""
-    from skills_hub_cli import __main__ as main_mod
+    from skillery_cli import __main__ as main_mod
 
     cfg = ClientConfig(
         base_url="http://localhost:8000",
@@ -1032,7 +1032,7 @@ def test_build_app_registers_company_for_logged_in_user(
 def test_build_app_no_company_subapp_when_logged_out(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from skills_hub_cli import __main__ as main_mod
+    from skillery_cli import __main__ as main_mod
 
     cfg = ClientConfig(base_url="http://localhost:8000")
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))

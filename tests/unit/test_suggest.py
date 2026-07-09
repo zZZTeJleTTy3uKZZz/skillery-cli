@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from skills_hub_cli.core.suggest import normalize_query, score_skill
+from skillery_cli.core.suggest import normalize_query, score_skill
 
 
 # ======================================================

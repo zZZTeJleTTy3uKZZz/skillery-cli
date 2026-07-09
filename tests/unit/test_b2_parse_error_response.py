@@ -19,7 +19,7 @@ import pytest
 import respx
 from httpx import Response
 
-from skills_hub_cli.core.transport import ApiError, HubClient
+from skillery_cli.core.transport import ApiError, HubClient
 
 
 # ----------------------------- _parse_error_response (unit) ------------------

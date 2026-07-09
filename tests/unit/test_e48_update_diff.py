@@ -1,6 +1,6 @@
 """E48 §8.2 — incremental update.
 
-`skills-hub update <slug>`:
+`skillery update <slug>`:
 1. читает старый manifest из _skill_meta.json,
 2. git clone новой версии во временную папку,
 3. diff по sha256,
@@ -17,9 +17,9 @@ from typing import Any
 
 import pytest
 
-from skills_hub_cli.core import installer as installer_mod
-from skills_hub_cli.core.agents import ClaudeCodeTarget
-from skills_hub_cli.core.installer import SkillInstaller, read_meta
+from skillery_cli.core import installer as installer_mod
+from skillery_cli.core.agents import ClaudeCodeTarget
+from skillery_cli.core.installer import SkillInstaller, read_meta
 
 
 def _sha(text: str) -> str:
@@ -280,7 +280,7 @@ def test_update_rejects_traversal_in_new_version(
         return _R()
 
     monkeypatch.setattr(installer_mod.subprocess, "run", fake_run_with_symlink)
-    from skills_hub_cli.core.installer import PathTraversalError
+    from skillery_cli.core.installer import PathTraversalError
 
     # Manifest объявляет evil.txt как обычный файл → diff попытается его скопировать
     # → _safe_copy_file обязан отвергнуть symlink-escape.

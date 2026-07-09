@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from skills_hub_cli.core.agents import (
+from skillery_cli.core.agents import (
     AntigravityTarget,
     ClaudeCodeTarget,
     CodexTarget,
@@ -42,7 +42,7 @@ def test_install_layout_into_project_scope(tmp_path: Path) -> None:
 
 
 def test_install_layout_rejects_symlink_escape(tmp_path: Path) -> None:
-    from skills_hub_cli.core.installer import PathTraversalError
+    from skillery_cli.core.installer import PathTraversalError
 
     secret = tmp_path / "secret.txt"
     secret.write_text("SECRET", encoding="utf-8")
@@ -85,7 +85,7 @@ def test_get_target_antigravity() -> None:
 
 def test_detect_chain_includes_antigravity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """detect: Claude → Codex → Antigravity → fallback Claude."""
-    import skills_hub_cli.core.agents.detect as detect_mod
+    import skillery_cli.core.agents.detect as detect_mod
 
     # Никого нет → fallback claude_code.
     monkeypatch.setattr(detect_mod.ClaudeCodeTarget, "exists", lambda self: False)

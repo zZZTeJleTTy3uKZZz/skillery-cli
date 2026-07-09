@@ -2,7 +2,7 @@
 
 Покрытие:
 - core/local_collections.py: CRUD поверх <config_dir>/collections.toml
-  (уважает SKILLS_HUB_CONFIG_DIR), идемпотентность add/remove, валидация имён;
+  (уважает SKILLERY_CONFIG_DIR), идемпотентность add/remove, валидация имён;
 - commands/collection.py: единый sub-app ``collection`` с глаголами
   list/show/install/create/add/remove/delete + флаг ``--local``;
 - ``--local`` режим — оффлайн CRUD без логина, warning при добавлении слага,
@@ -19,14 +19,14 @@ from pathlib import Path
 import pytest
 import typer
 
-import skills_hub_cli.__main__ as main_mod
-import skills_hub_cli.config as config_module
-from skills_hub_cli import output as out_mod
-from skills_hub_cli.commands import _common, collection as coll_mod
-from skills_hub_cli.config import ClientConfig
-from skills_hub_cli.core import linker, local_collections, project_manifest
-from skills_hub_cli.core.agents import ClaudeCodeTarget
-from skills_hub_cli.core.installer import SkillInstaller
+import skillery_cli.__main__ as main_mod
+import skillery_cli.config as config_module
+from skillery_cli import output as out_mod
+from skillery_cli.commands import _common, collection as coll_mod
+from skillery_cli.config import ClientConfig
+from skillery_cli.core import linker, local_collections, project_manifest
+from skillery_cli.core.agents import ClaudeCodeTarget
+from skillery_cli.core.installer import SkillInstaller
 
 _MANIFEST = {"version": "1.0.0", "description": "x", "files": []}
 
@@ -35,8 +35,8 @@ _MANIFEST = {"version": "1.0.0", "description": "x", "files": []}
 def cfg_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Изолированный config-dir: collections.toml живёт в tmp, профиль сброшен."""
     d = tmp_path / "cfg"
-    monkeypatch.setenv("SKILLS_HUB_CONFIG_DIR", str(d))
-    monkeypatch.delenv("SKILLS_HUB_PROFILE", raising=False)
+    monkeypatch.setenv("SKILLERY_CONFIG_DIR", str(d))
+    monkeypatch.delenv("SKILLERY_PROFILE", raising=False)
     monkeypatch.setattr(config_module, "_ACTIVE_PROFILE", None)
     return d
 
@@ -309,7 +309,7 @@ def test_install_local_store_only_no_network(
     _json_mode(monkeypatch)
     cfg = _logged_in_cfg(tmp_path, monkeypatch)
     target = ClaudeCodeTarget(root=tmp_path / ".claude")
-    monkeypatch.setattr("skills_hub_cli.core.agents.get_target", lambda name: target)
+    monkeypatch.setattr("skillery_cli.core.agents.get_target", lambda name: target)
     project = tmp_path / "proj"
     project.mkdir()
 
@@ -350,7 +350,7 @@ def test_install_local_missing_not_logged_in_skipped(
     _json_mode(monkeypatch)
     _offline_cfg(tmp_path, monkeypatch)
     target = ClaudeCodeTarget(root=tmp_path / ".claude")
-    monkeypatch.setattr("skills_hub_cli.core.agents.get_target", lambda name: target)
+    monkeypatch.setattr("skillery_cli.core.agents.get_target", lambda name: target)
     project = tmp_path / "proj"
     project.mkdir()
 
@@ -378,7 +378,7 @@ def test_install_local_hub_fallback_when_logged_in(
     _json_mode(monkeypatch)
     _logged_in_cfg(tmp_path, monkeypatch)
     target = ClaudeCodeTarget(root=tmp_path / ".claude")
-    monkeypatch.setattr("skills_hub_cli.core.agents.get_target", lambda name: target)
+    monkeypatch.setattr("skillery_cli.core.agents.get_target", lambda name: target)
     project = tmp_path / "proj"
     project.mkdir()
 

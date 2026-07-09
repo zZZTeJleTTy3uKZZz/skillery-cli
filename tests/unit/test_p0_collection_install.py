@@ -1,4 +1,4 @@
-"""Тесты ``skills-hub collection install <ID_ИЛИ_SLUG>`` (серверная массовая установка).
+"""Тесты ``skillery collection install <ID_ИЛИ_SLUG>`` (серверная массовая установка).
 
 Главный онбординг-кейс: ставит ВСЕ effective skills коллекции через общий
 ``_install_chain`` из ``__main__`` (тот же путь что ``install``). Серверный режим
@@ -13,9 +13,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from skills_hub_cli import output as output_module
-from skills_hub_cli.commands import _common, collection as coll_mod
-from skills_hub_cli.config import ClientConfig
+from skillery_cli import output as output_module
+from skillery_cli.commands import _common, collection as coll_mod
+from skillery_cli.config import ClientConfig
 
 
 def _text_mode() -> None:
@@ -217,7 +217,7 @@ def test_collection_install_show_always_registered(
         permissions=["skill.read", "skill.install"],
     )
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
-    from skills_hub_cli.__main__ import build_app
+    from skillery_cli.__main__ import build_app
 
     app = build_app()
     collection_group = next(t for t in app.registered_groups if t.name == "collection")
@@ -241,7 +241,7 @@ def test_collection_install_gated_without_skill_install(
         permissions=["skill.read"],
     )
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
-    from skills_hub_cli.__main__ import build_app
+    from skillery_cli.__main__ import build_app
 
     app = build_app()
     collection_group = next(t for t in app.registered_groups if t.name == "collection")

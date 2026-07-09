@@ -1,4 +1,4 @@
-"""#242 — ``skills-hub suggest --ai``: семантический подбор по хабу.
+"""#242 — ``skillery suggest --ai``: семантический подбор по хабу.
 
 ``--ai`` переключает hub-ветку на POST /skills/search-semantic (один вызов,
 не per-term), несёт ``reason`` от бэка в выдачу; локальный стор остаётся на
@@ -17,12 +17,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from skills_hub_cli import output as out_mod
-from skills_hub_cli.commands import _common
-from skills_hub_cli.commands import suggest as suggest_mod
-from skills_hub_cli.config import ClientConfig
-from skills_hub_cli.core.agents import ClaudeCodeTarget
-from skills_hub_cli.core.installer import write_meta
+from skillery_cli import output as out_mod
+from skillery_cli.commands import _common
+from skillery_cli.commands import suggest as suggest_mod
+from skillery_cli.config import ClientConfig
+from skillery_cli.core.agents import ClaudeCodeTarget
+from skillery_cli.core.installer import write_meta
 
 
 def _store_skill(store: Path, name: str, *, tags: tuple[str, ...] = ()) -> None:

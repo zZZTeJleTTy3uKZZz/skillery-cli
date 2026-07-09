@@ -1,4 +1,4 @@
-"""Тесты команды `skills-hub login` (invite-flow + email/password flow)."""
+"""Тесты команды `skillery login` (invite-flow + email/password flow)."""
 from __future__ import annotations
 
 from typing import Any
@@ -6,8 +6,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from skills_hub_cli import output as output_module
-from skills_hub_cli.config import ClientConfig
+from skillery_cli import output as output_module
+from skillery_cli.config import ClientConfig
 
 
 def _patch_output_text_mode() -> None:
@@ -20,7 +20,7 @@ async def test_hubclient_login_password_posts_correct_endpoint() -> None:
     import respx
     from httpx import Response
 
-    from skills_hub_cli.core.transport import HubClient
+    from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
         route = router.post("/auth/login").mock(
@@ -55,7 +55,7 @@ async def test_hubclient_get_me_permissions_returns_list() -> None:
     import respx
     from httpx import Response
 
-    from skills_hub_cli.core.transport import HubClient
+    from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
         route = router.get("/me/permissions").mock(
@@ -84,8 +84,8 @@ async def test_hubclient_get_me_permissions_returns_list() -> None:
 def test_login_password_flow_calls_endpoint_and_saves_tokens(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """skills-hub login --email X --password Y (без invite) → POST /auth/login."""
-    from skills_hub_cli import __main__ as main_mod
+    """skillery login --email X --password Y (без invite) → POST /auth/login."""
+    from skillery_cli import __main__ as main_mod
 
     _patch_output_text_mode()
 
@@ -143,8 +143,8 @@ def test_login_password_flow_calls_endpoint_and_saves_tokens(
 
 
 def test_login_with_invite_still_works(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Backwards compat: skills-hub login <invite-token> --email X --name Y."""
-    from skills_hub_cli import __main__ as main_mod
+    """Backwards compat: skillery login <invite-token> --email X --name Y."""
+    from skillery_cli import __main__ as main_mod
 
     _patch_output_text_mode()
     cfg = ClientConfig(base_url="http://localhost:8000")
@@ -197,7 +197,7 @@ def test_login_password_in_json_mode_requires_email_and_password(
     """В JSON-режиме без --email или --password выходит с code=1."""
     import typer
 
-    from skills_hub_cli import __main__ as main_mod
+    from skillery_cli import __main__ as main_mod
 
     output_module._mode = "json"
     try:

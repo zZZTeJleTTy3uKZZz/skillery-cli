@@ -11,10 +11,10 @@ from pathlib import Path
 
 import pytest
 
-import skills_hub_cli.__main__ as main_mod
-from skills_hub_cli import output as out_mod
-from skills_hub_cli.config import ClientConfig
-from skills_hub_cli.core.agents import CodexTarget
+import skillery_cli.__main__ as main_mod
+from skillery_cli import output as out_mod
+from skillery_cli.config import ClientConfig
+from skillery_cli.core.agents import CodexTarget
 
 
 def _events_of(events: list, etype: str) -> list:
@@ -155,7 +155,7 @@ def test_sync_carries_agent(
                       repo_url=None, local_src=src,
                       manifest={"version": "1.2.3", "files": []},
                       project=None, force=False)
-    from skills_hub_cli.core import project_manifest as pm
+    from skillery_cli.core import project_manifest as pm
     pm.add(project, "demo")
     main_mod.cmd_sync(project=project, prune=False, agent=None,
                       channel="published")
@@ -238,7 +238,7 @@ def test_update_carries_agent(
 
     # Тонкий installer-stub: install() для update-ветки возвращает is_update,
     # не лезет в git (фокус теста — agent в payload, не механика installer'а).
-    from skills_hub_cli.core.installer import InstallResult
+    from skillery_cli.core.installer import InstallResult
 
     class _FakeInstaller:
         def __init__(self, *a, **k):

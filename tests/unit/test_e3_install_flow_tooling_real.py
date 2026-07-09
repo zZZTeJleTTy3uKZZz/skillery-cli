@@ -14,11 +14,11 @@ from pathlib import Path
 
 import pytest
 
-import skills_hub_cli.__main__ as main_mod
-from skills_hub_cli import output as out_mod
-from skills_hub_cli.config import ClientConfig
-from skills_hub_cli.core import mcp_register, path_store
-from skills_hub_cli.core.agents import ClaudeCodeTarget
+import skillery_cli.__main__ as main_mod
+from skillery_cli import output as out_mod
+from skillery_cli.config import ClientConfig
+from skillery_cli.core import mcp_register, path_store
+from skillery_cli.core.agents import ClaudeCodeTarget
 
 
 class _ExplodingClient:
@@ -66,7 +66,7 @@ def _wire(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(main_mod, "_get_access_token", lambda: "unused")
     monkeypatch.setattr(out_mod, "_mode", "json")
     # Изолируем bin-стор и home (для ~/.claude.json и PATH-операций).
-    monkeypatch.setenv("SKILLS_HUB_BIN_DIR", str(bin_dir))
+    monkeypatch.setenv("SKILLERY_BIN_DIR", str(bin_dir))
     monkeypatch.setattr(mcp_register.Path, "home", staticmethod(lambda: home))
     # PATH-запись не трогает реальный реестр/rc — мокаем точечно.
     monkeypatch.setattr(path_store, "_already_on_path", lambda target: True)

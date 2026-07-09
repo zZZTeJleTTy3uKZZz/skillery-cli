@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from skills_hub_cli.core import deps_installer as di
+from skillery_cli.core import deps_installer as di
 
 
 # --------------------------------------------------------------------------

@@ -705,16 +705,16 @@ wheels = [
 
 [[package]]
 name = "s-skillkit"
-version = "0.1.1"
+version = "0.1.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pathspec" },
     { name = "platformdirs" },
     { name = "tomli-w" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/df/87/16d5d3b0e07b22d4f18520689f21535bb8f34d90a2d4acb66de42aa2c6f2/s_skillkit-0.1.1.tar.gz", hash = "sha256:678d155e0f3b2a2cb109c2f2f94e375df93a25bfe8edb842abea4d502d4a573e", size = 56778, upload-time = "2026-06-25T17:00:13.378Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1c/0d/a907c1c9491bf900d5aaec5cef7f483134b3c23c5ed5b7d61f2b0655484b/s_skillkit-0.1.8.tar.gz", hash = "sha256:4d1520c9e8704fe314374b09b6b6f34601ab7f4ac60e1a547a7986ba39e76068", size = 74848, upload-time = "2026-07-08T18:02:31.542Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/34/e9/10f200235ca54c4898e1ee20b08e574f7fc77bc0bfcae7459b39f02c0160/s_skillkit-0.1.1-py3-none-any.whl", hash = "sha256:bf60fd1e60ecef9efdb49a7806966cb2fdb303aa6d838e56bd7e755581261362", size = 49035, upload-time = "2026-06-25T17:00:12.21Z" },
+    { url = "https://files.pythonhosted.org/packages/a0/2e/77d93f52dbf5ffd0202dead871a81d250456c63831ebf2780ebe168a6076/s_skillkit-0.1.8-py3-none-any.whl", hash = "sha256:6fbe94bb0b195c63fc35537b490e22b009f539bba5df317f5f5aa9cf5fdb68f2", size = 59285, upload-time = "2026-07-08T18:02:30.413Z" },
 ]
 
 [[package]]
@@ -740,8 +740,8 @@ wheels = [
 ]
 
 [[package]]
-name = "skills-hub-cli"
-version = "0.3.0"
+name = "skillery-cli"
+version = "0.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
@@ -777,7 +777,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
     { name = "s-clikit", specifier = ">=0.1.4" },
     { name = "s-librarykit", specifier = ">=0.1.4" },
-    { name = "s-skillkit", specifier = ">=0.1.1" },
+    { name = "s-skillkit", specifier = ">=0.1.8" },
     { name = "tomli-w", specifier = ">=1.0" },
     { name = "typer", specifier = ">=0.15" },
 ]

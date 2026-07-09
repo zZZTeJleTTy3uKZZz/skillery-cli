@@ -1,4 +1,4 @@
-"""Тесты CLI-команды ``skills-hub suggest`` (discovery поверх core/suggest).
+"""Тесты CLI-команды ``skillery suggest`` (discovery поверх core/suggest).
 
 Команда always-on (read-only): свободный запрос → нормализация в terms →
 локальные кандидаты из стора (score_skill) + bounded hub-поиск (если залогинен,
@@ -19,13 +19,13 @@ from unittest.mock import MagicMock
 import pytest
 import typer
 
-from skills_hub_cli import output as out_mod
-from skills_hub_cli.commands import _common
-from skills_hub_cli.commands import suggest as suggest_mod
-from skills_hub_cli.config import ClientConfig
-from skills_hub_cli.core import project_manifest as pm
-from skills_hub_cli.core.agents import ClaudeCodeTarget
-from skills_hub_cli.core.installer import SkillInstaller, write_meta
+from skillery_cli import output as out_mod
+from skillery_cli.commands import _common
+from skillery_cli.commands import suggest as suggest_mod
+from skillery_cli.config import ClientConfig
+from skillery_cli.core import project_manifest as pm
+from skillery_cli.core.agents import ClaudeCodeTarget
+from skillery_cli.core.installer import SkillInstaller, write_meta
 
 
 # ======================================================
@@ -314,7 +314,7 @@ def test_suggest_json_contract_keys(
 def test_suggest_registered_always_on(monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = ClientConfig(base_url="http://localhost:8000")
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
-    from skills_hub_cli.__main__ import build_app
+    from skillery_cli.__main__ import build_app
 
     app = build_app()
     names = [c.name for c in app.registered_commands]

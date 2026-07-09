@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from skills_hub_cli.core import linker
-from skills_hub_cli.core.agents import ClaudeCodeTarget
-from skills_hub_cli.core.installer import SkillInstaller
+from skillery_cli.core import linker
+from skillery_cli.core.agents import ClaudeCodeTarget
+from skillery_cli.core.installer import SkillInstaller
 
 _MANIFEST = {"version": "1.0.0", "description": "x", "files": []}
 
@@ -73,8 +73,8 @@ def test_remove_nonexistent_returns_not_removed(tmp_path: Path) -> None:
 
 def test_cmd_remove_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     """cmd_remove --json: эмитит структуру + трекает skill.uninstall."""
-    import skills_hub_cli.__main__ as main_mod
-    from skills_hub_cli.config import ClientConfig
+    import skillery_cli.__main__ as main_mod
+    from skillery_cli.config import ClientConfig
 
     target = ClaudeCodeTarget(root=tmp_path / ".claude")
     store = tmp_path / "store"
@@ -89,7 +89,7 @@ def test_cmd_remove_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
     events: list[tuple] = []
     monkeypatch.setattr(main_mod, "track_skill_event",
                         lambda et, **kw: events.append((et, kw)), raising=False)
-    from skills_hub_cli import output as out_mod
+    from skillery_cli import output as out_mod
     monkeypatch.setattr(out_mod, "_mode", "json")
 
     main_mod.cmd_remove(slug="wb-api", scope="global", keep_local=False,

@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from skills_hub_cli.core.agents import ClaudeCodeTarget
-from skills_hub_cli.core.installer import (
+from skillery_cli.core.agents import ClaudeCodeTarget
+from skillery_cli.core.installer import (
     SkillInstaller,
     read_meta,
     skill_dir_name,

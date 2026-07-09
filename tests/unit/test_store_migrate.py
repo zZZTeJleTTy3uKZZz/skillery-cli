@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from skills_hub_cli.core import linker
-from skills_hub_cli.core.agents import ClaudeCodeTarget
-from skills_hub_cli.core.installer import SkillInstaller, write_meta
+from skillery_cli.core import linker
+from skillery_cli.core.agents import ClaudeCodeTarget
+from skillery_cli.core.installer import SkillInstaller, write_meta
 
 
 def _copy_install(base: Path, name: str) -> Path:
@@ -79,9 +79,9 @@ def test_cmd_migrate_text_render_does_not_crash(
     Раньше _render итерировал весь payload ({dry_run, reports}) → r['migrated']
     на bool → TypeError. JSON-режим баг не ловил (text_renderer не вызывается).
     """
-    import skills_hub_cli.__main__ as main_mod
-    from skills_hub_cli import output as out_mod
-    from skills_hub_cli.config import ClientConfig
+    import skillery_cli.__main__ as main_mod
+    from skillery_cli import output as out_mod
+    from skillery_cli.config import ClientConfig
 
     target = ClaudeCodeTarget(root=tmp_path / ".claude")
     store = tmp_path / "store"

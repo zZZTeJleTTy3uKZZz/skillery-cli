@@ -21,9 +21,9 @@ from pathlib import Path
 
 import pytest
 
-from skills_hub_cli.core import linker
-from skills_hub_cli.core.agents import ClaudeCodeTarget
-from skills_hub_cli.core.installer import SkillInstaller, read_meta, write_meta
+from skillery_cli.core import linker
+from skillery_cli.core.agents import ClaudeCodeTarget
+from skillery_cli.core.installer import SkillInstaller, read_meta, write_meta
 
 _MANIFEST = {"version": "2.0.0", "description": "x", "files": []}
 
@@ -147,8 +147,8 @@ def _setup_auto_update_env(
     install_calls: list,
 ):
     """Окружение _maybe_auto_update: один установленный навык + стаб bundle."""
-    import skills_hub_cli.__main__ as main_mod
-    from skills_hub_cli.config import ClientConfig
+    import skillery_cli.__main__ as main_mod
+    from skillery_cli.config import ClientConfig
 
     target = ClaudeCodeTarget(root=tmp_path / ".claude")
     base = target.base_dir()
@@ -234,7 +234,7 @@ def test_auto_update_progress_goes_to_stderr_not_stdout(
 ) -> None:
     """В json-режиме stdout — машинный канал; «↑ auto-update ...» обязан идти
     в stderr (живой факт: прогресс ломал парсинг --json вывода)."""
-    from skills_hub_cli import output as out_mod
+    from skillery_cli import output as out_mod
 
     install_calls: list = []
     main_mod, cfg = _setup_auto_update_env(
