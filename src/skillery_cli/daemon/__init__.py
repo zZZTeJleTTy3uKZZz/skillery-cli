@@ -11,7 +11,7 @@
 И четыре autostart-installer'а (systemd / launchd / Task Scheduler) —
 см. :mod:`autostart`.
 
-Daemon НЕ требует чтобы реально стоял autostart: ``skills-hub daemon
+Daemon НЕ требует чтобы реально стоял autostart: ``skillery daemon
 install`` только генерирует unit-file + печатает инструкцию что с ним
 делать. Это даёт возможность тестировать pipeline на чистой VM без
 sudo.

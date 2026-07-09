@@ -1,6 +1,6 @@
 """Чистые функции онбординга проекта — без CLI и без сети.
 
-Три шага конвейера ``skills-hub onboard``:
+Три шага конвейера ``skillery onboard``:
 
 1. :func:`detect_signals` — V1-эвристика «какие технологии живут в проекте»
    по маркер-файлам корня (pyproject/package.json/Dockerfile/...).

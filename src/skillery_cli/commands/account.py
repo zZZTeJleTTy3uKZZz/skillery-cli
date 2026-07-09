@@ -1,4 +1,4 @@
-"""``skills-hub register`` / ``skills-hub join`` — самостоятельный онбординг.
+"""``skillery register`` / ``skillery join`` — самостоятельный онбординг.
 
 - ``register --email --password [--name]`` — POST /auth/register: регистрация
   без инвайта (юзер БЕЗ компании, доступ к публичным навыкам) → локальная
@@ -155,7 +155,7 @@ def cmd_register(
     """Самостоятельная регистрация (без инвайта): email + password → сессия.
 
     Создаёт юзера БЕЗ компании (доступ к публичным навыкам + CLI). Позже
-    можно вступить в компанию: ``skills-hub join <ссылка>``.
+    можно вступить в компанию: ``skillery join <ссылка>``.
     """
     cfg = ClientConfig.load()
     if base_url:

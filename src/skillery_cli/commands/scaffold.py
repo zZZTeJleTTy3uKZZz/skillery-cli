@@ -1,4 +1,4 @@
-"""``skills-hub new <slug> --kind prompt|comprehensive|tooling`` — scaffold навыка.
+"""``skillery new <slug> --kind prompt|comprehensive|tooling`` — scaffold навыка.
 
 Генерит ПАПКУ НАВЫКА по типу. Always-on (работает без логина — это
 локальная генерация, сети не нужно):

@@ -1,4 +1,4 @@
-"""``skills-hub event track`` — добавить event в очередь.
+"""``skillery event track`` — добавить event в очередь.
 
 Команда НЕ отправляет event напрямую в backend — пишет в локальную
 очередь ``~/.skillery/events.queue.json``. Daemon (``skills-hub

@@ -1,4 +1,4 @@
-"""``skills-hub rate <id-или-slug> <score>`` — оценить скилл.
+"""``skillery rate <id-или-slug> <score>`` — оценить скилл.
 
 Permission: ``skill.rate``. Backend upsert'ит rating (одна оценка на
 user+skill пара).

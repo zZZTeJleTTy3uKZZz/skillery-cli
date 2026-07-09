@@ -1,4 +1,4 @@
-"""``skills-hub company`` — компании + invite-links + каталог.
+"""``skillery company`` — компании + invite-links + каталог.
 
 Подкоманды:
 

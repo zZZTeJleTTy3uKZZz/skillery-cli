@@ -1,4 +1,4 @@
-"""``skills-hub permissions`` / ``skills-hub role``.
+"""``skillery permissions`` / ``skillery role``.
 
 Управление каталогом прав и набором прав роли (паритет с backend
 ``routes/permissions.py``). Гейт — ``hub.admin`` (в ``register`` через

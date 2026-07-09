@@ -471,7 +471,7 @@ class HubClient:
         Сверено с ``routes/me.py::list_my_installs``: ответ —
         ``{items: [{slug, skill_id, installed_version}]}``. Источник — install-
         события (та же истина, что install_state). Используется
-        ``skills-hub pull`` и демоном для reconcile (знать ЧТО тянуть). Берём
+        ``skillery pull`` и демоном для reconcile (знать ЧТО тянуть). Берём
         только ``items``.
         """
         data = await self._request("GET", "/me/installs")

@@ -1,9 +1,9 @@
-"""``skills-hub ticket`` / ``skills-hub tickets`` — support tickets.
+"""``skillery ticket`` / ``skillery tickets`` — support tickets.
 
 Команды:
-- ``skills-hub ticket create <subject> [--skill slug] [--kind bug|feature|...]``
-- ``skills-hub tickets list [--status open|...] [--kind ...]``
-- ``skills-hub ticket show <id>``
+- ``skillery ticket create <subject> [--skill slug] [--kind bug|feature|...]``
+- ``skillery tickets list [--status open|...] [--kind ...]``
+- ``skillery ticket show <id>``
 
 Permission: ``ticket.create`` для create, ``ticket.read`` для list/show.
 """

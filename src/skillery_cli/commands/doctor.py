@@ -1,4 +1,4 @@
-"""``skills-hub doctor`` — self-check окружения CLI (образец reverse-factory).
+"""``skillery doctor`` — self-check окружения CLI (образец reverse-factory).
 
 Always-on (как ``status``): запускается без логина, печатает pass/warn/fail по
 ключевым предпосылкам и завершается нонзеро при критических провалах. ``--strict``

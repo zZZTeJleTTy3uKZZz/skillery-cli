@@ -1,4 +1,4 @@
-"""``skills-hub suggest "<query>"`` — discovery навыков по свободному запросу.
+"""``skillery suggest "<query>"`` — discovery навыков по свободному запросу.
 
 Always-on, read-only: ничего не ставит, только подсказывает что и как включить.
 
@@ -17,7 +17,7 @@ Always-on, read-only: ничего не ставит, только подска�
    ``source local|hub|both``; сортировка по ``score`` desc (local выше hub
    при равенстве).
 
-Каждый suggestion несёт ``install_cmd`` — готовую строку ``skills-hub enable
+Каждый suggestion несёт ``install_cmd`` — готовую строку ``skillery enable
 <slug> --project <p>`` (исполнение оставляем пользователю).
 """
 from __future__ import annotations

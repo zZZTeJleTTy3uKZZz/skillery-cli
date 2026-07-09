@@ -1,8 +1,8 @@
-"""``skills-hub comment`` + ``skills-hub comments``.
+"""``skillery comment`` + ``skillery comments``.
 
-- ``skills-hub comment <id-или-slug> "body" [--screenshot path] [--parent id]``
+- ``skillery comment <id-или-slug> "body" [--screenshot path] [--parent id]``
   — добавить comment. Если есть screenshot — multipart upload.
-- ``skills-hub comments <id-или-slug> [--limit N] [--cursor X]`` — list (public).
+- ``skillery comments <id-или-slug> [--limit N] [--cursor X]`` — list (public).
 
 Permission: ``comment.post`` для post.
 """

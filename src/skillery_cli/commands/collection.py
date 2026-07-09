@@ -1,4 +1,4 @@
-"""``skills-hub collection …`` — коллекции (серверные + локальные).
+"""``skillery collection …`` — коллекции (серверные + локальные).
 
 Единый sub-app ``collection`` с глаголами ``list / show / install / create /
 add / remove / delete``. Флаг **``--local``** переключает источник:

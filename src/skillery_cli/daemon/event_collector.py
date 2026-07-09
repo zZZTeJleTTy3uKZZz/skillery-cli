@@ -6,7 +6,7 @@
 
 Запись и чтение защищены simple-OS lock'ом (advisory file lock через
 ``msvcrt`` на Windows / ``fcntl`` на POSIX) — на случай если daemon и
-``skills-hub event track`` пишут одновременно. Для тестов lock
+``skillery event track`` пишут одновременно. Для тестов lock
 отключаем через флаг ``use_lock=False``.
 
 Использование:

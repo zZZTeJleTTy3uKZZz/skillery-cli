@@ -1,4 +1,4 @@
-"""``skills-hub onboard`` — онбординг проекта.
+"""``skillery onboard`` — онбординг проекта.
 
 Конвейер: детект сигналов проекта (``core/onboarding.detect_signals``) →
 кандидаты из локального стора (+bounded hub-поиск ``GET /skills?q=…``, если

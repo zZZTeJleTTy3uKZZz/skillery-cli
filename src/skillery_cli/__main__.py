@@ -1681,7 +1681,7 @@ async def _reconcile_hub_installs(
 
     Идемпотентно: для каждого навыка из ``/me/installs`` сравниваем версию с
     локальным стором (``read_meta``). Отсутствующий или устаревший → качаем
-    через :func:`_install_chain` (GLOBAL scope, как ``skills-hub install`` без
+    через :func:`_install_chain` (GLOBAL scope, как ``skillery install`` без
     ``--project``). Уже актуальный — пропускаем.
 
     Возвращает report ``{downloaded, updated, skipped, failed}`` (списки имён).
@@ -1740,7 +1740,7 @@ def cmd_pull(
     """Скачать навыки, помеченные установленными в вебе («нажал Установить»).
 
     Тянет ``/me/installs`` и докачивает отсутствующие/устаревшие в глобальный
-    стор (как ``skills-hub install`` без ``--project``). Уже актуальные —
+    стор (как ``skillery install`` без ``--project``). Уже актуальные —
     пропускает. Это вторая половина потока «установка из веба»: веб помечает
     навык установленным, CLI ``pull`` приносит файлы. Нужен login.
     """
@@ -2825,7 +2825,7 @@ def build_app() -> typer.Typer:
     # ИСТОРИЧЕСКИЙ контракт вывода ДРУГОЙ: дефолт — text, режим инициализируется
     # пре-проходом по argv ДО построения app (см. init_output_mode выше через
     # skillery_cli.output), а callback — no-op. Чтобы не сломать ни поведение
-    # вывода (is_json()), ни набор команд (`skills-hub --help`), мы:
+    # вывода (is_json()), ни набор команд (`skillery --help`), мы:
     #   1) переопределяем callback историческим (--profile/--json/--version, без
     #      --text и без clikit-реинициализации вывода);
     #   2) снимаем авто-зарегистрированную команду `version` (флага --version и
@@ -2852,7 +2852,7 @@ def build_app() -> typer.Typer:
         ),
         version: bool = typer.Option(
             False, "--version", "-V",
-            help="Показать версию skills-hub CLI и выйти.",
+            help="Показать версию skillery CLI и выйти.",
             callback=_version_callback,
             is_eager=True,
         ),
@@ -2932,21 +2932,21 @@ def build_app() -> typer.Typer:
     _onboard_mod.register(app)
 
     # --- discovery suggest ---
-    # `skills-hub suggest "<query>"` — подбор навыков по свободному запросу.
+    # `skillery suggest "<query>"` — подбор навыков по свободному запросу.
     # ALWAYS-ON, read-only: локальный стор всегда, hub-поиск при сессии.
     from skillery_cli.commands import suggest as _suggest_mod
 
     _suggest_mod.register(app)
 
     # --- scaffold ---
-    # `skills-hub new <slug> --kind ...` — генерация скелета навыка. ALWAYS-ON:
+    # `skillery new <slug> --kind ...` — генерация скелета навыка. ALWAYS-ON:
     # локальная генерация на диск, сети/логина не требует.
     from skillery_cli.commands import scaffold as _scaffold_mod
 
     _scaffold_mod.register(app)
 
     # --- analytics local ---
-    # `skills-hub analytics local` — read-only локальная картина (стор + проект
+    # `skillery analytics local` — read-only локальная картина (стор + проект
     # + очередь событий). ALWAYS-ON: только локальные файлы, сети/логина не надо.
     from skillery_cli.commands import analytics as _analytics_mod
 

@@ -1,4 +1,4 @@
-"""``skills-hub contributors <id-или-slug>`` — список контрибьюторов скилла.
+"""``skillery contributors <id-или-slug>`` — список контрибьюторов скилла.
 
 GET /skills/{id}/contributors. Refresh-on-stale: если cache пустой —
 backend сам резолвит из git.

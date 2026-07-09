@@ -1,4 +1,4 @@
-"""``skills-hub members`` / ``skills-hub member`` / ``skills-hub roles`` — P1 C3.
+"""``skillery members`` / ``skillery member`` / ``skillery roles`` — P1 C3.
 
 Участники компании + глобальный каталог ролей.
 
