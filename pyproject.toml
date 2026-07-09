@@ -31,7 +31,7 @@ dependencies = [
     "s-librarykit>=0.1.4",
     "s-clikit>=0.1.4",
     "s-skillkit>=0.1.8",
-    "s-skillgate>=0.1.1",  # единый secret-scan (G5): regex-fallback publish-гейта на skillgate
+    "s-skillgate>=0.1.2",  # единый secret-scan (G5): regex-fallback publish-гейта на skillgate
 ]
 
 # Все киты (s-librarykit/s-clikit/s-skillkit) тянутся с PyPI — CLI распространяем
