@@ -2428,6 +2428,69 @@ def _run_publish_secret_scan(
     raise typer.Exit(1)
 
 
+def _run_publish_denylist_gate(skill_dir: Path, *, force: bool) -> None:
+    """#204: гейт денилиста ВНУТРЕННЕЙ ИНФЫ поверх секрет-скана — «не только
+    секреты». Через ``skillgate.scan_repo`` (= ``run_gate(manifest=False)``):
+    ловит абсолютные windows-пути (``C:/Users/<num>``) и публичные IP, которые
+    не должны утечь в публикуемый навык. Секреты покрывает
+    ``_run_publish_secret_scan`` (gitleaks/regex).
+
+    Манифест-часть ``run_gate`` НЕ применяем осознанно: ``check_manifest``
+    требует ``version`` в SKILL.md-frontmatter, а CLI берёт версию из ``--tag``
+    (стандартные навыки версию в frontmatter не кладут) → был бы false-fail.
+    Манифест валидируется своим путём (``build_manifest`` ниже).
+
+    Kit недоступен ⇒ best-effort no-op (секрет-скан уже отработал).
+    """
+    try:
+        import skillgate
+        from skillgate import run_gate
+        from skillgate.rules import load_rules
+    except ImportError:
+        return
+    # run_gate(manifest=False) = scan_repo: только секреты+денилист, без манифеста.
+    report = run_gate(skill_dir, manifest=False)
+    data_dir = Path(skillgate.__file__).parent / "data"
+    internal_ids = {
+        r.id
+        for r in load_rules(data_dir / "denylist.toml")
+        if r.category == "internal-info"
+    }
+    internal = [f for f in report.findings if f.rule in internal_ids]
+    if not internal:
+        return
+    fails = [f for f in internal if f.severity.value == "fail"]
+    payload = [
+        {"file": f.file, "line": f.line, "rule": f.rule, "message": f.message}
+        for f in internal
+    ]
+    if is_json():
+        emit_error(
+            "publish_denylist_failed"
+            if (fails and not force)
+            else "publish_denylist_warn",
+            f"Денилист внутренней инфы: {len(internal)} находок "
+            f"({len(fails)} блокирующих)",
+            findings=payload,
+            forced=force,
+        )
+    else:
+        tone = "red" if fails else "yellow"
+        console.print(
+            f"[{tone}]denylist: {len(internal)} находок внутренней инфы "
+            f"({len(fails)} блокирующих)[/]"
+        )
+        for f in internal:
+            console.print(f"  [dim]{f.file}:{f.line}[/] ({f.rule}) {f.message}")
+    if fails and not force:
+        if not is_json():
+            console.print(
+                "[red]Publish прерван.[/] Уберите внутреннюю инфу или "
+                "[bold]--force[/]."
+            )
+        raise typer.Exit(1)
+
+
 def cmd_publish(
     slug: str = typer.Argument(
         ...,
@@ -2478,6 +2541,8 @@ def cmd_publish(
     # ТЗ §10: secret-scan ПЕРЕД сборкой/отправкой.
     if not skip_secret_scan:
         _run_publish_secret_scan(skill_dir, force=force, strict=strict)
+        # #204: полный гейт «не только секреты» — денилист внутренней инфы.
+        _run_publish_denylist_gate(skill_dir, force=force)
 
     version = tag.lstrip("v")
     manifest = build_manifest(skill_dir, version=version)
