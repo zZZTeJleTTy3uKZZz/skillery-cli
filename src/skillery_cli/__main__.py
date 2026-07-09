@@ -2816,8 +2816,8 @@ def build_app() -> typer.Typer:
         )
 
     # cli-kits W6: каркас root-приложения строится через clikit.command_kit
-    # (build_root_app), а НЕ голым typer.Typer. Бренд — "skills-hub". Помощь и
-    # no_args_is_help сохранены прежними.
+    # (build_root_app), а НЕ голым typer.Typer. Бренд берётся из _branding.
+    # Помощь и no_args_is_help сохранены прежними.
     #
     # ВАЖНО — почему callback и `version`-команда ниже переопределяются/снимаются:
     # build_root_app задаёт СВОЙ глобальный callback (json-дефолт + --text/--plain

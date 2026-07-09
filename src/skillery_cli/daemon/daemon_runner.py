@@ -47,7 +47,7 @@ class DaemonState:
         return asdict(self)
 
 
-def _default_skills_hub_dir() -> Path:
+def _default_data_dir() -> Path:
     """Каталог daemon-артефактов (pid/state/queue/guard).
 
     Делегируем в ``config._default_config_dir`` — единый источник правды о
@@ -63,20 +63,20 @@ def _default_skills_hub_dir() -> Path:
 
 
 def default_queue_path() -> Path:
-    return _default_skills_hub_dir() / "events.queue.json"
+    return _default_data_dir() / "events.queue.json"
 
 
 def default_guard_path() -> Path:
     """Sidecar для анти-спам ``EventGuard`` (дедуп/throttle окно)."""
-    return _default_skills_hub_dir() / "events.guard.json"
+    return _default_data_dir() / "events.guard.json"
 
 
 def default_pid_path() -> Path:
-    return _default_skills_hub_dir() / "daemon.pid"
+    return _default_data_dir() / "daemon.pid"
 
 
 def default_state_path() -> Path:
-    return _default_skills_hub_dir() / "daemon.state.json"
+    return _default_data_dir() / "daemon.state.json"
 
 
 def is_process_alive(pid: int) -> bool:

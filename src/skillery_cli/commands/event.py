@@ -1,7 +1,7 @@
 """``skillery event track`` — добавить event в очередь.
 
 Команда НЕ отправляет event напрямую в backend — пишет в локальную
-очередь ``~/.skillery/events.queue.json``. Daemon (``skills-hub
+очередь ``~/.skillery/events.queue.json``. Daemon (``skillery
 daemon start``) периодически снимает batch и шлёт на /events.
 
 Если daemon не запущен — events накапливаются; при первом старте daemon

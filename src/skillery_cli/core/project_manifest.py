@@ -4,8 +4,7 @@ cli-kits W7: ``.skillery/skills.toml`` ридер/райтер теперь в �
 реэкспорт, чтобы прежние импорты ``from skillery_cli.core import
 project_manifest`` не ломались.
 
-Ребренд skills-hub→skillery: проектный манифест переехал ``.skillery`` →
-``.skillery``. Кит остаётся брендо-нейтральным (его дефолт исторический
+Проектный манифест — ``.skillery/skills.toml``. Кит остаётся брендо-нейтральным (его дефолт исторический
 ``.skillery``); CLI инъектирует НОВЫЙ путь ``.skillery/skills.toml`` как
 канонический (write) + legacy ``.skillery/skills.toml`` как fallback для
 чтения старых проектов. Существующие репозитории с ``.skillery/skills.toml``
