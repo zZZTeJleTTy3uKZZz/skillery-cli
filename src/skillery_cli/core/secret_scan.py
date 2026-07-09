@@ -17,13 +17,16 @@ gitleaks — внешний бинарь, может отсутствовать.
 from __future__ import annotations
 
 import json
-import math
 import re
 import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
+
+from skillgate.rules import load_allowlist, load_rules
+from skillgate.scanner import scan_text as _skillgate_scan_text
 
 # Папки, которые НЕ сканируем (локальный state / служебное).
 # Совпадает по смыслу с manifest_builder._IGNORE_PATHS.
@@ -123,85 +126,48 @@ def _mask_line(line: str, *, max_len: int = 120) -> str:
 # ---------------------------------------------------------------------------
 # Regex fallback
 # ---------------------------------------------------------------------------
-# (rule_id, compiled regex). Порядок важен только для приоритета имени.
-_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("aws-access-key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
-    (
-        "private-key",
-        re.compile(r"-----BEGIN (?:[A-Z ]*)(?:PRIVATE KEY|RSA)-----"),
-    ),
-    (
-        "generic-password",
-        re.compile(r"(?i)\bpassword\s*[=:]\s*['\"]?[^\s'\"]{6,}"),
-    ),
-    (
-        "generic-token",
-        re.compile(
-            r"""(?ix)
-            \b(?:token|secret|api[_-]?key|access[_-]?key|auth)
-            \s*[=:]\s*
-            ['"][^'"]{16,}['"]
-            """
-        ),
-    ),
-)
-
-# Контекст, повышающий подозрительность высокоэнтропийной строки.
-_SECRET_CONTEXT_RE = re.compile(
-    r"(?i)(secret|token|key|passw|cred|api|auth|bearer|private)"
-)
-
-# Кандидат-строка для энтропийной проверки: длинная base64/hex.
-_HIGH_ENTROPY_CANDIDATE_RE = re.compile(r"[A-Za-z0-9+/=]{32,}")
+# G5-консолидация: правила детекции больше НЕ дублируются здесь — единый сканер
+# (aws/pem/dsn/jwt/gh/glpat/sk + generic-password/generic-token + high-entropy)
+# живёт в ките ``s-skillgate`` (>=0.1.1). Здесь — тонкая обёртка, сохраняющая
+# API клиента (``Finding`` + masked-line snippet для UX ``cmd_publish``).
 
 
-def _shannon_entropy(s: str) -> float:
-    if not s:
-        return 0.0
-    counts: dict[str, int] = {}
-    for ch in s:
-        counts[ch] = counts.get(ch, 0) + 1
-    n = len(s)
-    return -sum((c / n) * math.log2(c / n) for c in counts.values())
+@lru_cache(maxsize=1)
+def _skillgate_rules_allowlist() -> tuple[list, list]:
+    """Дефолтные правила/allowlist из данных пакета ``skillgate`` (кэш на процесс)."""
+    import skillgate
+
+    data_dir = Path(skillgate.__file__).parent / "data"
+    return (
+        load_rules(data_dir / "denylist.toml"),
+        load_allowlist(data_dir / "allowlist.toml"),
+    )
 
 
 def _scan_text(rel_path: str, text: str) -> list[Finding]:
+    """Скан текста единым сканером skillgate → клиентские ``Finding``.
+
+    snippet восстанавливаем как masked-line по номеру строки (UX ``cmd_publish``:
+    видно ГДЕ утечка, без сырого секрета). Дедуп по ``(rule, line)``.
+    """
+    rules, allowlist = _skillgate_rules_allowlist()
+    lines = text.splitlines()
     findings: list[Finding] = []
-    seen: set[tuple[str, int, str]] = set()
-    for lineno, line in enumerate(text.splitlines(), start=1):
-        # 1. Прямые паттерны.
-        for rule, pat in _PATTERNS:
-            m = pat.search(line)
-            if m:
-                key = (rule, lineno, rel_path)
-                if key in seen:
-                    continue
-                seen.add(key)
-                findings.append(
-                    Finding(
-                        file=rel_path,
-                        line=lineno,
-                        rule=rule,
-                        snippet=_mask_line(line),
-                    )
-                )
-        # 2. Высокоэнтропийные строки в подозрительном контексте.
-        if _SECRET_CONTEXT_RE.search(line):
-            for cand in _HIGH_ENTROPY_CANDIDATE_RE.findall(line):
-                if _shannon_entropy(cand) >= 4.0:
-                    key = ("high-entropy", lineno, rel_path)
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    findings.append(
-                        Finding(
-                            file=rel_path,
-                            line=lineno,
-                            rule="high-entropy-string",
-                            snippet=_mask_line(line),
-                        )
-                    )
-                    break
+    seen: set[tuple[str, int]] = set()
+    for f in _skillgate_scan_text(text, rules, allowlist, file=rel_path):
+        key = (f.rule, f.line)
+        if key in seen:
+            continue
+        seen.add(key)
+        line_text = lines[f.line - 1] if 0 <= f.line - 1 < len(lines) else ""
+        findings.append(
+            Finding(
+                file=rel_path,
+                line=f.line,
+                rule=f.rule,
+                snippet=_mask_line(line_text) if line_text else f.message,
+            )
+        )
     return findings
 
 

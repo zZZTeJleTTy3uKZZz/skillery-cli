@@ -44,7 +44,7 @@ def test_mask_secret_short_fully_hidden() -> None:
 def test_scan_text_detects_aws_key() -> None:
     findings = scan_text("config.py", f'AWS_KEY = "{AWS_EXAMPLE_KEY}"')
     rules = {f.rule for f in findings}
-    assert "aws-access-key" in rules
+    assert "aws-akia" in rules  # G5: rule-ID из skillgate
     # snippet замаскирован — полного ключа нет.
     for f in findings:
         assert AWS_EXAMPLE_KEY not in f.snippet
@@ -52,7 +52,7 @@ def test_scan_text_detects_aws_key() -> None:
 
 def test_scan_text_detects_private_key_header() -> None:
     findings = scan_text("id_rsa", "-----BEGIN RSA PRIVATE KEY-----")
-    assert any(f.rule == "private-key" for f in findings)
+    assert any(f.rule == "private-key-block" for f in findings)  # G5: skillgate-ID
 
 
 def test_scan_text_detects_password_assignment() -> None:
@@ -64,7 +64,10 @@ def test_scan_text_detects_token_assignment() -> None:
     findings = scan_text(
         "app.py", "token = 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345'"
     )
-    assert any(f.rule == "generic-token" for f in findings)
+    # G5: skillgate ловит и github-token (формат), и generic-token-assignment.
+    assert any(
+        f.rule in ("generic-token-assignment", "github-token") for f in findings
+    )
 
 
 def test_scan_text_high_entropy_in_secret_context() -> None:
