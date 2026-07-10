@@ -2691,6 +2691,12 @@ def cmd_publish(
     description: Optional[str] = typer.Option(None),
     tags: Optional[str] = typer.Option(None),
     repo_url: Optional[str] = typer.Option(None),
+    repo_token: Optional[str] = typer.Option(
+        None, "--repo-token",
+        help="PAT для приватного репо (github/gitlab). Сохраняется на хабе "
+        "зашифрованным (repo-credential) — БЕЗ него автосинк приватного репо "
+        "не сможет клонировать. Провайдер выводится из repo_url.",
+    ),
     skill_path: Optional[str] = typer.Option(
         None, "--skill-path",
         help="Подпапка навыка в репо (skills/<name>/), #268. По умолчанию — корень.",
@@ -2755,6 +2761,7 @@ def cmd_publish(
             if tags else manifest.tags
         ),
         "repo_url": repo_url,
+        "repo_token": repo_token,
         "skill_path": skill_path,
         "is_super": is_super,
         "manifest": {
