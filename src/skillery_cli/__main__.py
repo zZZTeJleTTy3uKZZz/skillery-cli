@@ -28,6 +28,7 @@ from rich.table import Table
 from skillery_cli.config import (
     ClientConfig,
     clear_tokens,
+    decode_jwt_claims,
     load_tokens,
     populate_from_jwt,
     save_tokens,
@@ -298,7 +299,7 @@ def cmd_login(
         None,
         help=(
             "Invite-токен или URL (для invite-flow). Опускайте если хотите "
-            "залогиниться через --email/--password."
+            "залогиниться через --email/--password или browser-flow."
         ),
     ),
     email: Optional[str] = typer.Option(None),
@@ -311,19 +312,88 @@ def cmd_login(
             "Если только --email указан без --password — пароль запрошен интерактивно."
         ),
     ),
+    code: Optional[str] = typer.Option(
+        None,
+        "--code",
+        help=(
+            "Exchange-code для прямого редима (минует browser-flow). "
+            "Получить code можно на странице /cli-login."
+        ),
+    ),
     base_url: Optional[str] = typer.Option(None),
 ) -> None:
-    """Логин: либо invite-token (invite-flow), либо email + password.
+    """Логин: invite-token, email+password, exchange-code или browser-flow.
 
-    Если передан positional `invite` — invite-flow (как раньше). Если invite
-    опущен — email+password flow (POST /auth/login).
+    Приоритет:
+    1. Если передан positional `invite` → invite-flow (как раньше).
+    2. Если --email/--password → email+password flow (POST /auth/login).
+    3. Если --code → direct redeem (POST /auth/exchanges/{code}/redeem).
+    4. Иначе (без аргументов) → browser-flow (открыть браузер на /cli-login).
     """
     cfg = ClientConfig.load()
     if base_url:
         cfg.base_url = base_url
 
-    if invite is None:
-        # --- email + password flow ---
+    if invite is not None:
+        # --- invite-flow (как раньше) ---
+        if email is None:
+            email = "" if is_json() else Prompt.ask("Email")
+        if name is None:
+            name = "" if is_json() else Prompt.ask("Имя для отображения")
+        token = _strip_invite_url(invite)
+
+        async def _do_invite() -> None:
+            client = HubClient(base_url=cfg.base_url)
+            try:
+                data = await client.login_invite(
+                    invite_token=token, email=email, display_name=name
+                )
+                # JWT-slim: права — из /me/permissions (токен их не несёт).
+                await hydrate_session_permissions(client, cfg, data["access_token"])
+                # E-D: регистрируем эту машину как устройство (best-effort).
+                await register_device_best_effort(client)
+            finally:
+                await client.close()
+            save_tokens(email, data["access_token"], data["refresh_token"])
+            cfg.user_email = email
+            populate_from_jwt(cfg, data["access_token"])
+            cfg.save()
+            result = {
+                "event": "logged_in",
+                "user_email": email,
+                "is_new_user": bool(data.get("is_new_user")),
+                "is_hub_admin": cfg.is_hub_admin(),
+                "is_skill_creator": cfg.is_skill_creator(),
+                "permissions": cfg.permissions,
+                "company_id": cfg.company_id,
+                "role_id": cfg.role_id,
+                "access_expires_at": cfg.access_expires_at,
+            }
+
+            def _render(_: dict) -> None:
+                console.print(f"[green]✓[/] Авторизован как {email}")
+                if data.get("is_new_user"):
+                    console.print("  (новый пользователь, аккаунт создан)")
+                roles_descr = []
+                if cfg.is_hub_admin():
+                    roles_descr.append("hub-admin")
+                if cfg.is_skill_creator():
+                    roles_descr.append("skill-creator")
+                if cfg.permissions and not roles_descr:
+                    roles_descr.append("member")
+                console.print(f"  Роли:        {', '.join(roles_descr) or '—'}")
+                console.print(f"  Permissions: {len(cfg.permissions)} прав")
+                console.print(
+                    "[dim]Доступные команды зависят от прав — `skillery --help`[/]"
+                )
+
+            emit_data(result, text_renderer=_render)
+
+        _run(_do_invite())
+        return
+
+    if email is not None or password is not None:
+        # --- password-flow ---
         if email is None:
             if is_json():
                 emit_error(
@@ -343,33 +413,45 @@ def cmd_login(
         _do_password_login(cfg, email=email, password=password)
         return
 
-    # --- invite-flow (как раньше) ---
-    if email is None:
-        email = "" if is_json() else Prompt.ask("Email")
-    if name is None:
-        name = "" if is_json() else Prompt.ask("Имя для отображения")
-    token = _strip_invite_url(invite)
+    if code is not None:
+        # --- code-flow (прямой redeem) ---
+        _do_code_login(cfg, code=code)
+        return
+
+    # --- browser-flow (по умолчанию) ---
+    _do_browser_login(cfg)
+
+
+def _do_code_login(cfg: ClientConfig, *, code: str) -> None:
+    """Логин через exchange-code (прямой redeem без браузера).
+
+    Web UI генерирует code на странице /cli-login, CLI редеемит его здесь.
+    """
 
     async def _do() -> None:
         client = HubClient(base_url=cfg.base_url)
         try:
-            data = await client.login_invite(
-                invite_token=token, email=email, display_name=name
-            )
+            data = await client.exchange_redeem(code=code)
             # JWT-slim: права — из /me/permissions (токен их не несёт).
             await hydrate_session_permissions(client, cfg, data["access_token"])
             # E-D: регистрируем эту машину как устройство (best-effort).
             await register_device_best_effort(client)
         finally:
             await client.close()
-        save_tokens(email, data["access_token"], data["refresh_token"])
-        cfg.user_email = email
+
+        # Извлекаем email из JWT — единственный способ без extra round-trip.
+        claims = decode_jwt_claims(data["access_token"])
+        user_email = claims.get("sub") if claims else ""
+
+        save_tokens(user_email, data["access_token"], data["refresh_token"])
+        cfg.user_email = user_email
         populate_from_jwt(cfg, data["access_token"])
         cfg.save()
+
         result = {
             "event": "logged_in",
-            "user_email": email,
-            "is_new_user": bool(data.get("is_new_user")),
+            "method": "code",
+            "user_email": user_email,
             "is_hub_admin": cfg.is_hub_admin(),
             "is_skill_creator": cfg.is_skill_creator(),
             "permissions": cfg.permissions,
@@ -379,9 +461,7 @@ def cmd_login(
         }
 
         def _render(_: dict) -> None:
-            console.print(f"[green]✓[/] Авторизован как {email}")
-            if data.get("is_new_user"):
-                console.print("  (новый пользователь, аккаунт создан)")
+            console.print(f"[green]✓[/] Авторизован как {user_email} (code-flow)")
             roles_descr = []
             if cfg.is_hub_admin():
                 roles_descr.append("hub-admin")
@@ -391,11 +471,118 @@ def cmd_login(
                 roles_descr.append("member")
             console.print(f"  Роли:        {', '.join(roles_descr) or '—'}")
             console.print(f"  Permissions: {len(cfg.permissions)} прав")
-            console.print(
-                "[dim]Доступные команды зависят от прав — `skillery --help`[/]"
-            )
 
         emit_data(result, text_renderer=_render)
+
+    _run(_do())
+
+
+def _do_browser_login(cfg: ClientConfig) -> None:
+    """Логин через browser-flow: открыть браузер на /cli-login, ждать callback.
+
+    Запускает локальный HTTP-сервер на 127.0.0.1 со свободным портом,
+    открывает браузер на {web_ui_url}/cli-login?port=…&state=…,
+    ждёт callback на GET /callback?code=…&state=….
+    """
+    import webbrowser
+    from skillery_cli.core.login_helpers import start_callback_server
+
+    async def _do() -> None:
+        # Запускаем callback-сервер
+        server, port, state = start_callback_server()
+        effective_web_ui_url = cfg.effective_web_ui_url
+
+        try:
+            # Формируем URL для браузера
+            browser_url = f"{effective_web_ui_url}/cli-login?port={port}&state={state}"
+
+            # Открываем браузер
+            opened = webbrowser.open(browser_url)
+
+            if not opened:
+                # Браузер не открылся — выдаём код и подсказку
+                console.print(
+                    "[yellow]Браузер не открылся автоматически.[/]\n"
+                    f"Откройте эту ссылку вручную:\n  {browser_url}"
+                )
+
+            # Ждём callback (таймаут 180 сек)
+            start_time = datetime.now(UTC)
+            timeout_sec = 180
+            while True:
+                elapsed = (datetime.now(UTC) - start_time).total_seconds()
+                if elapsed > timeout_sec:
+                    raise RuntimeError(
+                        f"Таймаут при ожидании callback'а ({timeout_sec}с). "
+                        "Проверьте, что браузер открыл правильную ссылку."
+                    )
+
+                # Проверяем, получили ли результат
+                if server.RequestHandlerClass.result:
+                    break
+
+                # Небольшая пауза перед следующей проверкой
+                await asyncio.sleep(0.1)
+
+            result_data = server.RequestHandlerClass.result
+            if "error" in result_data:
+                raise RuntimeError(
+                    f"Ошибка при authenticate: {result_data['error']}"
+                )
+
+            code = result_data.get("code")
+            if not code:
+                raise RuntimeError("Code не получен из callback'а")
+
+            # Редеемим код
+            client = HubClient(base_url=cfg.base_url)
+            try:
+                data = await client.exchange_redeem(code=code)
+                # JWT-slim: права — из /me/permissions (токен их не несёт).
+                await hydrate_session_permissions(client, cfg, data["access_token"])
+                # E-D: регистрируем эту машину как устройство (best-effort).
+                await register_device_best_effort(client)
+            finally:
+                await client.close()
+
+            # Извлекаем email из JWT
+            claims = decode_jwt_claims(data["access_token"])
+            user_email = claims.get("sub") if claims else ""
+
+            save_tokens(user_email, data["access_token"], data["refresh_token"])
+            cfg.user_email = user_email
+            populate_from_jwt(cfg, data["access_token"])
+            cfg.save()
+
+            result = {
+                "event": "logged_in",
+                "method": "browser-flow",
+                "user_email": user_email,
+                "is_hub_admin": cfg.is_hub_admin(),
+                "is_skill_creator": cfg.is_skill_creator(),
+                "permissions": cfg.permissions,
+                "company_id": cfg.company_id,
+                "role_id": cfg.role_id,
+                "access_expires_at": cfg.access_expires_at,
+            }
+
+            def _render(_: dict) -> None:
+                console.print(f"[green]✓[/] Авторизован как {user_email} (browser-flow)")
+                roles_descr = []
+                if cfg.is_hub_admin():
+                    roles_descr.append("hub-admin")
+                if cfg.is_skill_creator():
+                    roles_descr.append("skill-creator")
+                if cfg.permissions and not roles_descr:
+                    roles_descr.append("member")
+                console.print(f"  Роли:        {', '.join(roles_descr) or '—'}")
+                console.print(f"  Permissions: {len(cfg.permissions)} прав")
+
+            emit_data(result, text_renderer=_render)
+
+        finally:
+            # Выключаем сервер
+            server.shutdown()
 
     _run(_do())
 

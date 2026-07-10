@@ -225,3 +225,114 @@ def test_login_password_in_json_mode_requires_email_and_password(
         assert exc2.value.exit_code == 1
     finally:
         output_module._mode = "text"
+
+
+# ---------------------- HubClient.exchange_redeem ----------------------
+@pytest.mark.asyncio
+async def test_hubclient_exchange_redeem_posts_correct_endpoint() -> None:
+    """exchange_redeem POST /auth/exchanges/{code}/redeem с include_refresh=true."""
+    import respx
+    from httpx import Response
+
+    from skillery_cli.core.transport import HubClient
+
+    with respx.mock(base_url="http://localhost:8000") as router:
+        route = router.post("/auth/exchanges/ABC123/redeem").mock(
+            return_value=Response(
+                200,
+                json={
+                    "access_token": "new-access",
+                    "refresh_token": "new-refresh",
+                    "user_id": "u1",
+                },
+            )
+        )
+        client = HubClient(base_url="http://localhost:8000")
+        try:
+            result = await client.exchange_redeem(code="ABC123")
+        finally:
+            await client.close()
+        assert route.called
+        # Проверим, что body содержит {"code": "ABC123", "include_refresh": true}
+        req = route.calls.last.request
+        import json as json_mod
+        body = json_mod.loads(req.content)
+        assert body["code"] == "ABC123"
+        assert body["include_refresh"] is True
+        assert result["access_token"] == "new-access"
+        assert result["refresh_token"] == "new-refresh"
+
+
+# ---------------------- cmd_login --code <str> flow ----------------------
+def test_login_with_code_flag_redeems_and_saves_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """skillery login --code ABC123 → direct redeem without browser."""
+    from skillery_cli import __main__ as main_mod
+    from skillery_cli.config import decode_jwt_claims as orig_decode
+
+    _patch_output_text_mode()
+
+    cfg = ClientConfig(base_url="http://localhost:8000")
+    monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
+
+    saved: dict[str, Any] = {}
+    monkeypatch.setattr(
+        main_mod,
+        "save_tokens",
+        lambda email, access, refresh: saved.update(
+            {"email": email, "access": access, "refresh": refresh}
+        ),
+    )
+    monkeypatch.setattr(main_mod, "populate_from_jwt", lambda c, t: None)
+    monkeypatch.setattr(ClientConfig, "save", lambda self: None)
+
+    fake_client = MagicMock()
+
+    async def _fake_exchange_redeem(*, code: str) -> dict[str, Any]:
+        assert code == "ABC123"
+        return {
+            "access_token": "fake-access-from-code",
+            "refresh_token": "fake-refresh-from-code",
+        }
+
+    async def _fake_close() -> None:
+        return None
+
+    async def _fake_get_me_permissions() -> list[str]:
+        return ["skill.read"]
+
+    fake_client.exchange_redeem = _fake_exchange_redeem
+    fake_client.close = _fake_close
+    fake_client.get_me_permissions = _fake_get_me_permissions
+    monkeypatch.setattr(main_mod, "HubClient", lambda **kw: fake_client)
+
+    # Мокируем decode_jwt_claims чтобы вернуть фейковый email (в реальности из JWT)
+    monkeypatch.setattr(
+        main_mod, "decode_jwt_claims", lambda token: {"sub": "user@example.com"}
+    )
+
+    main_mod.cmd_login(
+        invite=None,
+        email=None,
+        name=None,
+        password=None,
+        code="ABC123",
+        base_url=None,
+    )
+
+    assert saved["email"] == "user@example.com"
+    assert saved["access"] == "fake-access-from-code"
+    assert saved["refresh"] == "fake-refresh-from-code"
+
+
+# ---------------------- Browser-flow logic ----------------------
+def test_login_browser_flow_state_mismatch_rejected() -> None:
+    """Browser-flow callback: state-mismatch → ошибка."""
+    from skillery_cli.core.login_helpers import validate_callback_state
+
+    expected_state = "abcdef1234567890"
+    actual_state = "wrongstate1234567890"
+
+    with pytest.raises(ValueError, match="state mismatch"):
+        validate_callback_state(expected=expected_state, actual=actual_state)

@@ -442,6 +442,22 @@ class HubClient:
         """
         return await self._request("POST", "/auth/exchanges")
 
+    async def exchange_redeem(self, *, code: str) -> dict[str, Any]:
+        """POST /auth/exchanges/{code}/redeem — редимит code на новую сессию.
+
+        Для CLI (browser-flow): GET /cli-login?port=…&state=… запускает browser-flow,
+        который редеемит code с include_refresh=true → получается refresh_token в body
+        (не в cookie), для CLI-сохранения.
+
+        Body: {"code": code, "include_refresh": true}.
+        Returns: {"access_token": "...", "refresh_token": "...", ...}.
+        """
+        return await self._request(
+            "POST",
+            f"/auth/exchanges/{code}/redeem",
+            json={"code": code, "include_refresh": True},
+        )
+
     async def list_skills(self, channel: str = "published") -> list[dict[str, Any]]:
         return await self._request("GET", "/skills", params={"channel": channel})
 
