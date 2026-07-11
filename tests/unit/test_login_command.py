@@ -327,6 +327,74 @@ def test_login_with_code_flag_redeems_and_saves_tokens(
 
 
 # ---------------------- Browser-flow logic ----------------------
+def test_browser_login_opens_wellformed_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Регресс: browser-flow строит АБСОЛЮТНЫЙ URL для webbrowser.open.
+
+    Баг: `effective_web_ui_url = cfg.effective_web_ui_url` (без `()`) клал в URL
+    repr связанного метода → `<bound method …>/cli-login?…` → браузер открывал
+    ПУСТОЕ окно. Тест ловит: URL начинается со схемы, ведёт на /cli-login и НЕ
+    содержит 'bound method'.
+    """
+    import webbrowser
+
+    from skillery_cli import __main__ as main_mod
+    from skillery_cli.core import login_helpers as lh
+
+    _patch_output_text_mode()
+    cfg = ClientConfig(base_url="http://localhost:8000")  # → web UI localhost:3000
+    monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
+    monkeypatch.setattr(ClientConfig, "save", lambda self: None)
+
+    # Фейковый callback-сервер: результат готов сразу → цикл ожидания выходит.
+    handler = type("H", (), {"result": {"code": "CODE", "state": "teststate"}})
+    server = type(
+        "S", (), {"RequestHandlerClass": handler, "shutdown": lambda self: None}
+    )()
+    # start_callback_server импортируется ЛОКАЛЬНО внутри _do_browser_login из
+    # login_helpers → патчим модуль-источник.
+    monkeypatch.setattr(
+        lh, "start_callback_server", lambda: (server, 57123, "teststate")
+    )
+
+    captured: dict[str, str] = {}
+
+    def _capture_open(url: str, *a: Any, **k: Any) -> bool:
+        captured["url"] = url
+        return True
+
+    monkeypatch.setattr(webbrowser, "open", _capture_open)
+
+    fake_client = MagicMock()
+
+    async def _fake_redeem(*, code: str) -> dict[str, Any]:
+        assert code == "CODE"
+        return {"access_token": "acc", "refresh_token": "ref"}
+
+    async def _fake_close() -> None:
+        return None
+
+    fake_client.exchange_redeem = _fake_redeem
+    fake_client.close = _fake_close
+    monkeypatch.setattr(main_mod, "HubClient", lambda **kw: fake_client)
+
+    async def _noop_async(*a: Any, **k: Any) -> None:
+        return None
+
+    monkeypatch.setattr(main_mod, "hydrate_session_permissions", _noop_async)
+    monkeypatch.setattr(main_mod, "register_device_best_effort", _noop_async)
+    monkeypatch.setattr(main_mod, "decode_jwt_claims", lambda t: {"sub": "u@e.co"})
+    monkeypatch.setattr(main_mod, "save_tokens", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "populate_from_jwt", lambda *a, **k: None)
+
+    main_mod._do_browser_login(cfg)
+
+    url = captured.get("url", "")
+    assert url, "webbrowser.open не был вызван"
+    assert url.startswith(("http://", "https://")), f"URL без схемы: {url!r}"
+    assert "bound method" not in url, f"repr метода протёк в URL (нет `()`): {url!r}"
+    assert url.startswith("http://localhost:3000/cli-login?port=57123&state=teststate"), url
+
+
 def test_login_browser_flow_state_mismatch_rejected() -> None:
     """Browser-flow callback: state-mismatch → ошибка."""
     from skillery_cli.core.login_helpers import validate_callback_state

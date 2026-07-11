@@ -490,7 +490,7 @@ def _do_browser_login(cfg: ClientConfig) -> None:
     async def _do() -> None:
         # Запускаем callback-сервер
         server, port, state = start_callback_server()
-        effective_web_ui_url = cfg.effective_web_ui_url
+        effective_web_ui_url = cfg.effective_web_ui_url()
 
         try:
             # Формируем URL для браузера
