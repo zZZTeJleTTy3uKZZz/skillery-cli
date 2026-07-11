@@ -2678,6 +2678,68 @@ def _run_publish_denylist_gate(skill_dir: Path, *, force: bool) -> None:
         raise typer.Exit(1)
 
 
+def _connect_private_repo(
+    repo_url: str, repo_token: Optional[str]
+) -> Optional[str]:
+    """Подключить приватный репо к автосинку хаба (per-project scoped).
+
+    Возвращает ``repo_token`` для payload'а: для GitLab может создать
+    project-токен через ``glab`` (заменяя account-wide PAT); для GitHub без
+    токена — подсказывает установить App ``skillery-sync`` на репо (хаб синкнёт
+    installation-токеном, PAT не нужен). Всё best-effort: сбой ⇒ поведение как
+    раньше (ручной ``--repo-token`` / publish без токена).
+    """
+    from skillery_cli import _branding
+    from skillery_cli.core import repo_connect
+
+    provider = repo_connect.infer_provider(repo_url)
+    slug = repo_connect.parse_repo_slug(repo_url)
+    if provider is None or slug is None:
+        return repo_token
+
+    # Токен уже дали вручную — уважаем, ничего не трогаем.
+    if repo_token:
+        return repo_token
+
+    if provider == "gitlab":
+        token = repo_connect.create_gitlab_project_token(slug)
+        if token:
+            console.print(
+                f"[green]✓[/] Создан GitLab project-токен (read_api) для "
+                f"[bold]{slug.path}[/] — приватный репо синкнётся без "
+                "account-wide PAT."
+            )
+            return token
+        console.print(
+            "[yellow]Не удалось авто-создать GitLab project-токен[/] "
+            "(нужен установленный и авторизованный [bold]glab[/] с правами "
+            "maintainer). Если репо приватный — передайте "
+            "[bold]--repo-token <PAT со scope read_api>[/]."
+        )
+        return repo_token
+
+    # provider == "github": проба публичности → подсказка про App.
+    is_public = repo_connect.github_repo_is_public(slug)
+    if is_public is True:
+        return repo_token  # публичный — App/токен не нужен.
+    install_url = _branding.GITHUB_APP_INSTALL_URL
+    console.print(
+        f"[yellow]Приватный GitHub-репо?[/] Установите App "
+        f"[bold]{_branding.GITHUB_APP_SLUG}[/] на [bold]{slug.path}[/] — "
+        "хаб будет синкать его read-only installation-токеном (PAT не нужен):"
+    )
+    console.print(f"  [cyan]{install_url}[/]")
+    # Открываем браузер только в интерактиве (не в CI/скриптах).
+    if sys.stdout.isatty():
+        import webbrowser
+
+        try:
+            webbrowser.open(install_url)
+        except Exception:  # noqa: BLE001 — открытие браузера best-effort
+            pass
+    return repo_token
+
+
 def cmd_publish(
     slug: str = typer.Argument(
         ...,
@@ -2740,6 +2802,12 @@ def cmd_publish(
     version = tag.lstrip("v")
     manifest = build_manifest(skill_dir, version=version)
     actual_commit = commit_sha or git_commit_sha(skill_dir) or ("0" * 7)
+
+    # Приватный репо → per-project scoped авторизация автосинка (GitLab:
+    # авто-project-токен через glab; GitHub: подсказка установить App). В
+    # dry-run сеть/glab не трогаем.
+    if repo_url and not dry_run:
+        repo_token = _connect_private_repo(repo_url, repo_token)
 
     # Парсинг тегов: очищаем скобки [ ] { }, дробим по запятой.
     def _parse_tags(tags_str: str) -> list[str]:
