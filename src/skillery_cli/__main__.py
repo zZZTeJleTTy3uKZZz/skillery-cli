@@ -2290,7 +2290,10 @@ def cmd_update(
                 meta_skill_id = (meta or {}).get("skill_id")
                 bundle = await client.install_bundle(ref, channel=channel)
                 scope_label = "project" if proj else "global"
-                if bundle["version"] == current_version:
+                # Гейт как в _maybe_auto_update: обновляем ТОЛЬКО если бандл
+                # строго новее (баг B8 — раньше `== ` пропускал лишь равенство,
+                # т.е. downgrade на младшую версию проходил в install).
+                if not _is_newer(bundle["version"], current_version):
                     results.append(
                         {
                             "slug": meta_slug,

@@ -24,8 +24,10 @@ def _setup_update_env(
     *,
     install_result: InstallResult,
     bundle_version: str = "9.9.9",
+    installed_version: str = "1.0.0",
     repo_url: str | None = "https://git.example/demo.git",
     tooling_calls: list | None = None,
+    install_calls: list | None = None,
 ):
     import skillery_cli.__main__ as main_mod
     from skillery_cli.config import ClientConfig
@@ -35,7 +37,7 @@ def _setup_update_env(
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text("hi", encoding="utf-8")
     (skill_dir / "_skill_meta.json").write_text(
-        json.dumps({"slug": "demo", "version": "1.0.0"}), encoding="utf-8"
+        json.dumps({"slug": "demo", "version": installed_version}), encoding="utf-8"
     )
 
     cfg = ClientConfig(store_dir=str(tmp_path / "store"), base_url="http://x")
@@ -64,9 +66,13 @@ def _setup_update_env(
             return None
 
     monkeypatch.setattr(main_mod, "HubClient", _FakeClient)
-    monkeypatch.setattr(
-        main_mod.SkillInstaller, "install", lambda self, **kw: install_result
-    )
+
+    def _install_spy(self, **kw):
+        if install_calls is not None:
+            install_calls.append(kw)
+        return install_result
+
+    monkeypatch.setattr(main_mod.SkillInstaller, "install", _install_spy)
     monkeypatch.setattr(main_mod, "track_skill_event", lambda *a, **k: None)
     monkeypatch.setattr(main_mod, "emit_data", lambda data, **kw: None)
 
@@ -151,6 +157,34 @@ def test_cmd_update_skips_tooling_when_version_equal(
                         project=None, scope="global")
 
     assert tooling_calls == []
+
+
+def test_cmd_update_refuses_downgrade(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Баг B8 (для explicit `update`): бэкенд отдаёт версию СТАРШЕ установленной
+    → cmd_update НЕ должен ставить старую (downgrade). Раньше гейт был
+    ``bundle == current`` (пропуск только при равенстве) → любая НЕ-равная
+    версия, включая младшую, шла в install. Теперь гейт — ``_is_newer``, как в
+    auto-update: install/​tooling не зовём."""
+    tooling_calls: list = []
+    install_calls: list = []
+    # install_result не важен — до install дойти не должно.
+    noop = InstallResult(
+        slug="demo", version="0.9.0", target_dir=tmp_path / "x",
+        is_update=False, scope="global",
+    )
+    main_mod, _, _ = _setup_update_env(
+        tmp_path, monkeypatch, install_result=noop,
+        installed_version="2.0.0", bundle_version="0.9.0",
+        tooling_calls=tooling_calls, install_calls=install_calls,
+    )
+
+    main_mod.cmd_update(slug="demo", all_=False, channel="published",
+                        project=None, scope="global")
+
+    assert install_calls == [], "downgrade: installer.install НЕ должен вызываться"
+    assert tooling_calls == [], "downgrade: tooling не переустанавливаем"
 
 
 def test_cmd_update_applies_tooling_with_project_scope(

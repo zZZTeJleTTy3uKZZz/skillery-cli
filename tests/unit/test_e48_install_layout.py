@@ -1,4 +1,11 @@
-"""E48 §8.1 — IAgentTarget.install_layout + AntigravityTarget stub + detect chain."""
+"""E48 §8.1 — раскладка навыка в проект + AntigravityTarget stub + detect chain.
+
+cli-kits W7: ФС-механика раскладки переехала из ``IAgentTarget.install_layout``
+(метод удалён) в ``skillkit.SkillStore`` (стор+линк-модель). Тесты дёргают
+текущий путь установки — ``SkillInstaller(target, store_dir).install(local_src=…)``
+— проверяя ту же семантику: копия дерева в стор/скоуп, project-scope, guard от
+symlink-escape, работоспособность stub-таргета antigravity.
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -11,37 +18,56 @@ from skillery_cli.core.agents import (
     CodexTarget,
     get_target,
 )
+from skillery_cli.core.installer import SkillInstaller
+
+_MANIFEST = {"version": "1.0.0", "description": "x", "files": []}
+
+
+def _install(target, store: Path, src: Path, *, project: Path | None = None):
+    inst = SkillInstaller(target, store_dir=store)
+    return inst.install(
+        slug="demo",
+        version="1.0.0",
+        commit_sha="a1",
+        repo_url=None,
+        manifest=_MANIFEST,
+        local_src=src,
+        project=project,
+    )
 
 
 @pytest.mark.parametrize("cls", [ClaudeCodeTarget, CodexTarget])
-def test_install_layout_copies_source_into_slug_dir(cls, tmp_path: Path) -> None:
+def test_install_copies_source_tree_into_store(cls, tmp_path: Path) -> None:
     src = tmp_path / "cloned"
     (src / "sub").mkdir(parents=True)
     (src / "SKILL.md").write_text("hi", encoding="utf-8")
     (src / "sub" / "a.py").write_text("code", encoding="utf-8")
 
+    store = tmp_path / "store"
     target = cls(root=tmp_path / f".{cls.name}")
-    target.install_layout("demo", src)
+    _install(target, store, src)
 
-    slug_dir = target.slug_dir("demo")
-    assert (slug_dir / "SKILL.md").read_text(encoding="utf-8") == "hi"
-    assert (slug_dir / "sub" / "a.py").read_text(encoding="utf-8") == "code"
+    # Материализовано в стор с сохранением поддеревьев.
+    assert (store / "demo" / "SKILL.md").read_text(encoding="utf-8") == "hi"
+    assert (store / "demo" / "sub" / "a.py").read_text(encoding="utf-8") == "code"
 
 
-def test_install_layout_into_project_scope(tmp_path: Path) -> None:
+def test_install_into_project_scope(tmp_path: Path) -> None:
     src = tmp_path / "cloned"
     src.mkdir()
     (src / "SKILL.md").write_text("hi", encoding="utf-8")
 
     project = tmp_path / "proj"
     project.mkdir()
+    store = tmp_path / "store"
     target = ClaudeCodeTarget(root=tmp_path / ".claude")
-    target.install_layout("demo", src, project=project)
+    _install(target, store, src, project=project)
 
+    # Навык доступен в проектном скоупе (через линк или copy-fallback).
     assert (project / ".claude" / "skills" / "demo" / "SKILL.md").exists()
 
 
-def test_install_layout_rejects_symlink_escape(tmp_path: Path) -> None:
+def test_install_rejects_symlink_escape(tmp_path: Path) -> None:
     from skillery_cli.core.installer import PathTraversalError
 
     secret = tmp_path / "secret.txt"
@@ -54,9 +80,10 @@ def test_install_layout_rejects_symlink_escape(tmp_path: Path) -> None:
     except (OSError, NotImplementedError):
         pytest.skip("symlinks not supported")
 
+    store = tmp_path / "store"
     target = ClaudeCodeTarget(root=tmp_path / ".claude")
     with pytest.raises(PathTraversalError):
-        target.install_layout("demo", src)
+        _install(target, store, src)
 
 
 def test_antigravity_layout_paths(tmp_path: Path) -> None:
@@ -69,14 +96,15 @@ def test_antigravity_layout_paths(tmp_path: Path) -> None:
     assert "_local/" in t.preserved_paths()
 
 
-def test_antigravity_install_layout_works(tmp_path: Path) -> None:
-    """Stub-таргет всё же умеет копировать layout (общий путь установки)."""
+def test_antigravity_install_works(tmp_path: Path) -> None:
+    """Stub-таргет всё же умеет ставить навык (общий путь установки)."""
     src = tmp_path / "cloned"
     src.mkdir()
     (src / "SKILL.md").write_text("hi", encoding="utf-8")
+    store = tmp_path / "store"
     t = AntigravityTarget(root=tmp_path / ".antigravity")
-    t.install_layout("demo", src)
-    assert (t.slug_dir("demo") / "SKILL.md").exists()
+    _install(t, store, src)
+    assert (store / "demo" / "SKILL.md").exists()
 
 
 def test_get_target_antigravity() -> None:
