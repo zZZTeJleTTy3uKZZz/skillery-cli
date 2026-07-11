@@ -61,7 +61,11 @@ def _default_config_file() -> Path:
 
 
 def _default_base_url() -> str:
-    return os.environ.get(_branding.env("BASE_URL"), "http://localhost:8000")
+    return os.environ.get(_branding.env("BASE_URL"), _branding.DEFAULT_BASE_URL)
+
+
+def _default_web_ui_url() -> str:
+    return os.environ.get(_branding.env("WEB_UI_URL"), _branding.DEFAULT_WEB_UI_URL)
 
 
 def _default_store_dir() -> Path:
@@ -168,17 +172,26 @@ class ClientConfig:
         return _default_store_dir()
 
     def effective_web_ui_url(self) -> str:
-        """URL Web UI: explicit override > derive из base_url > base_url как fallback."""
+        """URL Web UI: explicit override > прод-дефолт > dev-derive > эвристика.
+
+        Порядок важен: прод-API ``api.skillery.ru`` и веб ``hub.skillery.ru`` —
+        разные субдомены, деривацией «убрать api.» из base НЕ выводятся (дала бы
+        ``skillery.ru``). Поэтому default base → default web_ui проверяется ДО
+        эвристики ``api.<host> → <host>`` (та для self-host паттерна api.hub.*).
+        """
         if self.web_ui_url:
             return self.web_ui_url
         base = self.base_url
-        # http(s)://api.<host> → http(s)://<host>
+        # Прод-дефолт (или его env-оверрайд): api.skillery.ru ↔ hub.skillery.ru.
+        if base.rstrip("/") == _default_base_url().rstrip("/"):
+            return _default_web_ui_url()
+        # dev: http://localhost:8000 → http://localhost:3000 (Next.js dev).
+        if "localhost:8000" in base:
+            return base.replace("localhost:8000", "localhost:3000")
+        # self-host эвристика: http(s)://api.<host> → http(s)://<host>.
         for scheme in ("https://", "http://"):
             if base.startswith(scheme + "api."):
                 return scheme + base[len(scheme) + len("api."):]
-        # http://localhost:8000 (dev) → http://localhost:3000 (Next.js dev)
-        if "localhost:8000" in base:
-            return base.replace("localhost:8000", "localhost:3000")
         return base
 
     @classmethod

@@ -36,7 +36,9 @@ def _isolate_env(monkeypatch: pytest.MonkeyPatch) -> None:
 # --------------------------------------------------------------------------
 def test_defaults_unchanged() -> None:
     cfg = ClientConfig()
-    assert cfg.base_url == "http://localhost:8000"  # из _default_base_url
+    # Свежий CLI без конфига/env бьёт в ПРОД, не в localhost (иначе browser-flow
+    # логин открывал localhost:3000). Dev — env SKILLERY_BASE_URL=localhost:8000.
+    assert cfg.base_url == "https://api.skillery.ru"  # из _default_base_url
     assert cfg.user_email is None
     assert cfg.agent is None
     assert cfg.permissions == []

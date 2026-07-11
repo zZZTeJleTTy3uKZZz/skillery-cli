@@ -20,6 +20,14 @@ DIST_NAME = "skillery-cli"
 ENV_PREFIX = "SKILLERY"
 """Префикс env-переменных: ``f"{ENV_PREFIX}_CONFIG_DIR"`` и т.п."""
 
+DEFAULT_BASE_URL = "https://api.skillery.ru"
+"""Прод-endpoint API по умолчанию (свежий CLI без конфига/env бьёт СЮДА, не в
+localhost). Dev-оверрайд — env ``SKILLERY_BASE_URL=http://localhost:8000``."""
+
+DEFAULT_WEB_UI_URL = "https://hub.skillery.ru"
+"""Прод-URL Web UI по умолчанию (browser-flow логин открывает СЮДА). ``api.``↔
+``hub.`` — разные субдомены, из base_url не выводятся. Dev — localhost:3000."""
+
 HOME_DIR_NAME = f".{APP_NAME}"
 """Дефолтный home-каталог конфига/стора: ``~/.skillery``."""
 

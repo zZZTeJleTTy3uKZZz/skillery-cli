@@ -23,6 +23,29 @@ def test_effective_web_ui_url_localhost_default() -> None:
     assert cfg.effective_web_ui_url() == "http://localhost:3000"
 
 
+def test_effective_web_ui_url_prod_default(monkeypatch) -> None:
+    """Регресс: свежий CLI (base=прод-дефолт api.skillery.ru) → hub.skillery.ru,
+    НЕ skillery.ru (деривация «убрать api.» неверна для этой топологии) и НЕ
+    localhost. Иначе browser-flow логин открывал localhost:3000/skillery.ru."""
+    monkeypatch.delenv("SKILLERY_BASE_URL", raising=False)
+    monkeypatch.delenv("SKILLERY_WEB_UI_URL", raising=False)
+    # Свежий конфиг без base — __post_init__ ставит прод-дефолт.
+    assert ClientConfig().effective_web_ui_url() == "https://hub.skillery.ru"
+    assert (
+        ClientConfig(base_url="https://api.skillery.ru").effective_web_ui_url()
+        == "https://hub.skillery.ru"
+    )
+
+
+def test_effective_web_ui_url_env_override(monkeypatch) -> None:
+    """Dev/бренд-оверрайд: SKILLERY_WEB_UI_URL перебивает прод-дефолт."""
+    monkeypatch.setenv("SKILLERY_WEB_UI_URL", "https://staging.example")
+    assert (
+        ClientConfig(base_url="https://api.skillery.ru").effective_web_ui_url()
+        == "https://staging.example"
+    )
+
+
 def test_effective_web_ui_url_explicit_override() -> None:
     cfg = ClientConfig(
         base_url="https://api.hub.example", web_ui_url="https://custom.ui"
