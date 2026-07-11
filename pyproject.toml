@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "skillery-cli"
-version = "0.5.8"
+version = "0.5.9"
 description = "Skillery CLI — клиент маркетплейса AI-навыков для агентов (Claude Code, Codex)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -50,8 +50,6 @@ dev = [
 
 [project.scripts]
 skillery = "skillery_cli.__main__:app"
-# Старое имя — deprecation-shim: печатает «используйте skillery» и выходит (код 2).
-skills-hub = "skillery_cli._deprecated_alias:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/skillery_cli"]

@@ -11,6 +11,63 @@ from threading import Thread
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from skillery_cli import _branding
+
+# Страница, которую браузер показывает после callback'а. Самодостаточная (inline
+# CSS, без внешних ресурсов), тёмная/светлая по prefers-color-scheme. Отдаётся с
+# charset=utf-8 — кириллица корректна.
+_PAGE_TEMPLATE = """<!doctype html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__BRAND__</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body { margin:0; min-height:100vh; display:grid; place-items:center; padding:24px;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  background:#0b0b0f; color:#e7e7ea; }
+.card { width:min(92vw,420px); padding:44px 36px; border-radius:18px; text-align:center;
+  background:#14141a; border:1px solid rgba(255,255,255,.06); }
+.badge { width:66px; height:66px; margin:0 auto 22px; border-radius:999px;
+  display:grid; place-items:center; background:__ACCENT_BG__; }
+.badge svg { width:32px; height:32px; stroke:__ACCENT__; fill:none; stroke-width:2.5;
+  stroke-linecap:round; stroke-linejoin:round; }
+h1 { margin:0 0 10px; font-size:23px; font-weight:650; letter-spacing:-.01em; }
+p { margin:0; font-size:15px; line-height:1.55; color:#a0a0ab; }
+.brand { margin-top:30px; font-size:12.5px; letter-spacing:.08em; text-transform:uppercase; opacity:.5; }
+@media (prefers-color-scheme: light) {
+  body { background:#f6f7f9; color:#16161c; }
+  .card { background:#fff; border-color:rgba(0,0,0,.06);
+    box-shadow:0 1px 3px rgba(0,0,0,.06),0 12px 32px rgba(0,0,0,.06); }
+  p { color:#5c5c68; }
+}
+</style></head>
+<body><div class="card">
+<div class="badge"><svg viewBox="0 0 24 24">__ICON__</svg></div>
+<h1>__TITLE__</h1><p>__MESSAGE__</p>
+<div class="brand">__BRAND__</div>
+</div></body></html>"""
+
+
+def render_callback_page(*, ok: bool, title: str, message: str) -> bytes:
+    """Собирает брендированную HTML-страницу callback'а (success/error) в UTF-8.
+
+    Плейсхолдеры (не f-string — CSS полон фигурных скобок): __ACCENT__ и т.п.
+    Пользовательский текст экранируется (``html.escape``).
+    """
+    accent = "#22c55e" if ok else "#ef4444"
+    accent_bg = "rgba(34,197,94,.14)" if ok else "rgba(239,68,68,.14)"
+    icon = '<path d="M20 6 9 17l-5-5"/>' if ok else '<path d="M18 6 6 18M6 6l12 12"/>'
+    brand = _branding.APP_NAME.capitalize()
+    return (
+        _PAGE_TEMPLATE.replace("__ACCENT_BG__", accent_bg)
+        .replace("__ACCENT__", accent)
+        .replace("__ICON__", icon)
+        .replace("__TITLE__", html.escape(title))
+        .replace("__MESSAGE__", html.escape(message))
+        .replace("__BRAND__", html.escape(brand))
+    ).encode("utf-8")
+
 
 def validate_callback_state(*, expected: str, actual: str) -> None:
     """Проверяет, что state из callback соответствует переданному ожиданию.
@@ -64,12 +121,15 @@ class CallbackHandler(BaseHTTPRequestHandler):
                 validate_callback_state(expected=self.expected_state, actual=state)
             except ValueError as e:
                 self.send_response(400)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.end_headers()
-                html_response = f"""<html><body>
-<h1>Ошибка</h1>
-<p>{html.escape(str(e))}</p>
-</body></html>"""
-                self.wfile.write(html_response.encode("utf-8"))
+                self.wfile.write(
+                    render_callback_page(
+                        ok=False,
+                        title="Не удалось войти",
+                        message="Проверка безопасности не прошла. Запустите вход в CLI заново.",
+                    )
+                )
                 self.result["error"] = str(e)
                 return
 
@@ -82,15 +142,24 @@ class CallbackHandler(BaseHTTPRequestHandler):
         else:
             self.result["error"] = "Missing code and error in callback"
 
-        # Ответ браузеру: минималистичный HTML по-русски
+        # Ответ браузеру: брендированная страница (success/error).
+        is_ok = "error" not in self.result
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
-        html_response = """<html><head><meta charset="utf-8"></head><body>
-<h1>Готово</h1>
-<p>Вернитесь в терминал для завершения входа.</p>
-</body></html>"""
-        self.wfile.write(html_response.encode("utf-8"))
+        if is_ok:
+            page = render_callback_page(
+                ok=True,
+                title="Готово",
+                message="Вход в CLI выполнен. Вернитесь в терминал — сессия уже активна.",
+            )
+        else:
+            page = render_callback_page(
+                ok=False,
+                title="Не удалось войти",
+                message="Код авторизации не получен. Запустите вход в CLI заново.",
+            )
+        self.wfile.write(page)
 
     def log_message(self, format, *args) -> None:  # noqa: A002
         """Подавляем логирование HTTP-запросов в stderr."""
