@@ -50,7 +50,8 @@ def _wire(
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
     monkeypatch.setattr(ClientConfig, "save", lambda self: None)
     monkeypatch.setattr(main_mod, "get_target", lambda name: target)
-    monkeypatch.setattr(main_mod, "_maybe_auto_update", lambda c: None)
+    monkeypatch.setattr(main_mod, "_maybe_auto_update", lambda c, **k: None)
+    monkeypatch.setattr(main_mod, "_maybe_notify_cli_update", lambda c: None)
     monkeypatch.setattr(main_mod, "_get_access_token", lambda: "tok")
     monkeypatch.setattr(out_mod, "_mode", "json")
     events: list = []

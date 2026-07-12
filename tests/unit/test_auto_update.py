@@ -337,3 +337,56 @@ def test_maybe_auto_update_skips_tooling_when_install_skipped(
     main_mod._maybe_auto_update(cfg)
     assert len(install_calls) == 1
     assert tooling_calls == [], "skipped install не должен переустанавливать tooling"
+
+
+def test_maybe_auto_update_discovers_project_scope(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Project-scope: `_maybe_auto_update(cfg, project=X)` обнаруживает и обновляет
+    навык, установленный ТОЛЬКО в проекте (в global его нет) — раньше такие навыки
+    не автообновлялись (сканился только global scope)."""
+    install_calls: list = []
+    main_mod, cfg, _ = _setup_auto_update_env(
+        tmp_path,
+        monkeypatch,
+        installed_version="1.0.0",
+        bundle_version="2.0.0",
+        install_calls=install_calls,
+    )
+    # tooling мокаем (реальный трогает PATH/ФС).
+    monkeypatch.setattr(main_mod, "_apply_tooling", lambda *a, **k: None)
+
+    # Навык только в проекте (в global его нет).
+    target = main_mod.get_target(None)
+    proj = tmp_path / "proj"
+    pdir = target.base_dir(project=proj) / "proj-skill"
+    pdir.mkdir(parents=True)
+    (pdir / "SKILL.md").write_text("hi", encoding="utf-8")
+    (pdir / "_skill_meta.json").write_text(
+        '{"slug": "proj-skill", "version": "1.0.0"}', encoding="utf-8"
+    )
+
+    main_mod._maybe_auto_update(cfg, project=proj)
+
+    pairs = {
+        (c.get("slug"), str(c.get("project")) if c.get("project") else None)
+        for c in install_calls
+    }
+    # global «demo» обновлён (project=None) И project-only навык (project=proj).
+    assert ("demo", None) in pairs
+    assert ("proj-skill", str(proj)) in pairs
+
+
+def test_maybe_auto_update_global_only_when_no_project(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Без project — сканим только global (обратная совместимость)."""
+    install_calls: list = []
+    main_mod, cfg, _ = _setup_auto_update_env(
+        tmp_path, monkeypatch, installed_version="1.0.0",
+        bundle_version="2.0.0", install_calls=install_calls,
+    )
+    monkeypatch.setattr(main_mod, "_apply_tooling", lambda *a, **k: None)
+    main_mod._maybe_auto_update(cfg)  # project не передан
+    assert all(c.get("project") is None for c in install_calls)
+    assert any(c.get("slug") == "demo" for c in install_calls)

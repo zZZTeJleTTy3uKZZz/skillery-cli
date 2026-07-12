@@ -187,7 +187,8 @@ def test_cmd_install_project_writes_manifest(
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
     monkeypatch.setattr(main_mod, "get_target", lambda name: target)
     monkeypatch.setattr(main_mod, "_get_access_token", lambda: "tok")
-    monkeypatch.setattr(main_mod, "_maybe_auto_update", lambda c: None)
+    monkeypatch.setattr(main_mod, "_maybe_auto_update", lambda c, **k: None)
+    monkeypatch.setattr(main_mod, "_maybe_notify_cli_update", lambda c: None)
     monkeypatch.setattr(main_mod, "track_skill_event", lambda *a, **k: None, raising=False)
     monkeypatch.setattr(out_mod, "_mode", "json")
 

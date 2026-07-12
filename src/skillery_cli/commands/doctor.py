@@ -162,6 +162,32 @@ def _probe_clikit() -> Result:
     )
 
 
+def _probe_cli_version() -> Result:
+    """Свежесть версии самого CLI: сравнить установленную с latest на PyPI.
+
+    Ленивый импорт из ``__main__`` (там живёт single-source логика проверки),
+    чтобы избежать циклического импорта на загрузке модуля.
+    """
+    from skillery_cli import __version__ as current
+
+    try:
+        from skillery_cli import _branding
+        from skillery_cli.__main__ import _fetch_latest_pypi_version, _is_newer
+
+        latest = _fetch_latest_pypi_version(_branding.DIST_NAME)
+    except Exception:
+        latest = None
+    if not latest:
+        return ok("cli-version", f"версия CLI {current} (PyPI недоступен — не сверяли)")
+    if _is_newer(latest, current):
+        return warn(
+            "cli-version",
+            f"доступна новая версия CLI {latest} (у вас {current}) — "
+            "обновите: skillery upgrade",
+        )
+    return ok("cli-version", f"версия CLI {current} — последняя")
+
+
 # --------------------------------------------------------------------------
 #  движок
 # --------------------------------------------------------------------------
@@ -174,6 +200,7 @@ def run_checks(cfg: ClientConfig) -> list[Result]:
         _probe_login(cfg),
         _probe_path_store(),
         _probe_clikit(),
+        _probe_cli_version(),
     ]
 
 

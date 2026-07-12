@@ -101,6 +101,7 @@ def test_save_writes_expected_toml(tmp_path: Path) -> None:
         "default_project_dir": "/tmp/proj",
         "store_dir": "/tmp/store",
         "web_ui_url": "https://hub",
+        "cli_update_check": True,
     }
 
 
@@ -128,8 +129,12 @@ def test_save_omits_empty_optionals(tmp_path: Path) -> None:
         "default_project_dir",
         "store_dir",
         "web_ui_url",
+        "cli_update_check_at",
+        "cli_latest_version",
     ):
         assert absent not in data, absent
+    # cli_update_check — булев флаг, пишется всегда (дефолт True)
+    assert data["cli_update_check"] is True
 
 
 # --------------------------------------------------------------------------

@@ -119,6 +119,9 @@ class _HubAppConfig(AppConfig):
     default_project_dir: str | None = None
     store_dir: str | None = None
     web_ui_url: str | None = None
+    cli_update_check: bool = True
+    cli_update_check_at: str | None = None
+    cli_latest_version: str | None = None
 
 
 @dataclass
@@ -161,6 +164,12 @@ class ClientConfig:
     web_ui_url: str | None = None
     """https://hub.example — куда CLI открывает браузер для handoff в Web UI.
     None → derive из base_url (api.* → host, localhost:8000 → localhost:3000)."""
+    cli_update_check: bool = True
+    """Проверять ли наличие новой версии самого CLI на PyPI (уведомление + `upgrade`)."""
+    cli_update_check_at: str | None = None
+    """iso-таймстамп последней проверки версии CLI (кэш, чтобы не бить PyPI чаще раза/сутки)."""
+    cli_latest_version: str | None = None
+    """Последняя виденная на PyPI версия CLI (кэш для уведомления в пределах cooldown)."""
 
     def __post_init__(self) -> None:
         if not self.base_url:
@@ -233,6 +242,9 @@ class ClientConfig:
             default_project_dir=ac.default_project_dir,
             store_dir=ac.store_dir,
             web_ui_url=ac.web_ui_url,
+            cli_update_check=bool(ac.cli_update_check),
+            cli_update_check_at=ac.cli_update_check_at,
+            cli_latest_version=ac.cli_latest_version,
         )
 
     def save(self, path: Path | None = None) -> None:
@@ -269,6 +281,11 @@ class ClientConfig:
             data["store_dir"] = self.store_dir
         if self.web_ui_url:
             data["web_ui_url"] = self.web_ui_url
+        data["cli_update_check"] = self.cli_update_check
+        if self.cli_update_check_at:
+            data["cli_update_check_at"] = self.cli_update_check_at
+        if self.cli_latest_version:
+            data["cli_latest_version"] = self.cli_latest_version
         _atomic_write_text(actual_path, tomli_w.dumps(data))
 
     def has_permission(self, permission_key: str) -> bool:

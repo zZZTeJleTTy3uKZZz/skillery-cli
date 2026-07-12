@@ -40,7 +40,8 @@ def _wire(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, logged_in: bool = 
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
     monkeypatch.setattr(main_mod, "get_target", lambda name: target)
     monkeypatch.setattr(main_mod, "track_skill_event", lambda *a, **k: None, raising=False)
-    monkeypatch.setattr(main_mod, "_maybe_auto_update", lambda c: None)
+    monkeypatch.setattr(main_mod, "_maybe_auto_update", lambda c, **k: None)
+    monkeypatch.setattr(main_mod, "_maybe_notify_cli_update", lambda c: None)
     monkeypatch.setattr(out_mod, "_mode", "json")
     return cfg, target, store, project
 

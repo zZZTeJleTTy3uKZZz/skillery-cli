@@ -58,7 +58,8 @@ def _wire(
         cfg.permissions = ["skill.install"]
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
     monkeypatch.setattr(main_mod, "get_target", lambda name: target)
-    monkeypatch.setattr(main_mod, "_maybe_auto_update", lambda c: None)
+    monkeypatch.setattr(main_mod, "_maybe_auto_update", lambda c, **k: None)
+    monkeypatch.setattr(main_mod, "_maybe_notify_cli_update", lambda c: None)
     monkeypatch.setattr(main_mod, "track_skill_event", lambda *a, **k: None, raising=False)
     # HubClient взрыв — если автономный режим вдруг полезет в сеть.
     monkeypatch.setattr(main_mod, "HubClient", _ExplodingClient)

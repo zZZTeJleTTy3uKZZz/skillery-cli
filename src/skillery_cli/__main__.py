@@ -206,8 +206,14 @@ def _is_newer(candidate: str, current: str) -> bool:
     return cand_p > cur_p
 
 
-def _maybe_auto_update(cfg: ClientConfig) -> None:
-    """Тихо обновляет установленные skills до latest published если cooldown прошёл."""
+def _maybe_auto_update(cfg: ClientConfig, *, project: Path | None = None) -> None:
+    """Тихо обновляет установленные skills до latest published если cooldown прошёл.
+
+    Обнаружение по scope: global (``~/.claude/skills``) + текущий проект, если
+    задан ``project`` (project-only навыки иначе не видны в global scope и не
+    автообновлялись). Стор общий: контент материализуется один раз, линкуется в
+    каждый scope, где навык установлен.
+    """
     if not cfg.auto_update or not cfg.is_logged_in():
         return
     cooldown = timedelta(minutes=cfg.auto_update_cooldown_min)
@@ -219,15 +225,33 @@ def _maybe_auto_update(cfg: ClientConfig) -> None:
         except ValueError:
             pass
     target = get_target(cfg.agent)
-    base = target.base_dir()
-    if not base.exists():
-        return
-    installed: list[tuple[str, str]] = []
-    for slug_dir in base.iterdir():
-        meta = read_meta(slug_dir)
-        if meta:
-            installed.append((meta["slug"], meta.get("version", "0.0.0")))
-    if not installed:
+    # ref → {current, slug, skill_id, scopes:set}. scope=None → global.
+    scopes: list[Path | None] = [None] if project is None else [None, project]
+    found: dict[str, dict] = {}
+    for scope in scopes:
+        base = target.base_dir(project=scope)
+        if not base.exists():
+            continue
+        for slug_dir in base.iterdir():
+            meta = read_meta(slug_dir)
+            if not meta:
+                continue
+            ref = meta.get("slug") or (
+                str(meta["skill_id"]) if meta.get("skill_id") is not None else None
+            )
+            if not ref:
+                continue
+            entry = found.setdefault(
+                ref,
+                {
+                    "current": meta.get("version", "0.0.0"),
+                    "slug": meta.get("slug"),
+                    "skill_id": meta.get("skill_id"),
+                    "scopes": set(),
+                },
+            )
+            entry["scopes"].add(scope)
+    if not found:
         cfg.last_auto_update_at = datetime.now(UTC).isoformat()
         cfg.save()
         return
@@ -243,9 +267,10 @@ def _maybe_auto_update(cfg: ClientConfig) -> None:
     async def _do() -> None:
         client = HubClient(base_url=cfg.base_url, access_token=access, on_token_refresh=_make_refresh_callback(cfg))
         try:
-            for slug, current in installed:
+            installer = SkillInstaller(target, cfg.effective_store_dir())
+            for ref, e in found.items():
                 try:
-                    bundle = await client.install_bundle(slug)
+                    bundle = await client.install_bundle(ref)
                 except Exception:
                     continue
                 # P0: bundle без repo_url = stub-источник — обновлять нечем
@@ -255,27 +280,31 @@ def _maybe_auto_update(cfg: ClientConfig) -> None:
                     continue
                 # B8: апдейтим ТОЛЬКО если опубликованная версия строго новее
                 # установленной — downgrade/равные пропускаем.
-                if _is_newer(bundle["version"], current):
-                    installer = SkillInstaller(target, cfg.effective_store_dir())
+                if not _is_newer(bundle["version"], e["current"]):
+                    continue
+                updated = False
+                for scope in e["scopes"]:
                     res = installer.install(
-                        slug=slug,
+                        slug=e["slug"],
+                        skill_id=e["skill_id"],
                         version=bundle["version"],
                         commit_sha=bundle["commit_sha"],
                         repo_url=bundle.get("repo_url"),
                         skill_path=bundle.get("skill_path"),
                         manifest=bundle["manifest"],
+                        project=scope,
                     )
                     if getattr(res, "skipped", False):
                         continue  # guard отказал (stub-would-clobber и т.п.)
                     # gap A: контент обновили — обязаны переустановить tooling
-                    # (runtime_deps/CLI/MCP) под манифест НОВОЙ версии, иначе
-                    # шимы/зависимости остаются от старой. global scope →
-                    # project=None; manifest = bundle["manifest"].
+                    # (runtime_deps/CLI/MCP) под манифест НОВОЙ версии в ЭТОТ scope.
                     _apply_tooling(
-                        res, bundle["manifest"], agent_target=target, project=None
+                        res, bundle["manifest"], agent_target=target, project=scope
                     )
+                    updated = True
+                if updated:
                     err_console.print(
-                        f"[dim cyan]↑ auto-update[/] {slug}: {current} → {bundle['version']}"
+                        f"[dim cyan]↑ auto-update[/] {ref}: {e['current']} → {bundle['version']}"
                     )
             # Cooldown-таймстамп двигаем всегда после успешного прохода (даже
             # если ничего не обновилось) — иначе фон-проверка зациклится без
@@ -287,8 +316,163 @@ def _maybe_auto_update(cfg: ClientConfig) -> None:
 
     try:
         asyncio.run(_do())
+    except Exception as e:
+        # auto-update не должен ломать команду, но и не молчит в никуда:
+        # тихая диагностическая строка в stderr (stdout — машинный канал).
+        Console(stderr=True).print(f"[dim]auto-update пропущен: {e}[/]")
+
+
+# ======================================================
+#        CLI SELF-UPDATE (проверка / уведомление / upgrade)
+# ======================================================
+_PYPI_JSON_URL = "https://pypi.org/pypi/{package}/json"
+_CLI_UPDATE_COOLDOWN = timedelta(hours=24)
+
+
+def _fetch_latest_pypi_version(package: str, *, timeout: float = 3.0) -> str | None:
+    """Latest-версия пакета с PyPI (JSON API). None при любой ошибке/таймауте."""
+    import json
+    import urllib.request
+
+    url = _PYPI_JSON_URL.format(package=package)
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310
+            data = json.load(resp)
+        return (data.get("info") or {}).get("version") or None
     except Exception:
-        pass  # auto-update не должен ломать команду
+        return None
+
+
+def _check_cli_update(cfg: ClientConfig, *, now: datetime | None = None) -> str | None:
+    """Новая версия CLI, если доступна на PyPI (иначе None). Fail-silent.
+
+    Кэширует таймстамп проверки + виденную версию в конфиг: PyPI опрашивается не
+    чаще раза в сутки, в пределах cooldown ответ берётся из кэша.
+    """
+    from skillery_cli import __version__ as current
+
+    if not cfg.cli_update_check:
+        return None
+    now = now or datetime.now(UTC)
+    if cfg.cli_update_check_at:
+        try:
+            last = datetime.fromisoformat(cfg.cli_update_check_at)
+            if now - last < _CLI_UPDATE_COOLDOWN:
+                cached = cfg.cli_latest_version
+                return cached if (cached and _is_newer(cached, current)) else None
+        except ValueError:
+            pass
+    latest = _fetch_latest_pypi_version(_branding.DIST_NAME)
+    cfg.cli_update_check_at = now.isoformat()
+    if latest:
+        cfg.cli_latest_version = latest
+    try:
+        cfg.save()
+    except Exception:
+        pass
+    return latest if (latest and _is_newer(latest, current)) else None
+
+
+def _detect_upgrade_command() -> list[str]:
+    """Команда обновления CLI под менеджер установки (uv tool / pipx / pip)."""
+    import shutil
+
+    dist = _branding.DIST_NAME
+    exe = (sys.executable or "").replace("\\", "/").lower()
+    if "/uv/tools/" in exe and shutil.which("uv"):
+        return ["uv", "tool", "upgrade", dist]
+    if "/pipx/" in exe and shutil.which("pipx"):
+        return ["pipx", "upgrade", dist]
+    if shutil.which("uv"):
+        return ["uv", "tool", "upgrade", dist]
+    if shutil.which("pipx"):
+        return ["pipx", "upgrade", dist]
+    return [sys.executable, "-m", "pip", "install", "--upgrade", dist]
+
+
+def _maybe_notify_cli_update(cfg: ClientConfig) -> None:
+    """Ненавязчивое уведомление в stderr о новой версии CLI (не в JSON-режиме)."""
+    from skillery_cli import __version__ as current
+    from skillery_cli import output as _output
+
+    if getattr(_output, "_mode", "text") == "json":
+        return
+    try:
+        latest = _check_cli_update(cfg)
+    except Exception:
+        return
+    if not latest:
+        return
+    Console(stderr=True).print(
+        f"[yellow]↑ Доступна новая версия {_branding.DIST_NAME} {latest}[/] "
+        f"(у вас {current}). Обновить: [bold]{_branding.APP_NAME} upgrade[/] "
+        f"или [dim]{' '.join(_detect_upgrade_command())}[/]"
+    )
+
+
+def cmd_upgrade(
+    check: bool = typer.Option(
+        False, "--check", help="Только проверить наличие новой версии, не обновлять"
+    ),
+) -> None:
+    """Обновить сам CLI (skillery-cli) до последней версии с PyPI.
+
+    Определяет менеджер установки (uv tool / pipx / pip) и запускает обновление.
+    ``--check`` — только сверить версию, без установки.
+    """
+    from skillery_cli import __version__ as current
+
+    cfg = ClientConfig.load()
+    latest = _fetch_latest_pypi_version(_branding.DIST_NAME)
+    cfg.cli_update_check_at = datetime.now(UTC).isoformat()
+    if latest:
+        cfg.cli_latest_version = latest
+    try:
+        cfg.save()
+    except Exception:
+        pass
+
+    available = bool(latest and _is_newer(latest, current))
+    if check or not available:
+        payload = {
+            "current": current,
+            "latest": latest,
+            "update_available": available,
+        }
+
+        def _render(_: dict) -> None:
+            if available:
+                console.print(
+                    f"Доступно обновление: [bold]{current}[/] → [bold green]{latest}[/]\n"
+                    f"Обновить: [bold]{_branding.APP_NAME} upgrade[/]"
+                )
+            elif latest:
+                console.print(f"[green]У вас последняя версия ({current}).[/]")
+            else:
+                console.print(f"Не удалось проверить PyPI. Текущая версия: {current}.")
+
+        emit_data(payload, text_renderer=_render)
+        return
+
+    cmd = _detect_upgrade_command()
+    console.print(
+        f"Обновляю {_branding.DIST_NAME}: [bold]{current}[/] → [bold green]{latest}[/]"
+    )
+    console.print(f"[dim]$ {' '.join(cmd)}[/]")
+    import subprocess
+
+    try:
+        subprocess.run(cmd, check=True)
+    except Exception as e:
+        emit_error(
+            "UPGRADE_FAILED",
+            f"Автообновление не удалось ({e}). Выполните вручную: {' '.join(cmd)}",
+        )
+        raise typer.Exit(1)
+    console.print(
+        f"[green]✓ Готово.[/] Если «{_branding.APP_NAME}» показывает старую версию — "
+        "откройте новый терминал."
+    )
 
 
 # ======================================================
@@ -710,6 +894,7 @@ def cmd_logout() -> None:
 def cmd_whoami() -> None:
     """Кто я и что доступно."""
     cfg = ClientConfig.load()
+    _maybe_notify_cli_update(cfg)
     if not cfg.user_email:
         emit_error("NOT_AUTHENTICATED", "Не авторизован")
         raise typer.Exit(1)
@@ -832,6 +1017,7 @@ def cmd_status(
 ) -> None:
     """Локальный статус: agent + что установлено в global + project scope."""
     cfg = ClientConfig.load()
+    _maybe_notify_cli_update(cfg)
     target = get_target(cfg.agent)
     actual_project = (
         project
@@ -1022,7 +1208,8 @@ def cmd_list(
         emit_data(items, text_renderer=_render)
         return
 
-    _maybe_auto_update(cfg)
+    _maybe_auto_update(cfg, project=project)
+    _maybe_notify_cli_update(cfg)
     access = _get_access_token()
 
     async def _do() -> None:
@@ -1076,6 +1263,7 @@ def cmd_show(
     """Детали skill'а (по id-или-slug)."""
     cfg = ClientConfig.load()
     _maybe_auto_update(cfg)
+    _maybe_notify_cli_update(cfg)
     access = _get_access_token()
 
     async def _do() -> None:
@@ -1540,7 +1728,8 @@ def cmd_install(
     # Hub-режим (источник не задан) требует login+токен; локальные — нет.
     access = ""
     if source is None:
-        _maybe_auto_update(cfg)
+        _maybe_auto_update(cfg, project=project_path)
+        _maybe_notify_cli_update(cfg)
         access = _get_access_token()
 
     async def _do() -> None:
@@ -3214,6 +3403,8 @@ def build_app() -> typer.Typer:
     app.command(name="whoami")(cmd_whoami)
     app.command(name="config")(cmd_config)
     app.command(name="web")(cmd_web)
+    # upgrade — обновить сам CLI (skillery-cli) с PyPI (uv tool / pipx / pip).
+    app.command(name="upgrade")(cmd_upgrade)
     # install — ALWAYS-ON: автономные источники (--path/--from-git) работают без
     # login; hub-режим (без этих флагов) внутри cmd_install сам требует токен.
     app.command(name="install")(cmd_install)
