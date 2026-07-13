@@ -122,6 +122,7 @@ class _HubAppConfig(AppConfig):
     cli_update_check: bool = True
     cli_update_check_at: str | None = None
     cli_latest_version: str | None = None
+    cli_auto_upgrade: bool = True
 
 
 @dataclass
@@ -170,6 +171,9 @@ class ClientConfig:
     """iso-таймстамп последней проверки версии CLI (кэш, чтобы не бить PyPI чаще раза/сутки)."""
     cli_latest_version: str | None = None
     """Последняя виденная на PyPI версия CLI (кэш для уведомления в пределах cooldown)."""
+    cli_auto_upgrade: bool = True
+    """Само-обновление CLI: при обнаружении новой версии тихо обновиться в фоне
+    (uv tool / pipx / pip). False → только уведомление + ручной `skillery upgrade`."""
 
     def __post_init__(self) -> None:
         if not self.base_url:
@@ -245,6 +249,7 @@ class ClientConfig:
             cli_update_check=bool(ac.cli_update_check),
             cli_update_check_at=ac.cli_update_check_at,
             cli_latest_version=ac.cli_latest_version,
+            cli_auto_upgrade=bool(ac.cli_auto_upgrade),
         )
 
     def save(self, path: Path | None = None) -> None:
@@ -286,6 +291,7 @@ class ClientConfig:
             data["cli_update_check_at"] = self.cli_update_check_at
         if self.cli_latest_version:
             data["cli_latest_version"] = self.cli_latest_version
+        data["cli_auto_upgrade"] = self.cli_auto_upgrade
         _atomic_write_text(actual_path, tomli_w.dumps(data))
 
     def has_permission(self, permission_key: str) -> bool:

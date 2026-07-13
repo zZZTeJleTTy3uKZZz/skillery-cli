@@ -113,7 +113,10 @@ def test_notify_silent_in_json_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     from skillery_cli import output as out_mod
 
     called = {"n": 0}
-    monkeypatch.setattr(main_mod, "_check_cli_update", lambda cfg: called.__setitem__("n", called["n"] + 1) or "9.9.9")
+    monkeypatch.setattr(
+        main_mod, "_check_cli_update_detailed",
+        lambda cfg: (called.__setitem__("n", called["n"] + 1) or ("9.9.9", False)),
+    )
     old = out_mod._mode
     try:
         out_mod._mode = "json"
@@ -139,3 +142,88 @@ def test_cmd_upgrade_check_reports_available(monkeypatch: pytest.MonkeyPatch) ->
     assert captured["update_available"] is True
     assert captured["latest"] == "1.3.0"
     assert captured["current"] == "1.0.0"
+
+
+# ---------------- _check_cli_update_detailed: freshness ----------------
+def test_check_detailed_fresh_on_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("skillery_cli.__version__", "1.0.0")
+    monkeypatch.setattr(main_mod, "_fetch_latest_pypi_version", lambda pkg, **k: "1.2.0")
+    monkeypatch.setattr(ClientConfig, "save", lambda self: None)
+    v, fresh = main_mod._check_cli_update_detailed(ClientConfig(base_url="x"))
+    assert v == "1.2.0" and fresh is True
+
+
+def test_check_detailed_not_fresh_within_cooldown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("skillery_cli.__version__", "1.0.0")
+    cfg = ClientConfig(
+        base_url="x",
+        cli_update_check_at=datetime.now(UTC).isoformat(),
+        cli_latest_version="1.5.0",
+    )
+    v, fresh = main_mod._check_cli_update_detailed(cfg)
+    assert v == "1.5.0" and fresh is False  # из кэша, не свежая
+
+
+# ---------------- авто-self-update поведение ----------------
+def _force_text_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    from skillery_cli import output as out
+    monkeypatch.setattr(out, "_mode", "text", raising=False)
+
+
+def test_auto_upgrades_on_fresh_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    """cli_auto_upgrade=True + свежая проверка → тихо спавним обновление в фоне."""
+    _force_text_mode(monkeypatch)
+    monkeypatch.setattr(main_mod, "_check_cli_update_detailed", lambda cfg: ("2.0.0", True))
+    spawned = {"n": 0}
+    monkeypatch.setattr(
+        main_mod, "_spawn_background_upgrade",
+        lambda: (spawned.__setitem__("n", spawned["n"] + 1) or True),
+    )
+    main_mod._maybe_notify_cli_update(ClientConfig(base_url="x", cli_auto_upgrade=True))
+    assert spawned["n"] == 1
+
+
+def test_no_autoupgrade_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    _force_text_mode(monkeypatch)
+    monkeypatch.setattr(main_mod, "_check_cli_update_detailed", lambda cfg: ("2.0.0", True))
+    spawned = {"n": 0}
+    monkeypatch.setattr(
+        main_mod, "_spawn_background_upgrade",
+        lambda: (spawned.__setitem__("n", spawned["n"] + 1) or True),
+    )
+    main_mod._maybe_notify_cli_update(ClientConfig(base_url="x", cli_auto_upgrade=False))
+    assert spawned["n"] == 0  # авто выключено → только уведомление
+
+
+def test_no_autoupgrade_when_not_fresh(monkeypatch: pytest.MonkeyPatch) -> None:
+    """cached-newer (fresh=False) → не спавним на каждой команде, только уведомление."""
+    _force_text_mode(monkeypatch)
+    monkeypatch.setattr(main_mod, "_check_cli_update_detailed", lambda cfg: ("2.0.0", False))
+    spawned = {"n": 0}
+    monkeypatch.setattr(
+        main_mod, "_spawn_background_upgrade",
+        lambda: (spawned.__setitem__("n", spawned["n"] + 1) or True),
+    )
+    main_mod._maybe_notify_cli_update(ClientConfig(base_url="x", cli_auto_upgrade=True))
+    assert spawned["n"] == 0
+
+
+def test_spawn_background_upgrade_detached(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: dict[str, Any] = {}
+
+    class _FakePopen:
+        def __init__(self, cmd, **kw):
+            calls["cmd"] = cmd
+            calls["kw"] = kw
+
+    monkeypatch.setattr("subprocess.Popen", _FakePopen)
+    monkeypatch.setattr(
+        main_mod, "_detect_upgrade_command",
+        lambda: ["uv", "tool", "upgrade", "skillery-cli"],
+    )
+    assert main_mod._spawn_background_upgrade() is True
+    assert calls["cmd"] == ["uv", "tool", "upgrade", "skillery-cli"]
+    import subprocess
+    assert calls["kw"]["stdout"] == subprocess.DEVNULL  # detached, без вывода

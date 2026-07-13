@@ -343,23 +343,28 @@ def _fetch_latest_pypi_version(package: str, *, timeout: float = 3.0) -> str | N
         return None
 
 
-def _check_cli_update(cfg: ClientConfig, *, now: datetime | None = None) -> str | None:
-    """Новая версия CLI, если доступна на PyPI (иначе None). Fail-silent.
+def _check_cli_update_detailed(
+    cfg: ClientConfig, *, now: datetime | None = None
+) -> tuple[str | None, bool]:
+    """(новая_версия|None, свежая_ли_проверка_PyPI_в_этом_вызове). Fail-silent.
 
-    Кэширует таймстамп проверки + виденную версию в конфиг: PyPI опрашивается не
-    чаще раза в сутки, в пределах cooldown ответ берётся из кэша.
+    Кэширует таймстамп + виденную версию: PyPI опрашивается не чаще раза/сутки, в
+    пределах cooldown ответ берётся из кэша (``fresh=False``). ``fresh=True`` —
+    только когда реально сходили в PyPI (по нему гейтится авто-апгрейд: спавним
+    обновление максимум раз в сутки, а не на каждой команде).
     """
     from skillery_cli import __version__ as current
 
     if not cfg.cli_update_check:
-        return None
+        return None, False
     now = now or datetime.now(UTC)
     if cfg.cli_update_check_at:
         try:
             last = datetime.fromisoformat(cfg.cli_update_check_at)
             if now - last < _CLI_UPDATE_COOLDOWN:
                 cached = cfg.cli_latest_version
-                return cached if (cached and _is_newer(cached, current)) else None
+                newer = cached if (cached and _is_newer(cached, current)) else None
+                return newer, False
         except ValueError:
             pass
     latest = _fetch_latest_pypi_version(_branding.DIST_NAME)
@@ -370,7 +375,38 @@ def _check_cli_update(cfg: ClientConfig, *, now: datetime | None = None) -> str 
         cfg.save()
     except Exception:
         pass
-    return latest if (latest and _is_newer(latest, current)) else None
+    newer = latest if (latest and _is_newer(latest, current)) else None
+    return newer, True
+
+
+def _check_cli_update(cfg: ClientConfig, *, now: datetime | None = None) -> str | None:
+    """Новая версия CLI, если доступна на PyPI (иначе None). Fail-silent."""
+    return _check_cli_update_detailed(cfg, now=now)[0]
+
+
+def _spawn_background_upgrade() -> bool:
+    """Запускает обновление CLI в ФОНОВОМ (detached) процессе, НЕ дожидаясь его.
+
+    Менеджер (uv tool / pipx / pip) обновляет venv — текущий запуск не ломается,
+    новая версия применяется со СЛЕДУЮЩЕГО вызова CLI. True если процесс стартовал.
+    """
+    import subprocess
+
+    cmd = _detect_upgrade_command()
+    popen_kw: dict = {
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "stdin": subprocess.DEVNULL,
+    }
+    if sys.platform == "win32":
+        popen_kw["creationflags"] = subprocess.CREATE_NO_WINDOW | 0x00000008  # DETACHED_PROCESS
+    else:
+        popen_kw["start_new_session"] = True
+    try:
+        subprocess.Popen(cmd, **popen_kw)  # noqa: S603 — cmd из _detect (не user input)
+        return True
+    except Exception:
+        return False
 
 
 def _detect_upgrade_command() -> list[str]:
@@ -391,19 +427,33 @@ def _detect_upgrade_command() -> list[str]:
 
 
 def _maybe_notify_cli_update(cfg: ClientConfig) -> None:
-    """Ненавязчивое уведомление в stderr о новой версии CLI (не в JSON-режиме)."""
+    """Самообновление CLI (если включено) ИЛИ уведомление о новой версии.
+
+    Не в JSON-режиме. При ``cli_auto_upgrade`` и СВЕЖЕЙ PyPI-проверке (≤1/сутки)
+    — тихо запускаем обновление в фоне (применится со следующего запуска). Иначе
+    — ненавязчивая подсказка про `upgrade` в stderr.
+    """
     from skillery_cli import __version__ as current
     from skillery_cli import output as _output
 
     if getattr(_output, "_mode", "text") == "json":
         return
     try:
-        latest = _check_cli_update(cfg)
+        latest, fresh = _check_cli_update_detailed(cfg)
     except Exception:
         return
     if not latest:
         return
-    Console(stderr=True).print(
+    err = Console(stderr=True)
+    # Авто-апгрейд запускаем ТОЛЬКО на свежей проверке (fresh) — иначе спавнили бы
+    # процесс обновления на каждой команде в пределах суточного cooldown.
+    if fresh and cfg.cli_auto_upgrade and _spawn_background_upgrade():
+        err.print(
+            f"[cyan]↑ Обновляю {_branding.DIST_NAME} {current} → {latest} в фоне[/] "
+            "(применится при следующем запуске)."
+        )
+        return
+    err.print(
         f"[yellow]↑ Доступна новая версия {_branding.DIST_NAME} {latest}[/] "
         f"(у вас {current}). Обновить: [bold]{_branding.APP_NAME} upgrade[/] "
         f"или [dim]{' '.join(_detect_upgrade_command())}[/]"
