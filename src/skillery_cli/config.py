@@ -230,6 +230,12 @@ class ClientConfig:
         raw = tomllib.loads(actual_path.read_text(encoding="utf-8-sig"))
         ac = _HubAppConfig.model_validate(interpolate_env(raw))
         base_url = ac.base_url or _default_base_url()
+        # Защита от битого/кривого base_url (без схемы) в конфиге: иначе httpx
+        # падает криптовым ``UnsupportedProtocol: Request URL is missing an
+        # 'http://' or 'https://' protocol`` вместо понятной ошибки. Нет схемы →
+        # игнорируем значение, берём прод-дефолт (env SKILLERY_BASE_URL перебьёт).
+        if not base_url.startswith(("http://", "https://")):
+            base_url = _default_base_url()
         return cls(
             base_url=base_url,
             user_email=ac.user_email,

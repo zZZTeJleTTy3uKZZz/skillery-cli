@@ -326,3 +326,17 @@ def test_has_permission_and_admin_wildcard() -> None:
     cfg2 = ClientConfig(permissions=["skill.read"])
     assert cfg2.has_permission("skill.read") is True
     assert cfg2.has_permission("skill.write") is False
+
+
+def test_load_ignores_schemeless_base_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Битый base_url без http(s):// в конфиге → берём прод-дефолт (иначе httpx
+    падает криптовым UnsupportedProtocol). Регресс инцидента base_url='x'."""
+    monkeypatch.delenv("SKILLERY_BASE_URL", raising=False)
+    p = tmp_path / "config.toml"
+    p.write_text('base_url = "x"\n', encoding="utf-8")
+    assert ClientConfig.load(p).base_url == "https://api.skillery.ru"
+    # валидный http(s) — сохраняется как есть
+    p.write_text('base_url = "http://localhost:8000"\n', encoding="utf-8")
+    assert ClientConfig.load(p).base_url == "http://localhost:8000"
