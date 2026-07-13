@@ -33,9 +33,21 @@ from skillery_cli import _branding
 RefreshCallback = Callable[[], Awaitable[tuple[str, str] | None]]
 """() -> (new_access, new_refresh) | None — None если refresh не получился."""
 
-# H-5: User-Agent CLI — backend различает WEB/CLI-сессии по этому префиксу
-# (dist-имя ⇒ client_type='cli'). Версия — из метаданных пакета.
-USER_AGENT = f"{_branding.DIST_NAME}/{_CLI_VERSION}"
+def device_name() -> str:
+    """Имя текущей машины (hostname) — ЕДИНЫЙ источник для User-Agent и
+    регистрации устройства (/me/devices). Совпадение критично: backend
+    связывает CLI-сессию с конкретным устройством по имени в UA (per-device
+    «Переподключить»). Обрезка до 120 симв, дефолт ``cli`` — как при register.
+    """
+    import socket
+
+    return (socket.gethostname() or "").strip()[:120] or "cli"
+
+
+# H-5 + device-match: User-Agent = "skillery-cli/{ver} ({hostname})".
+# Префикс (dist-имя) сохранён ⇒ backend по-прежнему ставит client_type='cli';
+# hostname в скобках ⇒ backend матчит эту сессию к устройству с тем же именем.
+USER_AGENT = f"{_branding.DIST_NAME}/{_CLI_VERSION} ({device_name()})"
 
 # cli-kits W1: только эти HTTP-методы идемпотентны → их безопасно повторять.
 # Мутации (POST/PATCH/PUT/DELETE) НЕ ретраим — повтор рискует двойным эффектом.

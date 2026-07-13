@@ -67,12 +67,14 @@ async def hydrate_session_permissions(
 def local_device_identity() -> tuple[str, str]:
     """(name, platform) текущей машины для регистрации устройства.
 
-    name = hostname (обрезан до 120 симв, дефолт ``cli``); platform = ОС
+    name = hostname (общий с User-Agent через ``transport.device_name`` — их
+    совпадение нужно для связки сессия↔устройство на бэке); platform = ОС
     в нижнем регистре (``linux``/``windows``/``darwin``)."""
     import platform as _pf
-    import socket as _sock
 
-    name = (_sock.gethostname() or "").strip()[:120] or "cli"
+    from skillery_cli.core.transport import device_name
+
+    name = device_name()
     plat = (_pf.system() or "unknown").strip().lower() or "unknown"
     return name, plat
 
