@@ -3689,5 +3689,71 @@ def build_app() -> typer.Typer:
 app = build_app()
 
 
+def _write_crash_log(exc: BaseException) -> Path:
+    """Полный traceback в ``~/.skillery/last-error.log`` (для разбора), best-effort."""
+    import traceback
+
+    from skillery_cli.config import _default_config_dir
+
+    logpath = _default_config_dir() / "last-error.log"
+    try:
+        logpath.parent.mkdir(parents=True, exist_ok=True)
+        logpath.write_text(
+            "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+            encoding="utf-8",
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    return logpath
+
+
+def _self_heal_repairs() -> list[str]:
+    """Диагностика + авто-починка известных проблем (сейчас — битый конфиг)."""
+    try:
+        from skillery_cli.commands.doctor import repair_config
+
+        return repair_config()
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _invoke_app(*, retry: bool) -> None:
+    err = Console(stderr=True)
+    try:
+        app()
+    except SystemExit:
+        raise  # штатные exit-коды typer/click (в т.ч. наши emit_error → Exit(1))
+    except KeyboardInterrupt:
+        raise SystemExit(130) from None
+    except Exception as exc:  # noqa: BLE001 — глобальный self-heal, не роняем raw-traceback
+        err.print(f"\n[red]✗ Ошибка:[/] {type(exc).__name__}: {exc}")
+        err.print(f"[cyan]↻ Запускаю self-check ({_branding.APP_NAME} doctor)…[/]")
+        repairs = _self_heal_repairs()
+        if repairs:
+            for r in repairs:
+                err.print(f"  [green]✓ нашёл и починил:[/] {r}")
+            if retry:
+                err.print("[cyan]↻ Повторяю команду…[/]")
+                _invoke_app(retry=False)  # ровно один ретрай после починки
+                return
+        else:
+            err.print("  [dim]известных авто-починок не нашлось[/]")
+        logpath = _write_crash_log(exc)
+        err.print(
+            f"[yellow]Не удалось авто-починить.[/] Детали в логе: [dim]{logpath}[/]\n"
+            f"Диагностика: [bold]{_branding.APP_NAME} doctor[/] "
+            f"(или [bold]{_branding.APP_NAME} doctor --fix[/])."
+        )
+        raise SystemExit(1) from None
+
+
+def main() -> None:
+    """Entry-point CLI с self-heal: при НЕОЖИДАННОМ исключении не роняем
+    raw-traceback, а запускаем доктор, авто-чиним известное (битый конфиг) и
+    повторяем команду; если не вышло — пишем ``last-error.log`` и подсказываем
+    ``doctor``. Штатные ошибки (API/валидация) идут прежним чистым путём."""
+    _invoke_app(retry=True)
+
+
 if __name__ == "__main__":
-    app()
+    main()

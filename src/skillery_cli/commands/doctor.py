@@ -188,6 +188,67 @@ def _probe_cli_version() -> Result:
     return ok("cli-version", f"версия CLI {current} — последняя")
 
 
+def _probe_config() -> Result:
+    """Проверяет конфиг: файл парсится и ``base_url`` со схемой http(s)://.
+
+    Это ловит инциденты вроде затёртого ``base_url`` (без схемы → httpx падает
+    криптовым UnsupportedProtocol). Чинится через :func:`repair_config`."""
+    from skillery_cli.config import _default_config_file
+
+    path = _default_config_file()
+    if not path.exists():
+        return ok("config", "конфига нет — используются дефолты")
+    try:
+        import tomllib
+
+        data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
+    except Exception as e:  # noqa: BLE001
+        return fail("config", f"конфиг не парсится ({e}) — `doctor --fix` сбросит")
+    bu = str(data.get("base_url", "") or "")
+    if bu and not bu.startswith(("http://", "https://")):
+        return fail(
+            "config",
+            f"base_url '{bu}' без http(s):// — `doctor --fix` починит",
+        )
+    return ok("config", "конфиг валиден")
+
+
+def repair_config() -> list[str]:
+    """Авто-починка известных проблем конфига. Возвращает список починок (пусто
+    если чинить нечего). Идемпотентна.
+
+    - неразбираемый TOML → бэкап ``.bak`` + сброс на дефолты;
+    - ``base_url`` без схемы → пересохранить с валидным (``load`` уже подставляет
+      прод-дефолт вместо кривого значения).
+    """
+    from skillery_cli.config import ClientConfig, _default_config_file
+
+    repairs: list[str] = []
+    path = _default_config_file()
+    if not path.exists():
+        return repairs
+    raw = path.read_text(encoding="utf-8-sig")
+    try:
+        import tomllib
+
+        data = tomllib.loads(raw)
+    except Exception:  # noqa: BLE001 — неразбираемый TOML → сброс
+        bak = path.with_name(path.name + ".bak")
+        try:
+            bak.write_text(raw, encoding="utf-8")
+        except Exception:  # noqa: BLE001
+            pass
+        ClientConfig().save(path)
+        repairs.append(f"конфиг не парсился → сброшен на дефолт (бэкап {bak.name})")
+        return repairs
+    bu = str(data.get("base_url", "") or "")
+    if bu and not bu.startswith(("http://", "https://")):
+        cfg = ClientConfig.load(path)  # load игнорит кривой base_url → дефолт
+        cfg.save(path)
+        repairs.append(f"base_url '{bu}' без схемы → {cfg.base_url}")
+    return repairs
+
+
 # --------------------------------------------------------------------------
 #  движок
 # --------------------------------------------------------------------------
@@ -196,6 +257,7 @@ def run_checks(cfg: ClientConfig) -> list[Result]:
     return [
         _probe_python(),
         _probe_package_manager(),
+        _probe_config(),
         _probe_agent(cfg),
         _probe_login(cfg),
         _probe_path_store(),
@@ -223,19 +285,32 @@ def cmd_doctor(
         "--fix-path",
         help="Починить PATH: добавить bin-каталог стора в PATH (без admin).",
     ),
+    fix: bool = typer.Option(
+        False,
+        "--fix",
+        help="Авто-починить известные проблемы (кривой конфиг + PATH) перед проверкой.",
+    ),
 ) -> None:
-    """Проверка окружения: Python/uv/agent/login/PATH/clikit (pass/warn/fail).
+    """Проверка окружения: Python/uv/config/agent/login/PATH/clikit (pass/warn/fail).
 
     Завершается нонзеро при критических провалах; ``--strict`` — также при
-    предупреждениях. ``--fix-path`` чинит PATH-стор перед проверкой. ``--json``
-    даёт машинную структуру.
+    предупреждениях. ``--fix`` авто-чинит известные проблемы (битый конфиг +
+    PATH), ``--fix-path`` — только PATH. ``--json`` даёт машинную структуру.
     """
     strict = _unwrap_bool(strict, False)
     fix_path = _unwrap_bool(fix_path, False)
+    fix = _unwrap_bool(fix, False)
+
+    config_repairs: list[str] = []
+    if fix:
+        config_repairs = repair_config()
+        for r in config_repairs:
+            console.print(f"[green]✓ починил:[/] {r}")
+
     cfg = ClientConfig.load()
 
     path_fix: dict[str, str] | None = None
-    if fix_path:
+    if fix_path or fix:
         path_fix = path_store.ensure_on_path()
 
     results = run_checks(cfg)
@@ -253,6 +328,8 @@ def cmd_doctor(
     }
     if path_fix is not None:
         payload["path_fix"] = path_fix
+    if config_repairs:
+        payload["config_repairs"] = config_repairs
 
     def _render(p: dict) -> None:
         if path_fix is not None:

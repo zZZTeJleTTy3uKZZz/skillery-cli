@@ -33,6 +33,8 @@ def all_green(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(doc, "_probe_login", lambda cfg: doc.ok("Hub login", "user@x"))
     monkeypatch.setattr(doc, "_probe_path_store", lambda: doc.ok("PATH-стор", "/bin"))
     monkeypatch.setattr(doc, "_probe_clikit", lambda: doc.ok("clikit", "0.1"))
+    monkeypatch.setattr(doc, "_probe_config", lambda: doc.ok("config", "валиден"))
+    monkeypatch.setattr(doc, "_probe_cli_version", lambda: doc.ok("cli-version", "ok"))
 
 
 def _make_cfg() -> ClientConfig:
@@ -283,3 +285,49 @@ def test_doctor_registered_always_on(monkeypatch: pytest.MonkeyPatch) -> None:
     app = build_app()
     names = [cmd.name for cmd in app.registered_commands]
     assert "doctor" in names
+
+
+# --------------------------------------------------------------------------
+#  config probe + repair_config (self-heal)
+# --------------------------------------------------------------------------
+def test_probe_config_flags_schemeless_base_url(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    p = tmp_path / "config.toml"
+    p.write_text('base_url = "x"\n', encoding="utf-8")
+    monkeypatch.setattr(doc, "_default_config_file", lambda: p, raising=False)
+    from skillery_cli import config as cfg_mod
+    monkeypatch.setattr(cfg_mod, "_default_config_file", lambda: p)
+    r = doc._probe_config()
+    assert r.level == "fail"
+    assert "base_url" in r.detail
+
+
+def test_repair_config_fixes_schemeless_base_url(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("SKILLERY_BASE_URL", raising=False)
+    p = tmp_path / "config.toml"
+    p.write_text('base_url = "x"\n', encoding="utf-8")
+    from skillery_cli import config as cfg_mod
+    monkeypatch.setattr(cfg_mod, "_default_config_file", lambda: p)
+    repairs = doc.repair_config()
+    assert len(repairs) == 1 and "base_url" in repairs[0]
+    assert 'base_url = "https://api.skillery.ru"' in p.read_text(encoding="utf-8")
+    # идемпотентно: повторный вызов — уже нечего чинить
+    assert doc.repair_config() == []
+
+
+def test_repair_config_resets_unparseable(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    p = tmp_path / "config.toml"
+    p.write_text('base_url = "broken\n[[[', encoding="utf-8")  # битый TOML
+    from skillery_cli import config as cfg_mod
+    monkeypatch.setattr(cfg_mod, "_default_config_file", lambda: p)
+    repairs = doc.repair_config()
+    assert len(repairs) == 1 and "сброшен" in repairs[0]
+    assert (tmp_path / "config.toml.bak").exists()  # бэкап
+    # новый конфиг парсится
+    import tomllib
+    tomllib.loads(p.read_text(encoding="utf-8"))

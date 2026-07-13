@@ -227,3 +227,52 @@ def test_spawn_background_upgrade_detached(monkeypatch: pytest.MonkeyPatch) -> N
     assert calls["cmd"] == ["uv", "tool", "upgrade", "skillery-cli"]
     import subprocess
     assert calls["kw"]["stdout"] == subprocess.DEVNULL  # detached, без вывода
+
+
+# ---------------- self-heal: _invoke_app при исключении ----------------
+def test_invoke_app_self_heals_and_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Неожиданное исключение → доктор чинит → ретрай (успех), без raw-traceback."""
+    calls = {"n": 0}
+
+    def _fake_app():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("boom")  # первый вызов падает
+        raise SystemExit(0)  # после починки — успех
+
+    monkeypatch.setattr(main_mod, "app", _fake_app)
+    monkeypatch.setattr(main_mod, "_self_heal_repairs", lambda: ["починил base_url"])
+    monkeypatch.setattr(main_mod, "_write_crash_log", lambda exc: __import__("pathlib").Path("x"))
+    with pytest.raises(SystemExit) as e:
+        main_mod._invoke_app(retry=True)
+    assert e.value.code == 0  # ретрай удался
+    assert calls["n"] == 2  # первый + ретрай
+
+
+def test_invoke_app_logs_when_unrepairable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Нечего чинить → пишем log + exit 1, НЕ роняем raw-traceback."""
+    def _fake_app():
+        raise RuntimeError("boom")
+
+    logged = {"n": 0}
+    monkeypatch.setattr(main_mod, "app", _fake_app)
+    monkeypatch.setattr(main_mod, "_self_heal_repairs", lambda: [])  # нечего чинить
+    monkeypatch.setattr(
+        main_mod, "_write_crash_log",
+        lambda exc: (logged.__setitem__("n", 1) or __import__("pathlib").Path("log")),
+    )
+    with pytest.raises(SystemExit) as e:
+        main_mod._invoke_app(retry=True)
+    assert e.value.code == 1
+    assert logged["n"] == 1  # лог записан
+
+
+def test_invoke_app_passes_systemexit_through(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Штатный SystemExit (typer) проходит насквозь без доктора."""
+    healed = {"n": 0}
+    monkeypatch.setattr(main_mod, "app", lambda: (_ for _ in ()).throw(SystemExit(2)))
+    monkeypatch.setattr(main_mod, "_self_heal_repairs", lambda: healed.__setitem__("n", 1) or [])
+    with pytest.raises(SystemExit) as e:
+        main_mod._invoke_app(retry=True)
+    assert e.value.code == 2
+    assert healed["n"] == 0  # доктор НЕ звался
