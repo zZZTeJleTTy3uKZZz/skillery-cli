@@ -223,10 +223,35 @@ def test_spawn_background_upgrade_detached(monkeypatch: pytest.MonkeyPatch) -> N
         main_mod, "_detect_upgrade_command",
         lambda: ["uv", "tool", "upgrade", "skillery-cli"],
     )
-    assert main_mod._spawn_background_upgrade() is True
-    assert calls["cmd"] == ["uv", "tool", "upgrade", "skillery-cli"]
+    assert main_mod._spawn_background_upgrade(delay=0) is True
+    # Спавнит ИНТЕРПРЕТАТОР с worker-скриптом (задержка + upgrade), НЕ skillery.exe
+    # — иначе launcher .exe залочен и uv не перезапишет его (Windows os error 32).
+    assert calls["cmd"][0] == main_mod.sys.executable
+    assert calls["cmd"][1] == "-c"
+    assert "subprocess.run(['uv', 'tool', 'upgrade', 'skillery-cli'])" in calls["cmd"][2]
+    assert "time.sleep" in calls["cmd"][2]
     import subprocess
-    assert calls["kw"]["stdout"] == subprocess.DEVNULL  # detached, без вывода
+    assert calls["kw"]["stdout"] == subprocess.DEVNULL
+
+
+def test_cmd_upgrade_windows_spawns_background(monkeypatch: pytest.MonkeyPatch) -> None:
+    """На Windows `upgrade` НЕ бежит синхронно (launcher залочен) → фон + return."""
+    monkeypatch.setattr("skillery_cli.__version__", "1.0.0")
+    monkeypatch.setattr(main_mod, "_fetch_latest_pypi_version", lambda pkg, **k: "2.0.0")
+    monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: ClientConfig(base_url="x")))
+    monkeypatch.setattr(ClientConfig, "save", lambda self: None)
+    monkeypatch.setattr(main_mod.sys, "platform", "win32")
+    spawned = {"n": 0}
+    monkeypatch.setattr(
+        main_mod, "_spawn_background_upgrade",
+        lambda *a, **k: (spawned.__setitem__("n", spawned["n"] + 1) or True),
+    )
+    ran_sync = {"n": 0}
+    monkeypatch.setattr("subprocess.run", lambda *a, **k: ran_sync.__setitem__("n", 1))
+
+    main_mod.cmd_upgrade(check=False)
+    assert spawned["n"] == 1  # ушло в фон
+    assert ran_sync["n"] == 0  # синхронно НЕ запускали (launcher залочен)  # detached, без вывода
 
 
 # ---------------- self-heal: _invoke_app при исключении ----------------

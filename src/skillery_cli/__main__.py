@@ -384,15 +384,21 @@ def _check_cli_update(cfg: ClientConfig, *, now: datetime | None = None) -> str 
     return _check_cli_update_detailed(cfg, now=now)[0]
 
 
-def _spawn_background_upgrade() -> bool:
-    """Запускает обновление CLI в ФОНОВОМ (detached) процессе, НЕ дожидаясь его.
+def _spawn_background_upgrade(delay: float = 4.0) -> bool:
+    """Обновление CLI в ОТДЕЛЬНОМ процессе С ЗАДЕРЖКОЙ, НЕ дожидаясь его.
 
-    Менеджер (uv tool / pipx / pip) обновляет venv — текущий запуск не ломается,
-    новая версия применяется со СЛЕДУЮЩЕГО вызова CLI. True если процесс стартовал.
+    Задержка критична на Windows: launcher ``skillery.exe`` залочен, пока
+    запущен, и uv/pipx не могут его перезаписать (``os error 32``). Ждём, чтобы
+    текущий процесс/launcher успел выйти, затем апгрейд. Запускаем
+    ИНТЕРПРЕТАТОРОМ (``sys.executable``), НЕ через ``skillery.exe`` — иначе второй
+    launcher снова залочит .exe. venv обновляется, launcher пересоздаётся; новая
+    версия применяется со СЛЕДУЮЩЕГО запуска CLI. True если процесс стартовал.
     """
     import subprocess
 
     cmd = _detect_upgrade_command()
+    # worker: подождать (текущий launcher выйдет) → запустить апгрейд.
+    worker = f"import time,subprocess;time.sleep({delay});subprocess.run({cmd!r})"
     popen_kw: dict = {
         "stdout": subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,
@@ -403,7 +409,7 @@ def _spawn_background_upgrade() -> bool:
     else:
         popen_kw["start_new_session"] = True
     try:
-        subprocess.Popen(cmd, **popen_kw)  # noqa: S603 — cmd из _detect (не user input)
+        subprocess.Popen([sys.executable, "-c", worker], **popen_kw)  # noqa: S603
         return True
     except Exception:
         return False
@@ -508,12 +514,37 @@ def cmd_upgrade(
     console.print(
         f"Обновляю {_branding.DIST_NAME}: [bold]{current}[/] → [bold green]{latest}[/]"
     )
+
+    # Windows: launcher (skillery.exe) залочен, пока команда запущена — uv/pipx не
+    # могут его перезаписать (os error 32). Запускаем апгрейд в ОТДЕЛЬНОМ процессе
+    # С ЗАДЕРЖКОЙ (после выхода этой команды), не синхронно.
+    if sys.platform == "win32":
+        if _spawn_background_upgrade():
+            console.print(
+                "[cyan]↑ Обновление запущено[/] — применится через несколько секунд. "
+                f"Откройте новый терминал и проверьте: [bold]{_branding.APP_NAME} --version[/]."
+            )
+            return
+        emit_error(
+            "UPGRADE_FAILED",
+            f"Не удалось запустить обновление. Выполните вручную: {' '.join(cmd)}",
+        )
+        raise typer.Exit(1)
+
+    # Unix: перезапись запущенного бинаря разрешена → синхронно; на ошибке —
+    # фолбэк на фоновый апгрейд.
     console.print(f"[dim]$ {' '.join(cmd)}[/]")
     import subprocess
 
     try:
         subprocess.run(cmd, check=True)
     except Exception as e:
+        if _spawn_background_upgrade():
+            console.print(
+                "[cyan]↑ Синхронно не вышло — доупгрейжу в фоне.[/] "
+                "Откройте новый терминал."
+            )
+            return
         emit_error(
             "UPGRADE_FAILED",
             f"Автообновление не удалось ({e}). Выполните вручную: {' '.join(cmd)}",
