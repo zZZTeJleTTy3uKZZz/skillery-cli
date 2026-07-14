@@ -147,6 +147,9 @@ def test_install_hub_stub_fresh_flags_content_and_warns_stderr(
                 "manifest": {"version": "1.0.0", "files": []},
             }
 
+        async def download_snapshot(self, ref, semver):
+            return None  # снапшота нет → _materialize откатится на clone
+
         async def close(self):
             return None
 

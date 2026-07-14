@@ -689,8 +689,6 @@ def cmd_login(
                 roles_descr = []
                 if cfg.is_hub_admin():
                     roles_descr.append("hub-admin")
-                if cfg.is_skill_creator():
-                    roles_descr.append("skill-creator")
                 if cfg.permissions and not roles_descr:
                     roles_descr.append("member")
                 console.print(f"  Роли:        {', '.join(roles_descr) or '—'}")
@@ -883,8 +881,6 @@ def _do_browser_login(cfg: ClientConfig) -> None:
                 roles_descr = []
                 if cfg.is_hub_admin():
                     roles_descr.append("hub-admin")
-                if cfg.is_skill_creator():
-                    roles_descr.append("skill-creator")
                 if cfg.permissions and not roles_descr:
                     roles_descr.append("member")
                 console.print(f"  Роли:        {', '.join(roles_descr) or '—'}")
@@ -1043,11 +1039,13 @@ def cmd_whoami() -> None:
         console.print(f"[bold]{p['user_email']}[/]")
         console.print(f"  Backend:    {p['backend']}")
         console.print(f"  Agent:      {p['agent']}")
+        # «Роли» = реальные платформенные роли. «skill-creator» — НЕ роль, а
+        # способность (право skill.publish/skill.create): она видна в блоке
+        # Permissions ниже, поэтому в роли её больше не пишем (иначе устаревший
+        # ярлык роли, которой нет).
         roles = []
         if p["is_hub_admin"]:
             roles.append("hub-admin")
-        if p["is_skill_creator"]:
-            roles.append("skill-creator")
         if p["company_id"]:
             # PK-миграция: company_id теперь числовой id (строкой), обрезка
             # бессмысленна — показываем полностью.
@@ -1668,6 +1666,84 @@ async def _install_local_source(
     }]
 
 
+async def _materialize_from_bundle(
+    installer,  # SkillInstaller
+    client: HubClient,
+    *,
+    dep_slug: str | None,
+    dep_version: str,
+    dep_bundle: dict,
+    dep_repo: str | None,
+    dep_id,
+    project_path: Optional[Path],
+    force: bool,
+):
+    """Материализовать навык: СНАЧАЛА backend-снапшот, иначе git clone.
+
+    Content-serving: бэкенд заранее (при sync, под токеном хаба) снял tar.gz
+    версии в object_storage и отдаёт его на ``GET /skills/{ref}/versions/{semver}
+    /snapshot``. Ставя из снапшота, клиент НЕ клонирует репо → не нужны его
+    локальные git-креды и прямой доступ к приватному репозиторию (токен остаётся
+    на бэкенде).
+
+    Снапшот применим только когда навык лежит в КОРНЕ репо (SKILL.md в корне
+    архива): ``install_from_snapshot`` не принимает ``skill_path``. Для навыка в
+    подпапке и когда снапшота нет (404) — откат на git clone (он умеет
+    ``skill_path`` и работает через клиентские креды)."""
+    import tempfile
+
+    skill_path = dep_bundle.get("skill_path")
+    commit_sha = dep_bundle["commit_sha"]
+    manifest = dep_bundle["manifest"]
+    ref = dep_slug or (str(dep_id) if dep_id is not None else "")
+
+    if not skill_path and ref:
+        snap: bytes | None = None
+        # Снапшот — best-effort ОПТИМИЗАЦИЯ (не требует клиентских git-кред).
+        # ЛЮБАЯ ошибка его получения (404, 403, 5xx, обрыв сети) → тихий откат на
+        # git clone, а не падение установки: снапшота может не быть, а репо —
+        # доступно (публичное / есть локальные креды).
+        try:
+            snap = await client.download_snapshot(ref, dep_version)
+        except Exception:  # noqa: BLE001 — best-effort: не удалось → clone
+            snap = None
+        if snap:
+            tmp_dir = Path(tempfile.mkdtemp(prefix="skillery-snap-"))
+            archive = tmp_dir / f"{ref}-{dep_version}.tar.gz"
+            try:
+                archive.write_bytes(snap)
+                return installer.install_from_snapshot(
+                    slug=dep_slug or None,
+                    version=dep_version,
+                    commit_sha=commit_sha,
+                    archive_path=archive,
+                    manifest=manifest,
+                    project=project_path,
+                    force=force,
+                    skill_id=dep_id,
+                )
+            except Exception:  # noqa: BLE001 — битый снапшот → откат на clone
+                pass
+            finally:
+                # rmtree сносит и архив, и папку одним вызовом — не оставляем
+                # temp при сбое unlink (ignore_errors: очистка не важнее install).
+                import shutil
+
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    # Fallback: git clone (приватный репо → нужны клиентские git-креды).
+    return installer.install(
+        slug=dep_slug or None,
+        version=dep_version,
+        commit_sha=commit_sha,
+        repo_url=dep_repo or dep_bundle.get("repo_url"),
+        manifest=manifest,
+        project=project_path,
+        force=force,
+        skill_id=dep_id,
+    )
+
+
 async def _install_chain(
     cfg: ClientConfig,
     access: str,
@@ -1720,12 +1796,13 @@ async def _install_chain(
                 finally:
                     await sub.close()
             dep_id = dep_bundle.get("skill_id")
-            result = installer.install(
-                slug=dep_slug or None, version=dep_version,
-                commit_sha=dep_bundle["commit_sha"],
-                repo_url=dep_repo or dep_bundle.get("repo_url"),
-                manifest=dep_bundle["manifest"], project=project_path,
-                force=force, skill_id=dep_id,
+            # Content-serving: снапшот с бэкенда (без клиентских git-кред) →
+            # fallback на git clone. См. _materialize_from_bundle.
+            result = await _materialize_from_bundle(
+                installer, client,
+                dep_slug=dep_slug, dep_version=dep_version, dep_bundle=dep_bundle,
+                dep_repo=dep_repo, dep_id=dep_id, project_path=project_path,
+                force=force,
             )
             entry = {
                 "slug": dep_slug, "skill_id": result.skill_id,
@@ -3610,6 +3687,13 @@ def build_app() -> typer.Typer:
     from skillery_cli.commands import suggest as _suggest_mod
 
     _suggest_mod.register(app)
+
+    # --- AI advisor ask ---
+    # `skillery ask "<query>"` — реальный LLM-адвайзер (тот же, что в вебе):
+    # SSE-стрим ответа + карточки навыков. Требует логина.
+    from skillery_cli.commands import ask as _ask_mod
+
+    _ask_mod.register(app)
 
     # --- scaffold ---
     # `skillery new <slug> --kind ...` — генерация скелета навыка. ALWAYS-ON:

@@ -117,6 +117,9 @@ def test_install_hub_project_carries_agent(
                 "manifest": {"version": "1.0.0", "files": []},
             }
 
+        async def download_snapshot(self, ref, semver):
+            return None  # снапшота нет → _materialize откатится на clone
+
         async def close(self):
             return None
 
@@ -233,6 +236,9 @@ def test_update_carries_agent(
                 "commit_sha": "new", "repo_url": None,
                 "manifest": {"version": "2.0.0", "files": []},
             }
+
+        async def download_snapshot(self, ref, semver):
+            return None  # снапшота нет → _materialize откатится на clone
 
         async def close(self):
             return None

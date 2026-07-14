@@ -17,8 +17,9 @@ method-aware retry (W1: ретраим только идемпотентные �
 from __future__ import annotations
 
 import asyncio
+import json
 import os
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 import httpx
@@ -502,6 +503,95 @@ class HubClient:
         return await self._request(
             "POST", f"/skills/{slug}/install", params={"channel": channel}
         )
+
+    async def download_snapshot(self, ref: str, semver: str) -> bytes | None:
+        """GET /skills/{ref}/versions/{semver}/snapshot — tar.gz слепок версии.
+
+        Бэкенд отдаёт содержимое версии, ПРЕДварительно материализованное
+        server-side (sync снимает архив в object_storage под токеном хаба).
+        Значит установка не требует клиентских git-кред и прямого доступа к
+        приватному репо. Возвращает сырые байты tar.gz либо ``None`` (404 — для
+        этой версии слепка нет; вызывающий откатывается на git clone)."""
+        headers = self._auth_headers()
+        headers["Accept"] = "application/gzip"
+        url = f"/skills/{ref}/versions/{semver}/snapshot"
+        resp = await self._send("GET", url, headers)
+        if resp.status_code == 401 and self._on_refresh is not None:
+            new_tokens = await self._on_refresh()
+            if new_tokens is not None:
+                self._access_token = new_tokens[0]
+                headers = self._auth_headers()
+                headers["Accept"] = "application/gzip"
+                resp = await self._send("GET", url, headers)
+        if resp.status_code == 404:
+            return None
+        if resp.status_code >= 400:
+            raise self._parse_error_response(resp)
+        return resp.content
+
+    async def advisor_stream(
+        self, *, message: str, conversation_id: int | None = None
+    ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
+        """POST /advisor/messages (SSE) → поток ``(event, data)``.
+
+        События: ``meta`` ({conversation_id}) → ``token`` ({text}) → ``skills``
+        ({skills:[...]}) → ``done``. Тот же реальный LLM-адвайзер, что и в вебе
+        (RAG по каталогу, RBAC-фильтрован). ``conversation_id=None`` ⇒ новая
+        беседа (её id придёт в ``meta``)."""
+        body = {"message": message, "conversation_id": conversation_id}
+        client = self._transport._client  # httpx.AsyncClient кита (base_url задан)
+
+        def _headers() -> dict[str, str]:
+            h = self._auth_headers()
+            h["Accept"] = "text/event-stream"
+            return h
+
+        # До 2 попыток: первая; при 401 с рабочим refresh — вторая с новым токеном.
+        # ``async with`` гарантирует закрытие стрима на любом выходе (в т.ч. при
+        # раннем break потребителя → GeneratorExit).
+        for attempt in range(2):
+            # Сетевой сбой (обрыв/недоступность) на открытии стрима или чтении
+            # → чистая ApiError (её ловит команда через ``run``), а не сырой
+            # httpx-traceback. ``_send``-обёртка тут не работает: SSE читаем
+            # напрямую через httpx-клиент.
+            try:
+                async with client.stream(
+                    "POST", "/advisor/messages", json=body, headers=_headers()
+                ) as resp:
+                    if (
+                        resp.status_code == 401
+                        and self._on_refresh is not None
+                        and attempt == 0
+                    ):
+                        await resp.aread()
+                        new_tokens = await self._on_refresh()
+                        if new_tokens is not None:
+                            self._access_token = new_tokens[0]
+                            continue  # повтор с новым токеном
+                    if resp.status_code >= 400:
+                        await resp.aread()
+                        raise self._parse_error_response(resp)
+                    event: str | None = None
+                    async for raw in resp.aiter_lines():
+                        line = raw.rstrip("\r")
+                        if not line:
+                            event = None  # пустая строка — конец SSE-кадра
+                            continue
+                        if line.startswith("event:"):
+                            event = line[len("event:"):].strip()
+                        elif line.startswith("data:") and event:
+                            payload = line[len("data:"):].strip()
+                            try:
+                                data = json.loads(payload)
+                            except json.JSONDecodeError:
+                                continue
+                            yield event, data
+                    return  # стрим успешно дочитан
+            except (httpx.TransportError, _LkTransportError) as e:
+                raise ApiError(
+                    0, "NETWORK",
+                    "Нет связи с бэкендом (адвайзер). Проверьте сеть/VPN.",
+                ) from e
 
     async def list_my_installs(self) -> list[dict[str, Any]]:
         """GET /me/installs — навыки, помеченные актором установленными.

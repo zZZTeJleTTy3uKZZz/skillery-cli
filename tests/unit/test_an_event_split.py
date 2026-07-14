@@ -172,6 +172,9 @@ def test_install_hub_project_emits_install_and_enable_hub(
                 "manifest": {"version": "1.0.0", "files": []},
             }
 
+        async def download_snapshot(self, ref, semver):
+            return None  # снапшота нет → _materialize откатится на clone
+
         async def close(self):
             return None
 
@@ -206,6 +209,9 @@ def test_install_hub_global_emits_install_no_enable(
                 "commit_sha": "abc", "repo_url": None,
                 "manifest": {"version": "1.0.0", "files": []},
             }
+
+        async def download_snapshot(self, ref, semver):
+            return None  # снапшота нет → _materialize откатится на clone
 
         async def close(self):
             return None
