@@ -64,19 +64,22 @@ async def hydrate_session_permissions(
         cfg.permissions = []
 
 
-def local_device_identity() -> tuple[str, str]:
-    """(name, platform) текущей машины для регистрации устройства.
+def local_device_identity() -> tuple[str, str, str]:
+    """(name, platform, client_device_id) текущей машины для регистрации.
 
-    name = hostname (общий с User-Agent через ``transport.device_name`` — их
-    совпадение нужно для связки сессия↔устройство на бэке); platform = ОС
-    в нижнем регистре (``linux``/``windows``/``darwin``)."""
+    name = hostname (визуальный лейбл по умолчанию; пользователь может
+    переименовать в вебе); platform = ОС в нижнем регистре; client_device_id —
+    СТАБИЛЬНЫЙ id машины (``core.identity.device_uid`` — тот же, что в
+    User-Agent), по нему backend апсертит устройство и матчит сессию, поэтому
+    ренейм лейбла связь не рвёт."""
     import platform as _pf
 
+    from skillery_cli.core.identity import device_uid
     from skillery_cli.core.transport import device_name
 
     name = device_name()
     plat = (_pf.system() or "unknown").strip().lower() or "unknown"
-    return name, plat
+    return name, plat, device_uid()
 
 
 async def register_device_best_effort(client: HubClient) -> None:
@@ -87,9 +90,9 @@ async def register_device_best_effort(client: HubClient) -> None:
     ошибку — сеть, API, старый backend без ``/me/devices`` — глотаем:
     логин уже состоялся, регистрацию устройства не даём его завалить.
     """
-    name, plat = local_device_identity()
+    name, plat, cdid = local_device_identity()
     try:
-        await client.register_device(name=name, platform=plat)
+        await client.register_device(name=name, platform=plat, client_device_id=cdid)
     except Exception:  # noqa: BLE001 — best-effort, login важнее
         pass
 

@@ -194,10 +194,11 @@ def test_cmd_accept_invite_unusable_exits_1(
 
 # ==================== register_device_best_effort =========================
 def test_local_device_identity_shape() -> None:
-    name, plat = _common.local_device_identity()
+    name, plat, cdid = _common.local_device_identity()
     assert isinstance(name, str) and name
     assert isinstance(plat, str) and plat
     assert plat == plat.lower()
+    assert isinstance(cdid, str) and cdid  # стабильный client_device_id
 
 
 @pytest.mark.asyncio
@@ -205,14 +206,19 @@ async def test_register_device_best_effort_calls_client() -> None:
     fake_client = MagicMock()
     captured: dict[str, Any] = {}
 
-    async def _reg(*, name: str, platform: str) -> dict[str, Any]:
-        captured.update({"name": name, "platform": platform})
+    async def _reg(
+        *, name: str, platform: str, client_device_id: str | None = None
+    ) -> dict[str, Any]:
+        captured.update(
+            {"name": name, "platform": platform, "client_device_id": client_device_id}
+        )
         return {"id": "1", "name": name, "platform": platform}
 
     fake_client.register_device = _reg
     await _common.register_device_best_effort(fake_client)
     assert captured["name"]
     assert captured["platform"]
+    assert captured["client_device_id"]  # стабильный id должен прокидываться
 
 
 @pytest.mark.asyncio

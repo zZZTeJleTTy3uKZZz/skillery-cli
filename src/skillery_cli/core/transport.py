@@ -44,10 +44,17 @@ def device_name() -> str:
     return (socket.gethostname() or "").strip()[:120] or "cli"
 
 
-# H-5 + device-match: User-Agent = "skillery-cli/{ver} ({hostname})".
-# Префикс (dist-имя) сохранён ⇒ backend по-прежнему ставит client_type='cli';
-# hostname в скобках ⇒ backend матчит эту сессию к устройству с тем же именем.
-USER_AGENT = f"{_branding.DIST_NAME}/{_CLI_VERSION} ({device_name()})"
+# H-5 + device-match: User-Agent = "skillery-cli/{ver} (id:{uid}; {hostname})".
+# Префикс (dist-имя) сохранён ⇒ backend ставит client_type='cli'. В скобках —
+# СТАБИЛЬНЫЙ client_device_id (``id:<uid>``) для связки сессия↔устройство (не
+# рвётся при переименовании) + hostname для читабельности/legacy-фолбэка.
+def _build_user_agent() -> str:
+    from skillery_cli.core.identity import device_uid
+
+    return f"{_branding.DIST_NAME}/{_CLI_VERSION} (id:{device_uid()}; {device_name()})"
+
+
+USER_AGENT = _build_user_agent()
 
 # cli-kits W1: только эти HTTP-методы идемпотентны → их безопасно повторять.
 # Мутации (POST/PATCH/PUT/DELETE) НЕ ретраим — повтор рискует двойным эффектом.
@@ -421,15 +428,18 @@ class HubClient:
         await self._request("POST", "/invites/accept", json={"token": token})
 
     async def register_device(
-        self, *, name: str, platform: str
+        self, *, name: str, platform: str, client_device_id: str | None = None
     ) -> dict[str, Any]:
         """POST /me/devices — регистрация CLI-устройства (E-D web↔CLI мост).
 
-        Сверено с ``routes/me.py::register_device``: body ``{name, platform}``,
-        auth, 201. Upsert по (user, name)."""
-        return await self._request(
-            "POST", "/me/devices", json={"name": name, "platform": platform}
-        )
+        Сверено с ``routes/me.py::register_device``: body
+        ``{name, platform, client_device_id?}``, auth, 201. Upsert по
+        client_device_id (стабильный, переживает ренейм); name — визуальный
+        лейбл. Legacy backend без поля client_device_id просто его игнорирует."""
+        body: dict[str, Any] = {"name": name, "platform": platform}
+        if client_device_id:
+            body["client_device_id"] = client_device_id
+        return await self._request("POST", "/me/devices", json=body)
 
     async def set_password(self, *, new_password: str) -> None:
         """POST /me/password — установка/смена пароля для текущего user'а."""

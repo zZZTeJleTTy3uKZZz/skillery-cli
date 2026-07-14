@@ -110,8 +110,55 @@ def _run(coro) -> None:  # noqa: ANN001
     except RuntimeError as e:
         # Например installer._clone_version: RuntimeError('git clone failed: ...')
         # — короткое сообщение вместо многоэкранного Rich-traceback.
+        friendly = _private_repo_hint(str(e))
+        if friendly is not None:
+            if is_json():
+                emit_error("REPO_ACCESS", friendly)
+            else:
+                console.print(f"[red]Нет доступа к приватному репозиторию.[/]\n{friendly}")
+            sys.exit(1)
         emit_error("RUNTIME", str(e))
         sys.exit(1)
+
+
+# Сигнатуры git-ошибки аутентификации при clone приватного репо (GitHub/GitLab).
+_CLONE_AUTH_MARKERS = (
+    "authentication failed",
+    "invalid username or token",
+    "password authentication is not supported",
+    "could not read username",
+    "terminal prompts disabled",
+    "http basic: access denied",
+    "permission denied (publickey)",
+    "fatal: could not read",
+)
+
+
+def _private_repo_hint(message: str) -> str | None:
+    """Если RuntimeError — это провал clone приватного репо по правам, вернуть
+    человекочитаемую подсказку; иначе None (оставить сырой текст).
+
+    Живой кейс: навык опубликован из приватного GitHub-репо, но бэкенд не отдал
+    контент (Skillery App не установлен на репо → нет bundle) → CLI фолбэком
+    клонирует репозиторий напрямую и упирается в 401 без credentials.
+    """
+    low = message.lower()
+    if "clone" not in low and "git" not in low:
+        return None
+    # GitHub прячет приватный репо за 404 «repository '<url>' not found» —
+    # ловим составной сигнатурой (не голым «not found», чтобы не хватать
+    # generic-ошибки вроде «repo not found»).
+    repo_missing = "repositor" in low and "not found" in low
+    if not repo_missing and not any(m in low for m in _CLONE_AUTH_MARKERS):
+        return None
+    return (
+        "У хаба нет доступа к исходному репозиторию навыка, поэтому его файлы не\n"
+        "удалось получить. Если репозиторий приватный и принадлежит вам:\n"
+        "  • для GitHub — установите Skillery GitHub App на этот репозиторий;\n"
+        "  • для GitLab — добавьте токен доступа к навыку в настройках навыка;\n"
+        "затем опубликуйте навык заново (после синхронизации хаб сам отдаст файлы).\n"
+        "Публичные репозитории скачиваются без дополнительной настройки."
+    )
 
 
 def _strip_invite_url(value: str) -> str:
@@ -2558,8 +2605,32 @@ def cmd_update(
                 # совпала (slug-less skill хранится под id).
                 meta_slug = (meta or {}).get("slug")
                 meta_skill_id = (meta or {}).get("skill_id")
-                bundle = await client.install_bundle(ref, channel=channel)
                 scope_label = "project" if proj else "global"
+                # Устойчивость: навык может быть НЕ из хаба (локальный/ручной —
+                # bitrix24, mangoproxy, *-local). Тогда install_bundle бросает
+                # ApiError (404 «не найден») — ловим ПОШТУЧНО и пропускаем этот
+                # навык, не роняя весь `update` (раньше первый не-хабовый навык
+                # валил обновление всех остальных).
+                try:
+                    bundle = await client.install_bundle(ref, channel=channel)
+                except ApiError as e:
+                    results.append(
+                        {
+                            "slug": meta_slug,
+                            "skill_id": meta_skill_id,
+                            "ref": ref,
+                            "scope": scope_label,
+                            "project": str(proj) if proj else None,
+                            "from": current_version,
+                            "to": current_version,
+                            "updated": False,
+                            "skipped": True,
+                            "skip_reason": "not_in_hub"
+                            if e.status_code == 404
+                            else "hub_error",
+                        }
+                    )
+                    continue
                 # Гейт как в _maybe_auto_update: обновляем ТОЛЬКО если бандл
                 # строго новее (баг B8 — раньше `== ` пропускал лишь равенство,
                 # т.е. downgrade на младшую версию проходил в install).
