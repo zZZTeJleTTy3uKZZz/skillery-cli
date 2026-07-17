@@ -99,12 +99,23 @@ def _build_runner(
             if not access:
                 return
             # Lazy-import: избегаем циклической зависимости __main__ ↔ daemon.
-            from skillery_cli.__main__ import _reconcile_hub_installs
+            from skillery_cli.__main__ import (
+                _auto_update_hub_installs,
+                _reconcile_hub_installs,
+            )
             from skillery_cli.core.agents import get_target
 
             target = get_target(cfg.agent)
+            # 1) device-sync: «нажал Установить в вебе → демон скачал» (набор
+            #    установленного между устройствами по installed_version).
             await _reconcile_hub_installs(
                 cfg, access, channel="published", agent_target=target,
+            )
+            # 2) auto-update: поднять установленные хаб-навыки до latest published
+            #    хаба (device-sync выше синхронизирует лишь НАБОР по записанной в
+            #    вебе версии, а не до latest). Гейтится cfg.auto_update + cooldown.
+            await _auto_update_hub_installs(
+                cfg, access, agent_target=target, channel="published",
             )
 
         reconcile = _reconcile

@@ -2311,6 +2311,116 @@ async def _reconcile_hub_installs(
     return report
 
 
+async def _auto_update_hub_installs(
+    cfg: ClientConfig,
+    access: str,
+    *,
+    agent_target,  # IAgentTarget
+    channel: str = "published",
+) -> dict[str, list]:
+    """Фоново поднять установленные ХАБ-навыки до latest published версии хаба.
+
+    Отличие от :func:`_reconcile_hub_installs` (device-sync НАБОРА между
+    устройствами — целевая версия там = ``installed_version`` из ``/me/installs``,
+    т.е. то, что записано в вебе, а НЕ latest хаба): здесь целевая версия —
+    ФАКТИЧЕСКИЙ latest published хаба (``install_bundle(ref,
+    channel="published")``). Демон вызывает ОБА прохода: сначала device-sync,
+    потом это авто-поднятие — поэтому новее опубликованная версия поднимается
+    сама, а не «зависает» на записанной в вебе.
+
+    Гейты:
+    - ``cfg.auto_update`` (дефолт True) — off ⇒ no-op (device-sync прежний, до
+      latest не поднимаем);
+    - cooldown ``auto_update_cooldown_min`` — общий таймстамп
+      ``last_auto_update_at`` с :func:`_maybe_auto_update` (foreground-путь),
+      чтобы фон и команды не дёргали bump чаще раза в N минут.
+
+    Только ``source == "hub"`` навыки локального стора; git-url/local-path
+    пропускаются (их latest в хабе нет). Best-effort per-skill: сбой одного
+    (``install_bundle`` 404 = снят/не-хаб, сетевой сбой, падение установки) не
+    валит остальные и не роняет демон. Не даунгрейдит (строго :func:`_is_newer`).
+    Устанавливает scope=global (как ``skillery install`` без ``--project``).
+
+    Возвращает report ``{updated, skipped, failed}`` (списки ref).
+    """
+    report: dict[str, list] = {"updated": [], "skipped": [], "failed": []}
+    if not cfg.auto_update:
+        # Автообновление выключено пользователем — оставляем device-sync как есть,
+        # до latest ничего не поднимаем.
+        return report
+    # Cooldown (общий с _maybe_auto_update): не чаще раза в N минут.
+    cooldown = timedelta(minutes=cfg.auto_update_cooldown_min)
+    if cfg.last_auto_update_at:
+        try:
+            last = datetime.fromisoformat(cfg.last_auto_update_at)
+            if datetime.now(UTC) - last < cooldown:
+                return report
+        except ValueError:
+            pass
+
+    store_root = cfg.effective_store_dir()
+    hub_skills = [
+        s for s in _collect_store_skills(store_root) if s.get("source") == "hub"
+    ]
+    if not hub_skills:
+        # Двигаем cooldown даже впустую — иначе фон бил бы стор каждый reconcile.
+        _touch_auto_update_cooldown(cfg)
+        return report
+
+    # Сначала собираем latest-бандлы (сеть) под одним клиентом, потом ставим —
+    # так HttpClient закрывается до потенциально долгих git-операций install.
+    client = HubClient(
+        base_url=cfg.base_url, access_token=access,
+        on_token_refresh=_make_refresh_callback(cfg),
+    )
+    candidates: list[tuple[str, str, dict]] = []  # (ref, local_version, bundle)
+    try:
+        for s in hub_skills:
+            ref = s["ref"]
+            try:
+                bundle = await client.install_bundle(ref, channel=channel)
+            except Exception:
+                # 404 (снят/не-хаб) / сетевой сбой — мягкий пропуск, не валим фон.
+                report["skipped"].append(ref)
+                continue
+            candidates.append((ref, s.get("version") or "0.0.0", bundle))
+    finally:
+        await client.close()
+
+    for ref, local_version, bundle in candidates:
+        remote_version = bundle.get("version") or ""
+        # bundle без repo_url = stub-источник — обновлять нечем (тот же инвариант,
+        # что в _maybe_auto_update: такой «апдейт» затирал бы контент stub'ом).
+        if not bundle.get("repo_url"):
+            report["skipped"].append(ref)
+            continue
+        # Не даунгрейд: ставим ТОЛЬКО если latest строго новее локального.
+        if not _is_newer(remote_version, local_version):
+            report["skipped"].append(ref)
+            continue
+        try:
+            await _install_chain(
+                cfg, access, slug=str(ref), channel=channel, scope="global",
+                project_path=None, force=False, agent_target=agent_target,
+            )
+            report["updated"].append(ref)
+        except Exception:
+            # Падение установки одного навыка (git/ФС) не трогает остальные.
+            report["failed"].append(ref)
+
+    _touch_auto_update_cooldown(cfg)
+    return report
+
+
+def _touch_auto_update_cooldown(cfg: ClientConfig) -> None:
+    """Подвинуть общий cooldown-таймстамп авто-обновления (best-effort save)."""
+    cfg.last_auto_update_at = datetime.now(UTC).isoformat()
+    try:
+        cfg.save()
+    except Exception:
+        pass
+
+
 def cmd_pull(
     agent: Optional[str] = typer.Option(None),
     channel: str = typer.Option("published"),
