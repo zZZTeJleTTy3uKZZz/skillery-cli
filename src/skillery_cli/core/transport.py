@@ -442,6 +442,15 @@ class HubClient:
             body["client_device_id"] = client_device_id
         return await self._request("POST", "/me/devices", json=body)
 
+    async def list_devices(self) -> list[dict[str, Any]]:
+        """GET /me/devices — список зарегистрированных устройств пользователя.
+
+        Сверено с ``routes/me.py::list_my_devices``: требуется auth (Bearer),
+        200. Возвращает список устройств с полями: id, client_device_id,
+        device_name, platform, is_current, last_seen_at, session_active и т.д.
+        """
+        return await self._request("GET", "/me/devices")
+
     async def set_password(self, *, new_password: str) -> None:
         """POST /me/password — установка/смена пароля для текущего user'а."""
         await self._request(

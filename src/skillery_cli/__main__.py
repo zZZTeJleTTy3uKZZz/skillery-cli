@@ -1017,6 +1017,9 @@ def cmd_logout() -> None:
 
 def cmd_whoami() -> None:
     """Кто я и что доступно."""
+    import socket
+    from skillery_cli.core.identity import device_uid
+
     cfg = ClientConfig.load()
     _maybe_notify_cli_update(cfg)
     if not cfg.user_email:
@@ -1033,12 +1036,15 @@ def cmd_whoami() -> None:
         "permissions": cfg.permissions,
         "auto_update": cfg.auto_update,
         "output_format": cfg.output_format,
+        "device_id": device_uid(),
+        "hostname": (socket.gethostname() or "").strip()[:120] or "cli",
     }
 
     def _render(p: dict) -> None:
         console.print(f"[bold]{p['user_email']}[/]")
         console.print(f"  Backend:    {p['backend']}")
         console.print(f"  Agent:      {p['agent']}")
+        console.print(f"  Device:     {p['hostname']} (id:{p['device_id'][:8]}...)")
         # «Роли» = реальные платформенные роли. «skill-creator» — НЕ роль, а
         # способность (право skill.publish/skill.create): она видна в блоке
         # Permissions ниже, поэтому в роли её больше не пишем (иначе устаревший
@@ -1056,6 +1062,70 @@ def cmd_whoami() -> None:
         )
         console.print(f"  Auto-update: {'on' if p['auto_update'] else 'off'}")
         console.print(f"  Output:      {p['output_format']}")
+
+    emit_data(payload, text_renderer=_render)
+
+
+def cmd_devices() -> None:
+    """Список зарегистрированных устройств пользователя."""
+    from skillery_cli.core.identity import device_uid
+
+    cfg = ClientConfig.load()
+    _maybe_notify_cli_update(cfg)
+    if not cfg.user_email:
+        emit_error("NOT_AUTHENTICATED", "Не авторизован")
+        raise typer.Exit(1)
+
+    access, _refresh = load_tokens(cfg.user_email or "")
+    if not access:
+        emit_error("NO_TOKEN", "Токен не найден. Сделайте login заново.")
+        raise typer.Exit(1)
+
+    async def _do() -> list[dict[str, Any]]:
+        client = HubClient(
+            base_url=cfg.base_url,
+            access_token=access,
+            on_token_refresh=_make_refresh_callback(cfg),
+        )
+        try:
+            return await client.list_devices()
+        finally:
+            await client.close()
+
+    devices = asyncio.run(_do())
+    current_device_id = device_uid()
+
+    # Отсортировать: текущее устройство первым, затем по last_seen_at (новые сверху)
+    devices_sorted = sorted(
+        devices,
+        key=lambda d: (
+            not (d.get("client_device_id") == current_device_id or d.get("is_current")),
+            -(
+                int(d.get("last_seen_at", 0))
+                if isinstance(d.get("last_seen_at"), int)
+                else 0
+            ),
+        ),
+    )
+
+    payload = {"devices": devices_sorted, "current_device_id": current_device_id}
+
+    def _render(p: dict) -> None:
+        current_id = p["current_device_id"]
+        for dev in p["devices"]:
+            is_current = (
+                dev.get("client_device_id") == current_id or dev.get("is_current")
+            )
+            marker = "* " if is_current else "  "
+            name = dev.get("device_name", "Unknown")
+            platform = dev.get("platform", "unknown")
+            last_seen = dev.get("last_seen_at", "—")
+            session_active = dev.get("session_active", False)
+            status_mark = "(this PC)" if is_current else ""
+            session_status = " · session active" if session_active else ""
+            console.print(
+                f"{marker}{name} [{platform}] · {last_seen}{session_status} {status_mark}"
+            )
 
     emit_data(payload, text_renderer=_render)
 
@@ -3740,6 +3810,7 @@ def build_app() -> typer.Typer:
     _doctor_mod.register(app)
     app.command(name="logout")(cmd_logout)
     app.command(name="whoami")(cmd_whoami)
+    app.command(name="devices")(cmd_devices)
     app.command(name="config")(cmd_config)
     app.command(name="web")(cmd_web)
     # upgrade — обновить сам CLI (skillery-cli) с PyPI (uv tool / pipx / pip).
