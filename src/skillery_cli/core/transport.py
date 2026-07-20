@@ -678,6 +678,25 @@ class HubClient:
             params={"channel": channel, "wait": "true"},
         )
 
+    # --- auto-sync: git-webhook навыка ---
+    async def register_skill_webhook(self, slug: str) -> dict[str, Any]:
+        """POST /skills/{slug}/webhook — включить автосинк навыка.
+
+        Ответ: ``{mode: auto|manual, provider, url, secret?}``. ``secret``
+        приходит ТОЛЬКО в manual-режиме (в auto он уже у провайдера) и наружу
+        из CLI не печатается — см. ``commands/webhook.py``.
+        """
+        return await self._request("POST", f"/skills/{slug}/webhook")
+
+    async def get_skill_webhook(self, slug: str) -> dict[str, Any]:
+        """GET /skills/{slug}/webhook — ``{status: registered|manual|none,
+        provider, url}``. Секрет бэкенд не отдаёт никогда."""
+        return await self._request("GET", f"/skills/{slug}/webhook")
+
+    async def delete_skill_webhook(self, slug: str) -> None:
+        """DELETE /skills/{slug}/webhook — отозвать (204, идемпотентно)."""
+        await self._request("DELETE", f"/skills/{slug}/webhook")
+
     async def yank_skill_version(
         self, *, slug: str, semver: str, yank: bool = True
     ) -> None:

@@ -4139,6 +4139,21 @@ def build_app() -> typer.Typer:
     gated(app, permission="skill.publish", has_permission=cfg.has_permission,
           name="publish")(cmd_publish)
 
+    # --- auto-sync: webhook навыка ---
+    # `skillery webhook register|status|revoke` — включение автообновлений из
+    # git. Видимость — у того, кто может публиковать навык или им управлять
+    # (RBAC ручек на бэке: владелец навыка / skill.manage / hub.admin;
+    # финально права режет backend).
+    from skillery_cli.commands import webhook as _webhook_mod
+
+    _webhook_mod.register(
+        app,
+        can_manage=(
+            cfg.has_permission("skill.publish")
+            or cfg.has_permission("skill.manage")
+        ),
+    )
+
     # --- P1 member ---
     # Участники + каталог ролей (C3): members/roles — любой залогиненный
     # (backend сам сужает выдачу: member без admin-прав видит только себя),
