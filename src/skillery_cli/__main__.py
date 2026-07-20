@@ -1536,6 +1536,80 @@ def _has_skill_md(skill_dir: Path) -> bool:
     return md.is_file()
 
 
+_TOOLING_KEYS = ("kind", "cli", "mcp", "runtime_dependencies", "onboarding")
+
+
+def _merge_tooling_from_store(manifest: dict | None, store_dir) -> dict:
+    """Дополнить манифест tooling-полями из ``_skill_meta.toml`` в сторе.
+
+    #889: ЕДИНЫЙ источник истины для tooling — декларация в САМОМ навыке
+    (``_skill_meta.toml`` рядом с SKILL.md), а не только то, что доехало в
+    манифесте бандла хаба. У навыка с подпапкой в репо (``skill_path``, напр.
+    ``skills/atlas``) бандл мог прийти БЕЗ cli/runtime_dependencies — тогда CLI
+    навыка не ставился. Так хаб-путь и локальный (``--path``/``--from-git``)
+    сходятся на одном источнике.
+
+    Значения из декларации навыка имеют приоритет (они точнее). Ошибка чтения —
+    не фатальна: возвращаем исходный манифест.
+    """
+    out = dict(manifest or {})
+    if store_dir is None:
+        return out
+    try:
+        from skillery_cli.core.manifest_builder import _read_meta_toml
+
+        meta = _read_meta_toml(store_dir) or {}
+    except Exception:  # noqa: BLE001 — декларация опциональна
+        return out
+    for key in _TOOLING_KEYS:
+        if meta.get(key):
+            out[key] = meta[key]
+    return out
+
+
+def _emit_onboarding(manifest: dict | None, *, slug: str) -> None:
+    """Онбординг «что делать дальше» ПОСЛЕ установки навыка (#889).
+
+    Источник — декларация навыка в ``_skill_meta.toml``::
+
+        [onboarding]
+        summary = "Atlas - локальный PM портфеля проектов и задач."
+        next_steps = [
+          "atlas setup         # правила агента + SessionStart-хук",
+          "atlas task triage   # что в работе",
+        ]
+        docs = "https://github.com/<owner>/<repo>#readme"
+
+    Цель — чтобы ИИ-агент, поставивший навык, САМ довёл настройку до конца.
+
+    Контракт вывода: ``emit_message`` — в text-режиме человекочитаемый список,
+    в json-режиме структурная строка в **stderr** (``next_steps`` массивом), так
+    что stdout с основным payload'ом не засоряется и парсинг агентом не ломается.
+    """
+    ob = (manifest or {}).get("onboarding")
+    if not isinstance(ob, dict):
+        return
+    steps = [str(s) for s in (ob.get("next_steps") or []) if str(s).strip()]
+    summary = str(ob.get("summary") or "").strip()
+    docs = str(ob.get("docs") or "").strip()
+    if not (steps or summary or docs):
+        return
+    lines = [f"Навык «{slug}» установлен. Что дальше:"]
+    if summary:
+        lines.append(f"  {summary}")
+    for idx, step in enumerate(steps, 1):
+        lines.append(f"  {idx}. {step}")
+    if docs:
+        lines.append(f"  Документация: {docs}")
+    emit_message(
+        "\n".join(lines),
+        level="info",
+        skill=slug,
+        next_steps=steps,
+        docs=docs or None,
+    )
+
+
 def _apply_tooling(result, manifest: dict | None, *, agent_target, project) -> None:
     """поставить CLI/MCP/runtime-deps навыка (если он tooling). Graceful.
 
@@ -1691,20 +1765,13 @@ async def _install_local_source(
             manifest=manifest,
             project=project_path, force=force,
         )
-    # tooling-навык (локальный источник) → CLI/MCP/runtime-deps.
-    # git-url источник: cli/mcp лежат в клонированном _skill_meta.toml стора —
-    # читаем оттуда (в локальном manifest их нет). path-источник: уже в manifest.
-    tooling_manifest = dict(manifest)
-    if source["kind"] == "git" and result.store_dir is not None:
-        from skillery_cli.core.manifest_builder import _read_meta_toml
-
-        cloned_meta = _read_meta_toml(result.store_dir)
-        for key in ("kind", "cli", "mcp", "runtime_dependencies"):
-            if cloned_meta.get(key):
-                tooling_manifest[key] = cloned_meta[key]
+    # tooling-навык (локальный источник) → CLI/MCP/runtime-deps. Декларация
+    # навыка (_skill_meta.toml в сторе) — источник истины (#889, единый хелпер).
+    tooling_manifest = _merge_tooling_from_store(manifest, result.store_dir)
     _apply_tooling(
         result, tooling_manifest, agent_target=agent_target, project=project_path
     )
+    _emit_onboarding(tooling_manifest, slug=slug)
 
     # Источник установки для аналитики (ось «source»): path → local-path,
     # git → git-url (зеркалит installer'ский meta.source).
@@ -1889,10 +1956,19 @@ async def _install_chain(
             installed_chain.append(entry)
             if not result.skipped:
                 # tooling-навык → CLI в PATH-стор + MCP в конфиг агента +
-                # runtime-deps. Манифест — из bundle (cli/mcp/runtime_deps).
+                # runtime-deps. #889: манифест бандла ДОПОЛНЯЕМ декларацией из
+                # самого навыка (_skill_meta.toml в сторе) — у навыка с подпапкой
+                # (skill_path) бандл мог прийти без cli/runtime_dependencies.
+                _tooling_manifest = _merge_tooling_from_store(
+                    dep_bundle.get("manifest"), result.store_dir
+                )
                 _apply_tooling(
-                    result, dep_bundle.get("manifest"),
+                    result, _tooling_manifest,
                     agent_target=agent_target, project=project_path,
+                )
+                _emit_onboarding(
+                    _tooling_manifest,
+                    slug=dep_slug or (str(dep_id) if dep_id is not None else ""),
                 )
                 ref = dep_slug or (str(dep_id) if dep_id is not None else "")
                 # Источник = hub (бэкенд-bundle + git clone).
