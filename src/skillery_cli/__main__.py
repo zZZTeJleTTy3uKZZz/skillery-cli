@@ -2615,8 +2615,44 @@ async def _auto_update_hub_installs(
             # Падение установки одного навыка (git/ФС) не трогает остальные.
             report["failed"].append(ref)
 
+    # #912: автообновление обязано РАПОРТОВАТЬ факт. Иначе веб продолжал бы
+    # показывать старую версию (состояние устройства обновляется только
+    # рапортом), и «навык обновился сам» выглядело бы как «ничего не менялось».
+    if report["updated"]:
+        await _report_auto_updates(cfg, access, report["updated"])
+
     _touch_auto_update_cooldown(cfg)
     return report
+
+
+async def _report_auto_updates(
+    cfg: ClientConfig, access: str, refs: list
+) -> None:
+    """Сообщить хабу версии, которые автообновление реально положило в стор.
+
+    Версию берём ИЗ СТОРА (а не из бандла) — рапортуем то, что лежит на диске.
+    Best-effort: старый бэкенд без эндпоинта или сетевой сбой не должны валить
+    фоновой проход.
+    """
+    store_root = cfg.effective_store_dir()
+    client = HubClient(
+        base_url=cfg.base_url, access_token=access,
+        on_token_refresh=_make_refresh_callback(cfg),
+    )
+    try:
+        for ref in refs:
+            try:
+                meta = read_meta(store_root / str(ref)) or {}
+                version = meta.get("version")
+                if not version:
+                    continue
+                await client.report_device_apply(
+                    slug=str(ref), ok=True, version=str(version)
+                )
+            except Exception:
+                continue
+    finally:
+        await client.close()
 
 
 def _touch_auto_update_cooldown(cfg: ClientConfig) -> None:
