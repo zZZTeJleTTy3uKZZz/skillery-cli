@@ -45,7 +45,9 @@ console = Console()
 
 # Best-effort reconcile-инсталлов в демоне выполняется НЕ каждый event-цикл, а
 # не чаще раза в N секунд — чтобы не дёргать /me/installs + git каждые 60с.
-_RECONCILE_MIN_INTERVAL_SECONDS = 300.0
+# #905: опрос очереди устройства должен быть отзывчивым — нажал в вебе и через
+# ~минуту применилось. Раньше 300с: web-install демон замечал только через 5 мин.
+_RECONCILE_MIN_INTERVAL_SECONDS = 60.0
 
 
 def _build_runner(
@@ -101,11 +103,18 @@ def _build_runner(
             # Lazy-import: избегаем циклической зависимости __main__ ↔ daemon.
             from skillery_cli.__main__ import (
                 _auto_update_hub_installs,
+                _reconcile_device_queue,
                 _reconcile_hub_installs,
             )
             from skillery_cli.core.agents import get_target
 
             target = get_target(cfg.agent)
+            # 0) #905: АДРЕСНАЯ очередь этого устройства (веб выбрал устройства).
+            #    Применяем и РАПОРТУЕМ факт — сервер узнаёт, что реально встало.
+            #    Идёт первым: это явные задания пользователя.
+            await _reconcile_device_queue(
+                cfg, access, channel="published", agent_target=target,
+            )
             # 1) device-sync: «нажал Установить в вебе → демон скачал» (набор
             #    установленного между устройствами по installed_version).
             await _reconcile_hub_installs(

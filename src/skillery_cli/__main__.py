@@ -2457,6 +2457,67 @@ async def _reconcile_hub_installs(
     return report
 
 
+async def _reconcile_device_queue(
+    cfg: ClientConfig,
+    access: str,
+    *,
+    channel: str,
+    agent_target,  # IAgentTarget
+) -> dict[str, list]:
+    """#905: забрать очередь ЭТОГО устройства, применить и ОТРАПОРТОВАТЬ факт.
+
+    Отличие от :func:`_reconcile_hub_installs`: сервер адресует задания
+    конкретному устройству (``desired_version`` на ``(user, device, skill)``), а
+    мы обязаны сообщить РЕЗУЛЬТАТ. Раньше рапорта не было вовсе — упавшая
+    установка выглядела успешной, и веб не знал, что реально стоит на машине.
+
+    Успех рапортуем версией, которая РЕАЛЬНО легла в стор (перечитываем мету),
+    а не той, что просили — иначе снова получим намерение вместо факта.
+    """
+    store_root = cfg.effective_store_dir()
+    report: dict[str, list] = {"applied": [], "failed": [], "skipped": []}
+    client = HubClient(
+        base_url=cfg.base_url, access_token=access,
+        on_token_refresh=_make_refresh_callback(cfg),
+    )
+    try:
+        try:
+            queue = await client.fetch_device_queue()
+        except Exception:
+            # Старый backend / нет устройства в UA — молча уступаем legacy-пути.
+            return report
+
+        for item in queue:
+            slug = item.get("slug")
+            skill_id = item.get("skill_id")
+            ref = slug or (str(skill_id) if skill_id is not None else None)
+            desired = str(item.get("desired_version") or "")
+            if not ref:
+                continue
+            try:
+                await _install_chain(
+                    cfg, access, slug=str(ref), channel=channel,
+                    scope="global", project_path=None, force=False,
+                    agent_target=agent_target,
+                )
+                applied = (read_meta(store_root / ref) or {}).get("version")
+                await client.report_device_apply(
+                    slug=str(ref), ok=True, version=str(applied or desired)
+                )
+                report["applied"].append(ref)
+            except Exception as exc:  # noqa: BLE001 — провал ОБЯЗАН быть виден
+                try:
+                    await client.report_device_apply(
+                        slug=str(ref), ok=False, error=str(exc)
+                    )
+                except Exception:
+                    pass  # сеть упала — сервер оставит задание в очереди
+                report["failed"].append(ref)
+    finally:
+        await client.close()
+    return report
+
+
 async def _auto_update_hub_installs(
     cfg: ClientConfig,
     access: str,

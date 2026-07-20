@@ -442,6 +442,36 @@ class HubClient:
             body["client_device_id"] = client_device_id
         return await self._request("POST", "/me/devices", json=body)
 
+    async def fetch_device_queue(self) -> list[dict[str, Any]]:
+        """GET /me/device-queue — задания ЭТОГО устройства (#905).
+
+        Устройство backend определяет по ``id:{cdid}`` в User-Agent, поэтому
+        отдельный параметр не нужен. Возвращает список
+        ``{skill_id, slug, desired_version, applied_version, status}``.
+        """
+        data = await self._request("GET", "/me/device-queue")
+        return list(data.get("items", []) if isinstance(data, dict) else [])
+
+    async def report_device_apply(
+        self,
+        *,
+        slug: str,
+        ok: bool,
+        version: str | None = None,
+        error: str | None = None,
+    ) -> dict[str, Any]:
+        """POST /me/device-queue/report — рапорт о ФАКТЕ применения (#905).
+
+        Успех обязан нести версию, которая реально легла на диск; провал —
+        текст ошибки (задание останется в очереди и повторится).
+        """
+        body: dict[str, Any] = {"ok": bool(ok), "slug": slug}
+        if version:
+            body["version"] = version
+        if error:
+            body["error"] = error[:500]
+        return await self._request("POST", "/me/device-queue/report", json=body)
+
     async def list_devices(self) -> list[dict[str, Any]]:
         """GET /me/devices — список зарегистрированных устройств пользователя.
 
