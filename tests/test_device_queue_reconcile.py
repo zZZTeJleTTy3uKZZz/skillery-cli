@@ -19,7 +19,9 @@ class _FakeClient:
         self.reports: list[dict] = []
         self.closed = False
 
-    async def fetch_device_queue(self) -> list[dict]:
+    async def fetch_device_queue(self, **kw) -> list[dict]:  # type: ignore[no-untyped-def]
+        # #919: демон шлёт сюда состояние автообновления машины.
+        self.queue_kwargs = kw
         return list(self._queue)
 
     async def report_device_apply(self, **kw) -> dict:  # type: ignore[no-untyped-def]
@@ -101,7 +103,7 @@ class TestReconcileDeviceQueue:
         """Нет эндпоинта/устройства → уступаем legacy-пути, не падаем."""
 
         class _Old(_FakeClient):
-            async def fetch_device_queue(self):  # type: ignore[no-untyped-def]
+            async def fetch_device_queue(self, **kw):  # type: ignore[no-untyped-def]
                 raise RuntimeError("404")
 
         fake = _Old([])
@@ -110,3 +112,22 @@ class TestReconcileDeviceQueue:
             cfg, "tok", channel="published", agent_target=object()
         )
         assert rep["applied"] == [] and rep["failed"] == []
+
+
+class TestAutoUpdateStateReported:
+    """#919: демон сообщает хабу, включено ли автообновление на этой машине."""
+
+    async def test_queue_poll_carries_auto_update_flag(
+        self, cfg, monkeypatch
+    ) -> None:
+        fake = _FakeClient([])
+        _install(fake, monkeypatch)
+        cfg.auto_update = False
+
+        await m._reconcile_device_queue(
+            cfg, "tok", channel="published", agent_target=object()
+        )
+
+        assert fake.queue_kwargs == {"auto_update": False}, (
+            "веб не узнает про выключенное автообновление на устройстве"
+        )

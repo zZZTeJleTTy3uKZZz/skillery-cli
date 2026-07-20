@@ -442,14 +442,23 @@ class HubClient:
             body["client_device_id"] = client_device_id
         return await self._request("POST", "/me/devices", json=body)
 
-    async def fetch_device_queue(self) -> list[dict[str, Any]]:
+    async def fetch_device_queue(
+        self, *, auto_update: bool | None = None
+    ) -> list[dict[str, Any]]:
         """GET /me/device-queue — задания ЭТОГО устройства (#905).
 
         Устройство backend определяет по ``id:{cdid}`` в User-Agent, поэтому
         отдельный параметр не нужен. Возвращает список
         ``{skill_id, slug, desired_version, applied_version, status}``.
+
+        #919: заодно сообщаем, включено ли автообновление НА ЭТОЙ машине —
+        иначе веб не может показать это состояние, а пользователь не понимает,
+        почему на одном устройстве версия поднялась сама, а на другом нет.
         """
-        data = await self._request("GET", "/me/device-queue")
+        path = "/me/device-queue"
+        if auto_update is not None:
+            path += f"?auto_update={'true' if auto_update else 'false'}"
+        data = await self._request("GET", path)
         return list(data.get("items", []) if isinstance(data, dict) else [])
 
     async def report_device_apply(

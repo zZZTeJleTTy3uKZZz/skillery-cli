@@ -2487,7 +2487,7 @@ async def _reconcile_device_queue(
     )
     try:
         try:
-            queue = await client.fetch_device_queue()
+            queue = await client.fetch_device_queue(auto_update=cfg.auto_update)
         except Exception:
             # Старый backend / нет устройства в UA — молча уступаем legacy-пути.
             return report
