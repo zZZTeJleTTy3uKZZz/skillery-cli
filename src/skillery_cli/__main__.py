@@ -1117,14 +1117,19 @@ def cmd_devices() -> None:
                 dev.get("client_device_id") == current_id or dev.get("is_current")
             )
             marker = "* " if is_current else "  "
-            name = dev.get("device_name", "Unknown")
+            # Бэкенд отдаёт `name` (device_name — легаси-имя поля): без этого
+            # fallback'а весь список назывался «Unknown».
+            name = dev.get("name") or dev.get("device_name") or "Unknown"
             platform = dev.get("platform", "unknown")
             last_seen = dev.get("last_seen_at", "—")
             session_active = dev.get("session_active", False)
             status_mark = "(this PC)" if is_current else ""
-            session_status = " · session active" if session_active else ""
+            session_status = " · сессия активна" if session_active else ""
+            # #906: онлайн = устройство недавно опрашивало очередь заданий.
+            online_status = " · на связи" if dev.get("online") else " · офлайн"
             console.print(
-                f"{marker}{name} [{platform}] · {last_seen}{session_status} {status_mark}"
+                f"{marker}{name} [{platform}]{online_status}{session_status}"
+                f" · {last_seen} {status_mark}"
             )
 
     emit_data(payload, text_renderer=_render)

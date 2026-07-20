@@ -477,9 +477,16 @@ class HubClient:
 
         Сверено с ``routes/me.py::list_my_devices``: требуется auth (Bearer),
         200. Возвращает список устройств с полями: id, client_device_id,
-        device_name, platform, is_current, last_seen_at, session_active и т.д.
+        device_name, platform, online, is_current, last_seen_at, session_active.
+
+        Ответ обёрнут (``{"devices": [...]}``) — разворачиваем здесь, иначе
+        вызывающий код итерирует по КЛЮЧАМ словаря (``skillery devices`` падал
+        с «'str' object has no attribute 'get'»). Голый список тоже принимаем.
         """
-        return await self._request("GET", "/me/devices")
+        data = await self._request("GET", "/me/devices")
+        if isinstance(data, dict):
+            return list(data.get("devices") or [])
+        return list(data or [])
 
     async def set_password(self, *, new_password: str) -> None:
         """POST /me/password — установка/смена пароля для текущего user'а."""
