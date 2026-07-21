@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import os
 import subprocess
 import sys
@@ -21,6 +22,11 @@ from rich.console import Console
 
 from skillery_cli.commands import _common
 from skillery_cli.config import ClientConfig
+from skillery_cli.daemon.single_instance import (
+    acquire_daemon_lock,
+    find_daemon_pids,
+    is_daemon_locked,
+)
 from skillery_cli.daemon.autostart import (
     detect_platform,
     install_for_platform,
@@ -162,12 +168,29 @@ def cmd_daemon_run(
 
     Блокирует процесс пока не получит SIGTERM. Для start/stop — см. соседние
     команды.
+
+    Единственность обеспечивает ЯДЕРНЫЙ лок, а не PID-файл: сколько бы
+    источников ни попыталось поднять демона одновременно (автозапуск,
+    самолечение при команде, ручной `daemon start`), выживет ровно один. Раньше
+    между «проверили PID» и «запустили» было окно гонки — демоны плодились.
     """
-    runner = _build_runner(interval_seconds=interval)
+    lock = acquire_daemon_lock()
+    if not lock.acquired:
+        emit_data(
+            {"event": "already_running"},
+            text_renderer=lambda _: console.print(
+                "[yellow]Демон уже запущен — второй экземпляр не нужен[/]"
+            ),
+        )
+        return
     try:
-        asyncio.run(runner.run_forever())
-    except KeyboardInterrupt:
-        emit_message("daemon stopped (KeyboardInterrupt)", level="warn")
+        runner = _build_runner(interval_seconds=interval)
+        try:
+            asyncio.run(runner.run_forever())
+        except KeyboardInterrupt:
+            emit_message("daemon stopped (KeyboardInterrupt)", level="warn")
+    finally:
+        lock.release()
 
 
 def _spawn_detached_daemon(interval: float) -> int:
@@ -250,11 +273,25 @@ def ensure_daemon_running(interval: float = 60.0) -> dict[str, object]:
     Возвращает ``{"event": already_running|started|failed, "pid": …}``.
     """
     try:
+        # Источник правды — ядерный лок: PID-файл врёт после жёсткого kill'а и
+        # при переиспользовании PID системой, а лок отпускается вместе с
+        # процессом. Без этого самолечение плодило вторые копии.
+        if is_daemon_locked():
+            return {"event": "already_running", "pid": read_running_pid()}
         existing = read_running_pid()
         if existing is not None and is_process_alive(existing):
             return {"event": "already_running", "pid": existing}
         pid = _spawn_detached_daemon(interval)
         if pid > 0:
+            # Ждём, пока дочерний процесс ВОЗЬМЁТ лок. Без этого остаётся окно
+            # гонки: спавн асинхронный, лок берётся уже внутри демона, и
+            # параллельный вызов успевал увидеть «свободно» и поднять вторую
+            # копию. Теперь второй вызов дождётся занятого лока и не станет
+            # плодить процесс.
+            for _ in range(50):  # до ~5с
+                if is_daemon_locked():
+                    break
+                time.sleep(0.1)
             return {"event": "started", "pid": pid}
         return {"event": "failed", "pid": None}
     except Exception as exc:  # демон — не повод валить login
@@ -268,7 +305,7 @@ def cmd_daemon_start(
 ) -> None:
     """Запустить daemon в background."""
     existing = read_running_pid()
-    if existing is not None and is_process_alive(existing):
+    if is_daemon_locked() or (existing is not None and is_process_alive(existing)):
         emit_data(
             {
                 "event": "already_running",
@@ -295,36 +332,47 @@ def cmd_daemon_start(
 
 
 def cmd_daemon_stop() -> None:
-    """Послать SIGTERM daemon'у по PID-файлу."""
-    pid = read_running_pid()
-    if pid is None:
-        emit_data(
-            {"event": "not_running"},
-            text_renderer=lambda _: console.print(
-                "[yellow]Daemon не запущен (PID-файл отсутствует)[/]"
-            ),
-        )
-        return
-    if not is_process_alive(pid):
-        emit_data(
-            {"event": "stale_pid", "pid": pid},
-            text_renderer=lambda p: console.print(
-                f"[yellow]PID-файл stale (pid={p['pid']} мёртв)[/]"
-            ),
-        )
-        # Очистим PID-файл
-        from contextlib import suppress
+    """Остановить демона — ВСЕ его экземпляры, а не только записанный в PID-файл.
 
+    До появления лока демоны могли расплодиться (автозапуск + самолечение +
+    ручной старт), и `stop` гасил лишь последнего: пользователь закрывал одно
+    окно, а остальные продолжали работать. Поэтому здесь честная зачистка:
+    PID-файл + поиск живых процессов демона по командной строке.
+    """
+    from contextlib import suppress
+
+    targets: list[int] = []
+    pid = read_running_pid()
+    if pid is not None and is_process_alive(pid):
+        targets.append(pid)
+    for extra in find_daemon_pids():
+        if extra not in targets:
+            targets.append(extra)
+
+    if not targets:
         with suppress(OSError):
             default_pid_path().unlink()
+        emit_data(
+            {"event": "not_running", "stopped": []},
+            text_renderer=lambda _: console.print("[yellow]Демон не запущен[/]"),
+        )
         return
-    ok = kill_process(pid)
+
+    stopped = [p for p in targets if kill_process(p)]
+    with suppress(OSError):
+        default_pid_path().unlink()
+
     emit_data(
-        {"event": "daemon_stopped" if ok else "kill_failed", "pid": pid},
-        text_renderer=lambda p: console.print(
-            f"[green]✓[/] SIGTERM → pid={p['pid']}"
-            if p["event"] == "daemon_stopped"
-            else f"[red]Не удалось убить pid={p['pid']}[/]"
+        {
+            "event": "daemon_stopped" if stopped else "kill_failed",
+            "stopped": stopped,
+            "found": targets,
+        },
+        text_renderer=lambda payload: console.print(
+            f"[green]✓[/] Остановлено экземпляров: {len(payload['stopped'])} "
+            f"(pid={', '.join(str(x) for x in payload['stopped'])})"
+            if payload["stopped"]
+            else f"[red]Не удалось остановить: {payload['found']}[/]"
         ),
     )
 
