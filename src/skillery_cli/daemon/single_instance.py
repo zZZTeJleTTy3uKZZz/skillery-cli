@@ -54,7 +54,8 @@ class DaemonLock:
             if sys.platform == "win32":
                 import ctypes
 
-                ctypes.windll.kernel32.CloseHandle(handle)  # type: ignore[attr-defined]
+                kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+                kernel32.CloseHandle(ctypes.c_void_p(handle))
             else:
                 import fcntl
 
@@ -85,12 +86,24 @@ def acquire_daemon_lock(
         try:
             import ctypes
 
-            kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+            # ВАЖНО: use_last_error=True + ctypes.get_last_error(). Через
+            # ctypes.windll.kernel32.GetLastError() код терялся: между
+            # CreateMutexW и GetLastError ctypes делает собственные Win32-вызовы
+            # (маршалинг), и last-error успевал обнулиться. ERROR_ALREADY_EXISTS
+            # не долетал — КАЖДЫЙ демон считал, что взял лок первым, и их
+            # выживало несколько. Теперь читаем ошибку сразу через ctypes,
+            # который сохраняет её на своей стороне.
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.CreateMutexW.restype = ctypes.c_void_p
+            kernel32.CreateMutexW.argtypes = [
+                ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p
+            ]
             handle = kernel32.CreateMutexW(None, True, mutex_name or _MUTEX_NAME)
+            last_error = ctypes.get_last_error()
             if not handle:
                 return DaemonLock(None, None)
-            if kernel32.GetLastError() == _ERROR_ALREADY_EXISTS:
-                kernel32.CloseHandle(handle)
+            if last_error == _ERROR_ALREADY_EXISTS:
+                kernel32.CloseHandle(ctypes.c_void_p(handle))
                 return DaemonLock(None, None)
             return DaemonLock(handle, None)
         except Exception:
