@@ -20,6 +20,11 @@ class _FakeInstaller:
         self.snapshot_archive_existed = Path(kw["archive_path"]).is_file()
         return object()
 
+    def install_from_path(self, **kw: Any):
+        self.calls.append("path")
+        self.local_src_existed = Path(kw["local_src"]).is_dir()
+        return object()
+
     def install(self, **kw: Any):
         self.calls.append("clone")
         return object()
@@ -73,18 +78,47 @@ async def test_falls_back_to_clone_when_no_snapshot() -> None:
 
 
 @pytest.mark.asyncio
-async def test_subdir_skill_skips_snapshot() -> None:
-    """Навык в подпапке (skill_path) → снапшот не годится (нет SKILL.md в корне
-    архива) → сразу clone, download_snapshot даже не зовётся."""
+async def test_subdir_skill_installs_from_snapshot_subdir(tmp_path) -> None:
+    """Навык в подпапке (skill_path) ТЕПЕРЬ тоже ставится из снапшота: CLI сам
+    извлекает подпапку и зовёт install_from_path. Это убирает git clone
+    приватного репо (и «Authentication failed», и мигающее окно git-bash)."""
+    import io
+    import tarfile
+
+    # реальный tar.gz репозитория с навыком в подпапке
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as t:
+        for name, body in [
+            ("repo-abc/pyproject.toml", b"[project]"),
+            ("repo-abc/skills/hello/SKILL.md", b"# hello"),
+        ]:
+            info = tarfile.TarInfo(name); info.size = len(body)
+            t.addfile(info, io.BytesIO(body))
+
     installer = _FakeInstaller()
-    client = _FakeClient(snap=b"fake")
+    client = _FakeClient(snap=buf.getvalue())
+    await main_mod._materialize_from_bundle(
+        installer, client, dep_slug="hello", dep_version="1.0.0",
+        dep_bundle=_bundle(skill_path="skills/hello"), dep_repo="https://git/x.git",
+        dep_id=5, project_path=None, force=False,
+    )
+    assert installer.calls == ["path"]         # из подпапки снапшота, НЕ clone
+    assert installer.local_src_existed is True
+    assert client.download_calls == [("hello", "1.0.0")]  # снапшот запрошен
+
+
+@pytest.mark.asyncio
+async def test_subdir_skill_falls_back_to_clone_on_bad_snapshot() -> None:
+    """Снапшот есть, но подпапки в нём нет / архив битый → откат на git clone."""
+    installer = _FakeInstaller()
+    client = _FakeClient(snap=b"not-a-tarball")
     await main_mod._materialize_from_bundle(
         installer, client, dep_slug="hello", dep_version="1.0.0",
         dep_bundle=_bundle(skill_path="skills/hello"), dep_repo="https://git/x.git",
         dep_id=5, project_path=None, force=False,
     )
     assert installer.calls == ["clone"]
-    assert client.download_calls == []  # снапшот не запрашивался
+    assert client.download_calls == [("hello", "1.0.0")]  # снапшот пробовали
 
 
 @pytest.mark.asyncio

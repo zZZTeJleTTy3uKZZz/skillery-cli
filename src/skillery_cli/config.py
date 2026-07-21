@@ -107,6 +107,7 @@ class _HubAppConfig(AppConfig):
     # переопределяем дефолт output_format на исторический "text".
     output_format: str = "text"
     user_email: str | None = None
+    user_display_name: str | None = None
     agent: str | None = None
     permissions: list[str] = Field(default_factory=list)
     company_id: str | None = None
@@ -129,6 +130,7 @@ class _HubAppConfig(AppConfig):
 class ClientConfig:
     base_url: str = ""
     user_email: str | None = None
+    user_display_name: str | None = None
     agent: str | None = None
     permissions: list[str] = field(default_factory=list)
     """Permission keys из JWT (используется для модульной регистрации команд).
@@ -239,6 +241,7 @@ class ClientConfig:
         return cls(
             base_url=base_url,
             user_email=ac.user_email,
+            user_display_name=ac.user_display_name,
             agent=ac.agent,
             permissions=list(ac.permissions),
             company_id=ac.company_id,
@@ -270,6 +273,8 @@ class ClientConfig:
         data: dict[str, object] = {"base_url": self.base_url}
         if self.user_email:
             data["user_email"] = self.user_email
+        if self.user_display_name:
+            data["user_display_name"] = self.user_display_name
         if self.agent:
             data["agent"] = self.agent
         if self.permissions:

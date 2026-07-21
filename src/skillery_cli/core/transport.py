@@ -361,6 +361,14 @@ class HubClient:
         perms = data.get("permissions") or []
         return [str(p) for p in perms]
 
+    async def get_me(self) -> dict:
+        """GET /me — профиль актора (display_name, email, id, …).
+
+        Нужен, чтобы в CLI показывать ИМЯ пользователя, а не числовой id: JWT
+        несёт только ``sub`` (числовой user_id), поэтому имя/почту берём из /me.
+        """
+        return await self._request("GET", "/me")
+
     # --- P1 account ---
     async def register(
         self, *, email: str, password: str, display_name: str

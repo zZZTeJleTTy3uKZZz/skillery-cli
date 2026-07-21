@@ -15,6 +15,7 @@ import os
 import re
 import sys
 import time
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -956,7 +957,9 @@ def cmd_login(
             }
 
             def _render(_: dict) -> None:
-                console.print(f"[green]✓[/] Авторизован как {email}")
+                console.print(
+                    f"[green]✓[/] Авторизован как {cfg.user_display_name or email}"
+                )
                 _print_daemon_hint(daemon_state)
                 if data.get("is_new_user"):
                     console.print("  (новый пользователь, аккаунт создан)")
@@ -1045,12 +1048,15 @@ def _do_code_login(cfg: ClientConfig, *, code: str) -> None:
         }
 
         def _render(_: dict) -> None:
-            console.print(f"[green]✓[/] Авторизован как {user_email} (code-flow)")
+            # Имя из /me (проставлено в hydrate); почта/номер — фолбэк.
+            who = cfg.user_display_name or cfg.user_email or user_email
+            console.print(f"[green]✓[/] Авторизован как {who}")
+            # «Роли» = реальные платформенные роли. «skill-creator» — НЕ роль, а
+            # способность (право skill.publish), она видна в Permissions. Раньше
+            # тут печатался устаревший ярлык роли, которой нет.
             roles_descr = []
             if cfg.is_hub_admin():
                 roles_descr.append("hub-admin")
-            if cfg.is_skill_creator():
-                roles_descr.append("skill-creator")
             if cfg.permissions and not roles_descr:
                 roles_descr.append("member")
             console.print(f"  Роли:        {', '.join(roles_descr) or '—'}")
@@ -1153,7 +1159,8 @@ def _do_browser_login(cfg: ClientConfig) -> None:
             }
 
             def _render(_: dict) -> None:
-                console.print(f"[green]✓[/] Авторизован как {user_email} (browser-flow)")
+                who = cfg.user_display_name or cfg.user_email or user_email
+                console.print(f"[green]✓[/] Авторизован как {who}")
                 _print_daemon_hint(daemon_state)
                 roles_descr = []
                 if cfg.is_hub_admin():
@@ -1201,12 +1208,12 @@ def _do_password_login(cfg: ClientConfig, *, email: str, password: str) -> None:
         }
 
         def _render(_: dict) -> None:
-            console.print(f"[green]✓[/] Авторизован как {email} (password)")
+            console.print(
+                f"[green]✓[/] Авторизован как {cfg.user_display_name or email}"
+            )
             roles_descr = []
             if cfg.is_hub_admin():
                 roles_descr.append("hub-admin")
-            if cfg.is_skill_creator():
-                roles_descr.append("skill-creator")
             if cfg.permissions and not roles_descr:
                 roles_descr.append("member")
             console.print(f"  Роли:        {', '.join(roles_descr) or '—'}")
@@ -1292,6 +1299,39 @@ def cmd_logout() -> None:
     )
 
 
+def _backfill_identity(cfg: ClientConfig) -> None:
+    """Тихо добрать display_name/email из /me и закэшировать в конфиг.
+
+    Best-effort: сеть/токен недоступны → молча выходим (whoami покажет что есть).
+    """
+    async def _do() -> None:
+        access, _ = load_tokens(cfg.user_email or "")
+        if not access:
+            return
+        client = HubClient(base_url=cfg.base_url, access_token=access)
+        try:
+            me = await client.get_me()
+        finally:
+            await client.close()
+        # /me отдаёт {user, claims, memberships} — профиль вложен в ``user``.
+        u = me.get("user") if isinstance(me.get("user"), dict) else me
+        name = (u.get("display_name") or "").strip()
+        email = (u.get("email") or "").strip()
+        changed = False
+        if name and name != cfg.user_display_name:
+            cfg.user_display_name = name
+            changed = True
+        if email and email != cfg.user_email:
+            cfg.user_email = email
+            changed = True
+        if changed:
+            with suppress(Exception):
+                cfg.save()
+
+    with suppress(Exception):
+        _run(_do())
+
+
 def cmd_whoami() -> None:
     """Кто я и что доступно."""
     import socket
@@ -1302,8 +1342,14 @@ def cmd_whoami() -> None:
     if not cfg.user_email:
         emit_error("NOT_AUTHENTICATED", "Не авторизован")
         raise typer.Exit(1)
+    # Ленивая подгрузка имени: у ранее залогиненных cfg.user_display_name пуст
+    # (имя завезли позже), а в user_email мог лежать числовой id. Тихо доберём
+    # профиль из /me и закэшируем — чтобы имя показалось без перелогина.
+    if not cfg.user_display_name:
+        _backfill_identity(cfg)
     payload = {
         "user_email": cfg.user_email,
+        "user_display_name": cfg.user_display_name,
         "backend": cfg.base_url,
         "agent": cfg.agent or detect_agent(),
         "is_hub_admin": cfg.is_hub_admin(),
@@ -1318,7 +1364,12 @@ def cmd_whoami() -> None:
     }
 
     def _render(p: dict) -> None:
-        console.print(f"[bold]{p['user_email']}[/]")
+        # Имя приоритетнее почты; почту показываем строкой ниже. Раньше в шапке
+        # был числовой user_id (JWT sub) — «1» вместо имени.
+        name = p.get("user_display_name") or p["user_email"]
+        console.print(f"[bold]{name}[/]")
+        if p.get("user_display_name") and p.get("user_email"):
+            console.print(f"  Email:      {p['user_email']}")
         console.print(f"  Backend:    {p['backend']}")
         console.print(f"  Agent:      {p['agent']}")
         console.print(f"  Device:     {p['hostname']} (id:{p['device_id'][:8]}...)")
@@ -2085,6 +2136,57 @@ async def _install_local_source(
     }]
 
 
+def _extract_snapshot_subdir(
+    archive: Path, into: Path, skill_path: str
+) -> Optional[Path]:
+    """Распаковать снапшот и вернуть путь до подпапки навыка (``skill_path``).
+
+    Снапшот — tar.gz ВСЕГО репозитория (бэкенд снял его под своим токеном). Для
+    монорепо-навыка нужный SKILL.md лежит в подпапке. Извлекаем архив, находим
+    корень (у git-архива это единственная папка ``repo-<sha>/``), спускаемся в
+    ``skill_path`` и проверяем, что там есть SKILL.md. ``None`` ⇒ подпапки/навыка
+    в архиве нет → вызывающий откатится на git clone.
+
+    Защита от path traversal: имена членов архива с ``..``/абсолютные — отвергаем,
+    и итоговый путь обязан оставаться внутри распакованного дерева.
+    """
+    import tarfile
+
+    dest = into / "unpacked"
+    dest.mkdir(parents=True, exist_ok=True)
+    try:
+        with tarfile.open(archive, mode="r:gz") as tar:
+            for member in tar.getmembers():
+                name = member.name
+                if name.startswith("/") or ".." in Path(name).parts:
+                    return None  # подозрительный архив — не рискуем
+            # filter="data" (py3.12+) — безопасная распаковка; на 3.11 параметра
+            # нет, но членов мы уже провалидировали выше.
+            try:
+                tar.extractall(dest, filter="data")  # noqa: S202
+            except TypeError:
+                tar.extractall(dest)  # noqa: S202 — py<3.12
+    except Exception:  # noqa: BLE001 — битый архив → откат на clone
+        return None
+
+    # Корень: если распаковалась ровно одна папка (git-архив) — спускаемся в неё.
+    entries = [p for p in dest.iterdir()]
+    root = entries[0] if len(entries) == 1 and entries[0].is_dir() else dest
+
+    rel = Path(skill_path.strip("/"))
+    if ".." in rel.parts or rel.is_absolute():
+        return None
+    sub = (root / rel).resolve()
+    # Итоговый путь обязан лежать внутри дерева распаковки.
+    try:
+        sub.relative_to(dest.resolve())
+    except ValueError:
+        return None
+    if not sub.is_dir() or not (sub / "SKILL.md").exists():
+        return None
+    return sub
+
+
 async def _materialize_from_bundle(
     installer,  # SkillInstaller
     client: HubClient,
@@ -2116,41 +2218,63 @@ async def _materialize_from_bundle(
     manifest = dep_bundle["manifest"]
     ref = dep_slug or (str(dep_id) if dep_id is not None else "")
 
-    if not skill_path and ref:
+    if ref:
+        # Снапшот пробуем ВСЕГДА, даже для навыка в подпапке (skill_path). Раньше
+        # навык-в-подпапке шёл сразу на git clone — а для ПРИВАТНОГО репо это
+        # «Authentication failed»: у устройства нет git-кред, и раздавать их
+        # пользователю нельзя. Снапшот бэкенд снял под СВОИМ токеном (GitHub App /
+        # hub-gateway) → устройство ставит без git и без секретов.
+        #
+        # kit-контракт (s-skillkit 0.2.2 на устройствах): install_from_snapshot
+        # НЕ принимает skill_path. Поэтому для навыка в подпапке САМИ извлекаем
+        # архив, берём подпапку и ставим install_from_path (локальный источник).
         snap: bytes | None = None
-        # Снапшот — best-effort ОПТИМИЗАЦИЯ (не требует клиентских git-кред).
-        # ЛЮБАЯ ошибка его получения (404, 403, 5xx, обрыв сети) → тихий откат на
-        # git clone, а не падение установки: снапшота может не быть, а репо —
-        # доступно (публичное / есть локальные креды).
+        # ЛЮБАЯ ошибка получения (404, 403, 5xx, обрыв) → тихий откат на git clone:
+        # снапшота может не быть, а репо — публичным / с локальными кредами.
         try:
             snap = await client.download_snapshot(ref, dep_version)
         except Exception:  # noqa: BLE001 — best-effort: не удалось → clone
             snap = None
         if snap:
+            import shutil
+
             tmp_dir = Path(tempfile.mkdtemp(prefix="skillery-snap-"))
             archive = tmp_dir / f"{ref}-{dep_version}.tar.gz"
             try:
                 archive.write_bytes(snap)
-                return installer.install_from_snapshot(
-                    slug=dep_slug or None,
-                    version=dep_version,
-                    commit_sha=commit_sha,
-                    archive_path=archive,
-                    manifest=manifest,
-                    project=project_path,
-                    force=force,
-                    skill_id=dep_id,
-                )
+                if skill_path:
+                    sub = _extract_snapshot_subdir(archive, tmp_dir, skill_path)
+                    if sub is not None:
+                        return installer.install_from_path(
+                            slug=dep_slug or None,
+                            version=dep_version,
+                            commit_sha=commit_sha,
+                            local_src=sub,
+                            manifest=manifest,
+                            project=project_path,
+                            force=force,
+                            skill_id=dep_id,
+                        )
+                else:
+                    return installer.install_from_snapshot(
+                        slug=dep_slug or None,
+                        version=dep_version,
+                        commit_sha=commit_sha,
+                        archive_path=archive,
+                        manifest=manifest,
+                        project=project_path,
+                        force=force,
+                        skill_id=dep_id,
+                    )
             except Exception:  # noqa: BLE001 — битый снапшот → откат на clone
                 pass
             finally:
                 # rmtree сносит и архив, и папку одним вызовом — не оставляем
                 # temp при сбое unlink (ignore_errors: очистка не важнее install).
-                import shutil
-
                 shutil.rmtree(tmp_dir, ignore_errors=True)
 
-    # Fallback: git clone (приватный репо → нужны клиентские git-креды).
+    # Fallback: git clone. Достигается, только если снапшота нет; для ПУБЛИЧНОГО
+    # репо clone сработает и без кред, для приватного — по локальным git-кредам.
     #
     # #943: skill_path ОБЯЗАН доехать сюда. Выше он уже прочитан — им решается
     # «снапшот или клон» (снапшот применим только для навыка в корне репо). Но в
@@ -2746,6 +2870,33 @@ async def _reconcile_hub_installs(
     return report
 
 
+_MAX_INSTALL_ATTEMPTS = 3
+
+
+def _install_attempts_path() -> Path:
+    return _default_config_dir() / "install_attempts.json"
+
+
+def _load_install_attempts() -> dict:
+    import json
+
+    try:
+        return json.loads(_install_attempts_path().read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 — нет файла/битый → пусто
+        return {}
+
+
+def _save_install_attempts(data: dict) -> None:
+    import json
+
+    try:
+        p = _install_attempts_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(data), encoding="utf-8")
+    except Exception:  # noqa: BLE001 — лимит попыток не критичнее самой команды
+        pass
+
+
 async def _reconcile_device_queue(
     cfg: ClientConfig,
     access: str,
@@ -2776,12 +2927,25 @@ async def _reconcile_device_queue(
             # Старый backend / нет устройства в UA — молча уступаем legacy-пути.
             return report
 
+        attempts = _load_install_attempts()
+        live_keys: set[str] = set()
         for item in queue:
             slug = item.get("slug")
             skill_id = item.get("skill_id")
             ref = slug or (str(skill_id) if skill_id is not None else None)
             desired = str(item.get("desired_version") or "")
             if not ref:
+                continue
+            # Ключ учёта — по (навык + желаемая версия): смена версии = свежий
+            # старт (прошлые провалы к новой версии не относятся).
+            key = f"{ref}@{desired}"
+            live_keys.add(key)
+            tried = int(attempts.get(key, 0))
+            # ЛИМИТ ПОПЫТОК: после 3 провалов не трогаем задание — иначе демон
+            # каждый цикл повторял заведомо провальный git clone приватного репо,
+            # поднимая видимое окно git-bash. Отказ уже отрапортован серверу.
+            if tried >= _MAX_INSTALL_ATTEMPTS:
+                report["skipped"].append(ref)
                 continue
             try:
                 await _install_chain(
@@ -2793,15 +2957,27 @@ async def _reconcile_device_queue(
                 await client.report_device_apply(
                     slug=str(ref), ok=True, version=str(applied or desired)
                 )
+                attempts.pop(key, None)  # успех — счётчик сбрасываем
                 report["applied"].append(ref)
             except Exception as exc:  # noqa: BLE001 — провал ОБЯЗАН быть виден
+                attempts[key] = tried + 1
+                gave_up = attempts[key] >= _MAX_INSTALL_ATTEMPTS
+                msg = str(exc)
+                if gave_up:
+                    msg = (
+                        f"установка не удалась после {_MAX_INSTALL_ATTEMPTS} "
+                        f"попыток — прекращаю повторы. Последняя ошибка: {msg}"
+                    )
                 try:
                     await client.report_device_apply(
-                        slug=str(ref), ok=False, error=str(exc)
+                        slug=str(ref), ok=False, error=msg
                     )
                 except Exception:
                     pass  # сеть упала — сервер оставит задание в очереди
                 report["failed"].append(ref)
+        # Забываем счётчики для заданий, которых уже нет в очереди (сняты/сменили
+        # версию) — файл не растёт бесконечно.
+        _save_install_attempts({k: v for k, v in attempts.items() if k in live_keys})
     finally:
         await client.close()
     return report

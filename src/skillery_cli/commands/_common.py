@@ -62,6 +62,21 @@ async def hydrate_session_permissions(
         cfg.permissions = await client.get_me_permissions()
     except ApiError:
         cfg.permissions = []
+    # Имя/почту берём из /me: JWT несёт только числовой user_id (sub), поэтому
+    # без этого в CLI пользователь отображался как «1», а не как имя. Best-effort:
+    # ошибка не валит логин (права уже проставлены выше).
+    try:
+        me = await client.get_me()
+        # /me отдаёт {user, claims, memberships} — профиль вложен в ``user``.
+        u = me.get("user") if isinstance(me.get("user"), dict) else me
+        name = (u.get("display_name") or "").strip()
+        email = (u.get("email") or "").strip()
+        if name:
+            cfg.user_display_name = name
+        if email:
+            cfg.user_email = email
+    except Exception:  # noqa: BLE001 — профиль не критичен для логина
+        pass
 
 
 def local_device_identity() -> tuple[str, str, str]:
