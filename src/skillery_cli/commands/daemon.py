@@ -189,9 +189,15 @@ def _spawn_detached_daemon(interval: float) -> int:
     if sys.platform == "win32":
         DETACHED_PROCESS = 0x00000008
         CREATE_NEW_PROCESS_GROUP = 0x00000200
+        # CREATE_NO_WINDOW обязателен: без него консольный exe может получить
+        # собственное окно (и пользователь видит болтающуюся вкладку терминала).
+        # Демон — фоновый процесс, окна у него быть не должно.
+        CREATE_NO_WINDOW = 0x08000000
         proc = subprocess.Popen(  # noqa: S603
             args,
-            creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+            creationflags=(
+                DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+            ),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

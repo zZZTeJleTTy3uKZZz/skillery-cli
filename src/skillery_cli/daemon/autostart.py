@@ -29,6 +29,7 @@ SERVICE_NAME = _branding.DAEMON_SERVICE_ID
 _UNIT_BASENAME = _branding.DAEMON_UNIT_BASENAME  # напр. skillery-daemon
 _TASK_NAME = _branding.DAEMON_TASK_NAME  # напр. SkilleryDaemon
 _HOME = _branding.HOME_DIR_NAME  # напр. .skillery
+_WIN_EOL = chr(13) + chr(10)  # CRLF для .vbs/.cmd в автозагрузке
 _DAEMON_DESC = f"{_branding.APP_NAME.capitalize()} event-tracking daemon"
 
 
@@ -439,20 +440,36 @@ def _windows_startup_dir(home_dir: Path) -> Path:
 
 
 def _install_windows_startup_shortcut(home_dir: Path) -> dict[str, object]:
-    """Fallback автозапуска Windows: .cmd в папке Startup.
+    """Fallback автозапуска Windows: СКРЫТЫЙ запуск демона из папки Startup.
 
     `schtasks /Create` на многих системах отвечает «Access is denied» —
-    создание задачи планировщика в корне требует администратора. Папка
-    автозагрузки прав не требует и срабатывает при входе пользователя, чего для
-    фонового демона достаточно. Запуск скрытый: `start "" /b`.
+    задача в корне планировщика требует администратора. Папка автозагрузки прав
+    не требует и срабатывает при входе пользователя.
+
+    Запуск идёт через .vbs, а НЕ через .cmd: `cmd.exe` при старте показывает
+    окно консоли, и `start /b` делу не помогает — он выполняет команду В ТОМ ЖЕ
+    окне, поэтому у пользователя болталась вкладка терминала всё время работы
+    демона. WScript.Shell.Run с флагом 0 не создаёт окна вообще.
     """
     try:
         binary = _resolve_cli_binary()
         startup = _windows_startup_dir(home_dir)
         startup.mkdir(parents=True, exist_ok=True)
-        script = startup / "skillery-daemon.cmd"
-        body = ["@echo off", f'start "" /b "{binary}" daemon start', ""]
-        script.write_text("\r\n".join(body), encoding="utf-8")
+
+        # Прежняя .cmd-версия оставила бы вторую запись автозагрузки (и то самое
+        # окно) — сносим её при обновлении.
+        legacy = startup / "skillery-daemon.cmd"
+        if legacy.exists():
+            legacy.unlink()
+
+        script = startup / "skillery-daemon.vbs"
+        quoted = binary.replace('"', '""')
+        body = [
+            "' Skillery: фоновый запуск демона без окна консоли.",
+            'CreateObject("WScript.Shell").Run """' + quoted + '"" daemon start", 0, False',
+            "",
+        ]
+        script.write_text(_WIN_EOL.join(body), encoding="utf-8")
         return {
             "activated": True,
             "command": f"startup: {script}",

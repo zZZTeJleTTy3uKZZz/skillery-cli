@@ -229,11 +229,13 @@ class TestWindowsAutostartFallback:
 
         assert result["activated"] is True
         script = tmp_path / "AppData" / "Roaming" / "Microsoft" / "Windows"
-        script = script / "Start Menu" / "Programs" / "Startup" / "skillery-daemon.cmd"
+        script = script / "Start Menu" / "Programs" / "Startup" / "skillery-daemon.vbs"
         assert script.exists()
         body = script.read_text(encoding="utf-8")
         assert "daemon start" in body
-        assert "/b" in body, "демон должен стартовать без окна консоли"
+        # Флаг 0 у WScript.Shell.Run = окна нет вообще. Прежняя .cmd-версия
+        # держала вкладку терминала открытой всё время работы демона.
+        assert ", 0, False" in body, "демон обязан стартовать без окна консоли"
 
     def test_fallback_is_idempotent(self, tmp_path, monkeypatch) -> None:
         from skillery_cli.daemon import autostart
@@ -266,3 +268,49 @@ class TestWindowsAutostartFallback:
 
         assert result["activated"] is True
         assert "startup:" in str(result["command"])
+
+
+class TestNoConsoleWindow:
+    """#972: демон — фоновый процесс, окна консоли у него быть не должно."""
+
+    def test_legacy_cmd_is_removed_on_reinstall(self, tmp_path, monkeypatch) -> None:
+        """Старый .cmd (он и показывал окно) сносится, а не остаётся вторым."""
+        from skillery_cli.daemon import autostart
+
+        monkeypatch.setenv("APPDATA", str(tmp_path / "AppData" / "Roaming"))
+        monkeypatch.setattr(autostart, "_resolve_cli_binary", lambda: "skillery")
+
+        startup = autostart._windows_startup_dir(tmp_path)
+        startup.mkdir(parents=True, exist_ok=True)
+        legacy = startup / "skillery-daemon.cmd"
+        legacy.write_text("@echo off", encoding="utf-8")
+
+        autostart._install_windows_startup_shortcut(tmp_path)
+
+        assert not legacy.exists(), "две записи автозагрузки = два демона и окно"
+        assert (startup / "skillery-daemon.vbs").exists()
+
+    def test_spawn_uses_no_window_flag(self) -> None:
+        """Сам спавн демона тоже должен запрещать окно (CREATE_NO_WINDOW)."""
+        import inspect
+
+        from skillery_cli.commands import daemon as daemon_cmd
+
+        src = inspect.getsource(daemon_cmd._spawn_detached_daemon)
+        assert "CREATE_NO_WINDOW" in src
+        assert "0x08000000" in src
+
+    def test_vbs_quotes_path_with_spaces(self, tmp_path, monkeypatch) -> None:
+        """Путь с пробелами (Program Files) не должен ломать запуск."""
+        from skillery_cli.daemon import autostart
+
+        monkeypatch.setenv("APPDATA", str(tmp_path / "AppData" / "Roaming"))
+        monkeypatch.setattr(
+            autostart, "_resolve_cli_binary", lambda: r"C:\Program Files\skillery.exe"
+        )
+
+        autostart._install_windows_startup_shortcut(tmp_path)
+
+        script = autostart._windows_startup_dir(tmp_path) / "skillery-daemon.vbs"
+        body = script.read_text(encoding="utf-8")
+        assert '"""C:\Program Files\skillery.exe""' in body

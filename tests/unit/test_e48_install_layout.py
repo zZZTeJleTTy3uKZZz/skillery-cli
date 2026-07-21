@@ -89,12 +89,19 @@ def test_install_rejects_symlink_escape(tmp_path: Path) -> None:
 def test_antigravity_layout_paths(tmp_path: Path) -> None:
     t = AntigravityTarget(root=tmp_path / ".antigravity")
     assert t.name == "antigravity"
-    assert t.base_dir() == tmp_path / ".antigravity" / "skills"
-    assert t.slug_dir("foo") == tmp_path / ".antigravity" / "skills" / "foo"
-    # Проектный scope пишет в `.agents/skills` — путь `.antigravity` убран в
-    # ките (0.2.3+): агент его просто не читал, навык туда клали впустую.
-    proj_slug = t.slug_dir("foo", project=tmp_path / "p")
-    assert proj_slug == tmp_path / "p" / ".agents" / "skills" / "foo"
+    # Кит 0.3.0: навыки лежат в `config/skills` — путь, который агент реально
+    # читает (прежний `.antigravity/skills` он игнорировал).
+    assert t.base_dir() == tmp_path / ".antigravity" / "config" / "skills"
+    assert (
+        t.slug_dir("foo") == tmp_path / ".antigravity" / "config" / "skills" / "foo"
+    )
+    # Кит 0.3.0: у antigravity ТОЛЬКО глобальная раскладка — проектный scope
+    # осознанно запрещён (агент не читает навыки из рабочего каталога), поэтому
+    # вместо тихой установки «в никуда» летит явная ошибка.
+    from skillkit.errors import ScopeUnsupported
+
+    with pytest.raises(ScopeUnsupported):
+        t.slug_dir("foo", project=tmp_path / "p")
     assert "_local/" in t.preserved_paths()
 
 
@@ -121,6 +128,10 @@ def test_detect_chain_includes_antigravity(tmp_path: Path, monkeypatch: pytest.M
     monkeypatch.setattr(detect_mod.ClaudeCodeTarget, "exists", lambda self: False)
     monkeypatch.setattr(detect_mod.CodexTarget, "exists", lambda self: False)
     monkeypatch.setattr(detect_mod.AntigravityTarget, "exists", lambda self: False)
+    # Кит 0.3.0 добавил OpenCode в цепочку — без него fallback ловил бы его,
+    # а не claude_code.
+    if hasattr(detect_mod, "OpenCodeTarget"):
+        monkeypatch.setattr(detect_mod.OpenCodeTarget, "exists", lambda self: False)
     assert detect_mod.detect_agent() == "claude_code"
 
     # Только antigravity установлен.
