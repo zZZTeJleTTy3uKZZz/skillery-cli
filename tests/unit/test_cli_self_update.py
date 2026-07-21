@@ -308,7 +308,6 @@ def test_spawn_background_upgrade_detached(monkeypatch: pytest.MonkeyPatch) -> N
     assert main_mod._spawn_background_upgrade(delay=0) is True
     # Спавнит ИНТЕРПРЕТАТОР с worker-скриптом (задержка + upgrade), НЕ skillery.exe
     # — иначе launcher .exe залочен и uv не перезапишет его (Windows os error 32).
-    assert calls["cmd"][0] == main_mod.sys.executable
     assert calls["cmd"][1] == "-c"
     assert "['uv', 'tool', 'upgrade', 'skillery-cli']" in calls["cmd"][2]
     assert "subprocess.run(c)" in calls["cmd"][2]
@@ -342,6 +341,33 @@ def test_worker_falls_back_when_pinned_version_missing(
     assert "skillery-cli==1.2.3" in worker           # сначала точная версия
     assert "'--refresh', 'skillery-cli'" in worker   # затем фолбэк без пина
     assert "break" in worker                         # до первой удачной
+
+
+def test_worker_runs_outside_tool_dir(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Worker НЕ должен запускаться питоном из каталога самого инструмента.
+
+    `sys.executable` живёт в `…/tools/skillery-cli/Scripts/` и держит этот
+    каталог открытым, пока worker жив → uv не может его удалить и падает
+    «failed to remove directory Scripts: Отказано в доступе (os error 5)».
+    Снаружи это выглядело как «обновление запущено» и полная тишина: worker
+    блокировал сам себя. Берём базовый интерпретатор — он вне tool-каталога.
+    """
+    calls: dict[str, Any] = {}
+    monkeypatch.setattr(
+        "subprocess.Popen", lambda cmd, **kw: calls.__setitem__("cmd", cmd)
+    )
+    monkeypatch.setattr(main_mod, "_stop_daemon_for_upgrade", lambda: None)
+    monkeypatch.setattr(
+        main_mod.sys, "executable", "/x/uv/tools/skillery-cli/Scripts/python.exe"
+    )
+    monkeypatch.setattr(main_mod.sys, "base_prefix", "/x/uv/python/cpython-3.14")
+    monkeypatch.setattr(main_mod.Path, "exists", lambda self: True)
+
+    main_mod._spawn_background_upgrade(delay=0)
+
+    launcher = calls["cmd"][0]
+    assert "tools" not in launcher.replace("\\", "/").split("/")
+    assert launcher != main_mod.sys.executable
 
 
 def test_upgrade_chain_is_single_command_without_version(

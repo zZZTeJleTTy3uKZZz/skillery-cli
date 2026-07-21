@@ -462,6 +462,32 @@ def _stop_daemon_for_upgrade() -> bool:
         return False
 
 
+def _upgrade_launcher() -> str:
+    """Интерпретатор для worker'а — ОБЯЗАТЕЛЬНО вне каталога самого инструмента.
+
+    ``sys.executable`` лежит внутри ``…/tools/skillery-cli/Scripts/`` и, пока
+    worker жив, ДЕРЖИТ этот каталог: uv не может его удалить, и апгрейд падает
+    с «failed to remove directory Scripts: Отказано в доступе (os error 5)».
+    Снаружи это выглядело как «обновление запущено» → и тишина: версия не
+    менялась, ошибка уходила в DEVNULL. Именно этим worker и убивал сам себя.
+
+    ``sys.base_prefix`` указывает на БАЗОВЫЙ интерпретатор (вне tool-каталога) —
+    он ничего не блокирует. Worker'у хватает stdlib (``time``/``subprocess``),
+    пакет он не импортирует.
+    """
+    base = Path(sys.base_prefix)
+    names = (
+        ("python.exe", "pythonw.exe")
+        if sys.platform == "win32"
+        else ("python3", "python")
+    )
+    for name in names:
+        for candidate in (base / name, base / "bin" / name):
+            if candidate.exists():
+                return str(candidate)
+    return sys.executable
+
+
 def _spawn_background_upgrade(
     delay: float = 4.0, version: str | None = None
 ) -> bool:
@@ -504,7 +530,9 @@ def _spawn_background_upgrade(
     else:
         popen_kw["start_new_session"] = True
     try:
-        subprocess.Popen([sys.executable, "-c", worker], **popen_kw)  # noqa: S603
+        subprocess.Popen(  # noqa: S603
+            [_upgrade_launcher(), "-c", worker], **popen_kw
+        )
         return True
     except Exception:
         return False
