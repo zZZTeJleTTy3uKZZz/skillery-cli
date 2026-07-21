@@ -606,6 +606,44 @@ def cmd_upgrade(
 # ======================================================
 #                  COMMAND IMPLEMENTATIONS
 # ======================================================
+def _ensure_daemon_after_login() -> dict:
+    """Поднять фонового демона сразу после входа (идемпотентно, best-effort).
+
+    #954: раньше `login` только регистрировал устройство. Демон никто не
+    запускал, поэтому задания из веба висели в очереди («устанавливается»
+    бесконечно), а устройство выглядело офлайн — признак «на связи» даёт
+    именно опрос очереди демоном. Ошибка запуска НЕ ломает вход.
+    """
+    try:
+        from skillery_cli.commands.daemon import ensure_daemon_running
+
+        return ensure_daemon_running()
+    except Exception as exc:  # noqa: BLE001
+        return {"event": "failed", "pid": None, "error": str(exc)}
+
+
+def _print_daemon_hint(state: dict) -> None:
+    """Человеку — что с демоном и как включить автозапуск после перезагрузки."""
+    event = str(state.get("event") or "")
+    if event == "started":
+        console.print(
+            f"  Демон:       запущен (pid={state.get('pid')}) — задания из веба "
+            "применяются автоматически"
+        )
+    elif event == "already_running":
+        console.print(f"  Демон:       уже работает (pid={state.get('pid')})")
+    else:
+        console.print(
+            "[yellow]  Демон не запустился — задания из веба применяться не "
+            "будут. Запустите вручную: skillery daemon start[/]"
+        )
+        return
+    console.print(
+        "[dim]  Чтобы демон стартовал после перезагрузки: "
+        "skillery daemon install[/]"
+    )
+
+
 def cmd_login(
     invite: Optional[str] = typer.Argument(
         None,
@@ -667,6 +705,7 @@ def cmd_login(
             finally:
                 await client.close()
             save_tokens(email, data["access_token"], data["refresh_token"])
+            daemon_state = _ensure_daemon_after_login()
             cfg.user_email = email
             populate_from_jwt(cfg, data["access_token"])
             cfg.save()
@@ -680,10 +719,12 @@ def cmd_login(
                 "company_id": cfg.company_id,
                 "role_id": cfg.role_id,
                 "access_expires_at": cfg.access_expires_at,
+                "daemon": daemon_state,
             }
 
             def _render(_: dict) -> None:
                 console.print(f"[green]✓[/] Авторизован как {email}")
+                _print_daemon_hint(daemon_state)
                 if data.get("is_new_user"):
                     console.print("  (новый пользователь, аккаунт создан)")
                 roles_descr = []
@@ -864,9 +905,11 @@ def _do_browser_login(cfg: ClientConfig) -> None:
             populate_from_jwt(cfg, data["access_token"])
             cfg.save()
 
+            daemon_state = _ensure_daemon_after_login()
             result = {
                 "event": "logged_in",
                 "method": "browser-flow",
+                "daemon": daemon_state,
                 "user_email": user_email,
                 "is_hub_admin": cfg.is_hub_admin(),
                 "is_skill_creator": cfg.is_skill_creator(),
@@ -878,6 +921,7 @@ def _do_browser_login(cfg: ClientConfig) -> None:
 
             def _render(_: dict) -> None:
                 console.print(f"[green]✓[/] Авторизован как {user_email} (browser-flow)")
+                _print_daemon_hint(daemon_state)
                 roles_descr = []
                 if cfg.is_hub_admin():
                     roles_descr.append("hub-admin")

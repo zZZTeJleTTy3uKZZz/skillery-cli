@@ -91,8 +91,10 @@ def test_antigravity_layout_paths(tmp_path: Path) -> None:
     assert t.name == "antigravity"
     assert t.base_dir() == tmp_path / ".antigravity" / "skills"
     assert t.slug_dir("foo") == tmp_path / ".antigravity" / "skills" / "foo"
+    # Проектный scope пишет в `.agents/skills` — путь `.antigravity` убран в
+    # ките (0.2.3+): агент его просто не читал, навык туда клали впустую.
     proj_slug = t.slug_dir("foo", project=tmp_path / "p")
-    assert proj_slug == tmp_path / "p" / ".antigravity" / "skills" / "foo"
+    assert proj_slug == tmp_path / "p" / ".agents" / "skills" / "foo"
     assert "_local/" in t.preserved_paths()
 
 

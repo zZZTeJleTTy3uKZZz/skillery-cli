@@ -214,6 +214,28 @@ def _wait_pid_file(timeout: float = 5.0) -> int:
     return -1
 
 
+def ensure_daemon_running(interval: float = 60.0) -> dict[str, object]:
+    """Поднять демон, если он не работает. Идемпотентно, никогда не бросает.
+
+    Зачем (#954): после `login` устройство регистрировалось, но демон никто не
+    запускал. Веб исправно ставил задания в очередь, а применять их было
+    некому: навык «устанавливается» бесконечно, а устройство выглядело
+    офлайн — ведь признак «на связи» даёт именно опрос очереди демоном.
+
+    Возвращает ``{"event": already_running|started|failed, "pid": …}``.
+    """
+    try:
+        existing = read_running_pid()
+        if existing is not None and is_process_alive(existing):
+            return {"event": "already_running", "pid": existing}
+        pid = _spawn_detached_daemon(interval)
+        if pid > 0:
+            return {"event": "started", "pid": pid}
+        return {"event": "failed", "pid": None}
+    except Exception as exc:  # демон — не повод валить login
+        return {"event": "failed", "pid": None, "error": str(exc)}
+
+
 def cmd_daemon_start(
     interval: float = typer.Option(
         60.0, "--interval", min=1.0, max=3600.0, help="Секунд между циклами"
