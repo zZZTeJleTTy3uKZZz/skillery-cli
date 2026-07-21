@@ -564,3 +564,69 @@ def test_manual_instructions_have_marked_url_but_no_secret() -> None:
         marked = hook_callback_url(receiver, SKILL)
         assert any(marked in s for s in steps)
         assert all("s3cr3t" not in s for s in steps)
+
+
+# --------------------------------------------------------------------------- #
+# hook ХАБА ≠ отсутствие hook'а                                                #
+# --------------------------------------------------------------------------- #
+# ЖИВОЙ СЛУЧАЙ 2026-07-21. На GitLab hook завёл сам хаб (auto-режим): адрес
+# приёмника без маркера навыка. Наш поиск своего hook'а его законно не признал
+# своим — и проба отрапортовала «У провайдера hook не найден». Для человека это
+# читается как «автообновления не работают», хотя они работают. Разные вещи —
+# разные сообщения.
+
+
+def _gitlab_hub_hook():
+    return [{"id": 84239061, "url": "https://api.skillery.ru/webhooks/git/gitlab"}]
+
+
+def test_probe_reports_hub_hook_instead_of_not_found():
+    from skillery_cli.core import webhook_setup as ws
+
+    def _runner(argv, **kw):
+        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(_gitlab_hub_hook()), stderr="")
+
+    state = ws.probe_provider_hook(
+        provider="gitlab",
+        repo=ws.RepoSlug("gitlab.com", "S-skills", "google-flow-cli"),
+        callback_url="https://api.skillery.ru/webhooks/git/gitlab",
+        skill_id=16,
+        runner=_runner,
+    )
+    assert state.found is False, "hook хаба — не наш, своим его считать нельзя"
+    assert state.hub_hook_id == "84239061", "но и молчать про него нельзя"
+
+
+def test_probe_without_any_hook_has_no_hub_id():
+    from skillery_cli.core import webhook_setup as ws
+
+    def _runner(argv, **kw):
+        return subprocess.CompletedProcess(argv, 0, stdout="[]", stderr="")
+
+    state = ws.probe_provider_hook(
+        provider="gitlab",
+        repo=ws.RepoSlug("gitlab.com", "S-skills", "google-flow-cli"),
+        callback_url="https://api.skillery.ru/webhooks/git/gitlab",
+        skill_id=16,
+        runner=_runner,
+    )
+    assert state.found is False and state.hub_hook_id is None
+
+
+def test_foreign_hook_is_not_reported_as_hub_hook():
+    """Чужой CI на своём адресе — не hook хаба."""
+    from skillery_cli.core import webhook_setup as ws
+
+    def _runner(argv, **kw):
+        return subprocess.CompletedProcess(
+            argv, 0, stdout=json.dumps([{"id": 7, "url": "https://ci.example.com/hook"}]), stderr=""
+        )
+
+    state = ws.probe_provider_hook(
+        provider="gitlab",
+        repo=ws.RepoSlug("gitlab.com", "S-skills", "google-flow-cli"),
+        callback_url="https://api.skillery.ru/webhooks/git/gitlab",
+        skill_id=16,
+        runner=_runner,
+    )
+    assert state.hub_hook_id is None

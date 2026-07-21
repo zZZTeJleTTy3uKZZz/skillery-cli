@@ -309,6 +309,10 @@ def cmd_webhook_status(
                     "last_delivery_at": state.last_delivery_at,
                     "last_response_code": state.last_response_code,
                     "reason": state.reason,
+                    # Отдельно от found: hook хаба означает, что автосинк РАБОТАЕТ,
+                    # просто завёл его не CLI. Агенту это различие нужно так же,
+                    # как человеку.
+                    "hub_hook_id": state.hub_hook_id,
                 }
 
         emit_data(payload, text_renderer=_render_status)
@@ -332,6 +336,15 @@ def _render_status(payload: dict[str, Any]) -> None:
     if not hook:
         return
     if not hook.get("found"):
+        # Своего hook'а нет — но если hook завёл САМ ХАБ (auto-режим), автосинк
+        # работает, и говорить «не найден» значит сообщать об исправной настройке
+        # как о сломанной (живой случай 2026-07-21 на GitLab).
+        if hook.get("hub_hook_id"):
+            console.print(
+                f"  У провайдера: hook [bold]{hook['hub_hook_id']}[/] завёл сам хаб "
+                f"(без маркера навыка — так и должно быть в auto-режиме)"
+            )
+            return
         console.print(
             f"  У провайдера hook не найден "
             f"([dim]{hook.get('reason') or 'нет совпадающего URL'}[/])"

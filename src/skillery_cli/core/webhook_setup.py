@@ -112,6 +112,11 @@ class HookState:
     last_response_code: int | None = None
     reason: str | None = None
     events: tuple[str, ...] = field(default_factory=tuple)
+    #: Нашли hook, ведущий на приёмник хаба, но БЕЗ маркера навыка — значит его
+    #: завёл сам хаб (auto-режим), а не мы. Отдельное поле, потому что «нашего
+    #: hook'а нет» и «автообновлений нет» — РАЗНЫЕ вещи: во втором случае синк
+    #: как раз работает, и говорить «не найден» значит пугать зря.
+    hub_hook_id: str | None = None
 
 
 def secret_fingerprint(secret: str | None) -> str | None:
@@ -435,6 +440,19 @@ def ensure_provider_hook(
     return HookOutcome("created", hook_id=hook_id, url=target_url)
 
 
+def _find_hub_hook_id(provider: str, hooks: Any) -> str | None:
+    """Id hook'а, заведённого САМИМ хабом: адрес приёмника без маркера навыка."""
+    if not isinstance(hooks, list):
+        return None
+    for hook in hooks:
+        if not isinstance(hook, dict):
+            continue
+        url = _hook_url(provider, hook)
+        if _is_receiver_url(provider, url) and not _skill_marker(url):
+            return str(hook.get("id"))
+    return None
+
+
 def probe_provider_hook(
     *,
     provider: str,
@@ -459,7 +477,12 @@ def probe_provider_hook(
         provider, hooks, hook_callback_url(callback_url, skill_id), skill_id
     )
     if hook is None:
-        return HookState(found=False)
+        # Своего hook'а нет — но, возможно, есть hook САМОГО ХАБА (auto-режим): он
+        # ведёт на тот же приёмник, только без маркера навыка. Живой случай
+        # 2026-07-21: hook хаба на GitLab существовал и работал, а проба
+        # отвечала «не найден», то есть сообщала об исправной настройке как о
+        # сломанной. Отличаем явно.
+        return HookState(found=False, hub_hook_id=_find_hub_hook_id(provider, hooks))
 
     hook_id = str(hook.get("id"))
     events = tuple(
