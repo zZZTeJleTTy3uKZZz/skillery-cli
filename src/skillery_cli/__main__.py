@@ -462,7 +462,9 @@ def _stop_daemon_for_upgrade() -> bool:
         return False
 
 
-def _spawn_background_upgrade(delay: float = 4.0) -> bool:
+def _spawn_background_upgrade(
+    delay: float = 4.0, version: str | None = None
+) -> bool:
     """Обновление CLI в ОТДЕЛЬНОМ процессе С ЗАДЕРЖКОЙ, НЕ дожидаясь его.
 
     Задержка критична на Windows: launcher ``skillery.exe`` залочен, пока
@@ -479,7 +481,7 @@ def _spawn_background_upgrade(delay: float = 4.0) -> bool:
     # файлов; обратно он поднимется сам при следующей команде (самолечение).
     _stop_daemon_for_upgrade()
 
-    cmd = _detect_upgrade_command()
+    cmd = _detect_upgrade_command(version)
     # worker: подождать (текущий launcher выйдет) → запустить апгрейд.
     worker = f"import time,subprocess;time.sleep({delay});subprocess.run({cmd!r})"
     popen_kw: dict = {
@@ -498,21 +500,45 @@ def _spawn_background_upgrade(delay: float = 4.0) -> bool:
         return False
 
 
-def _detect_upgrade_command() -> list[str]:
-    """Команда обновления CLI под менеджер установки (uv tool / pipx / pip)."""
+def _detect_upgrade_command(version: str | None = None) -> list[str]:
+    """Команда обновления CLI под менеджер установки (uv tool / pipx / pip).
+
+    Две защиты от «обновление молча не сработало»:
+
+    1. **Обход кэша индекса.** uv кэширует индекс PyPI, и `uv tool upgrade`
+       отвечал «уже последняя», хотя на PyPI лежала новее — обновление просто
+       не наступало. Поэтому всегда просим `--refresh`.
+    2. **Пин точной версии.** Версию мы уже узнали у PyPI (`_fetch_latest_pypi_version`),
+       так что не оставляем резолверу простора для решения «обновлять нечего»:
+       ставим ровно её через `install --force`. Это же чинит и «откат» —
+       перестановку на конкретную версию, а не только вперёд.
+
+    Без ``version`` (когда latest неизвестен) — прежнее поведение + ``--refresh``.
+    """
     import shutil
 
     dist = _branding.DIST_NAME
+    spec = f"{dist}=={version}" if version else dist
     exe = (sys.executable or "").replace("\\", "/").lower()
+
+    uv_cmd = (
+        ["uv", "tool", "install", "--force", "--refresh", spec]
+        if version
+        else ["uv", "tool", "upgrade", "--refresh", dist]
+    )
+    pipx_cmd = (
+        ["pipx", "install", "--force", spec] if version else ["pipx", "upgrade", dist]
+    )
+
     if "/uv/tools/" in exe and shutil.which("uv"):
-        return ["uv", "tool", "upgrade", dist]
+        return uv_cmd
     if "/pipx/" in exe and shutil.which("pipx"):
-        return ["pipx", "upgrade", dist]
+        return pipx_cmd
     if shutil.which("uv"):
-        return ["uv", "tool", "upgrade", dist]
+        return uv_cmd
     if shutil.which("pipx"):
-        return ["pipx", "upgrade", dist]
-    return [sys.executable, "-m", "pip", "install", "--upgrade", dist]
+        return pipx_cmd
+    return [sys.executable, "-m", "pip", "install", "--upgrade", spec]
 
 
 def _maybe_notify_cli_update(cfg: ClientConfig) -> None:
@@ -536,7 +562,7 @@ def _maybe_notify_cli_update(cfg: ClientConfig) -> None:
     err = Console(stderr=True)
     # Авто-апгрейд запускаем ТОЛЬКО на свежей проверке (fresh) — иначе спавнили бы
     # процесс обновления на каждой команде в пределах суточного cooldown.
-    if fresh and cfg.cli_auto_upgrade and _spawn_background_upgrade():
+    if fresh and cfg.cli_auto_upgrade and _spawn_background_upgrade(version=latest):
         err.print(
             f"[cyan]↑ Обновляю {_branding.DIST_NAME} {current} → {latest} в фоне[/] "
             "(применится при следующем запуске)."
@@ -545,7 +571,7 @@ def _maybe_notify_cli_update(cfg: ClientConfig) -> None:
     err.print(
         f"[yellow]↑ Доступна новая версия {_branding.DIST_NAME} {latest}[/] "
         f"(у вас {current}). Обновить: [bold]{_branding.APP_NAME} upgrade[/] "
-        f"или [dim]{' '.join(_detect_upgrade_command())}[/]"
+        f"или [dim]{' '.join(_detect_upgrade_command(latest))}[/]"
     )
 
 
@@ -593,7 +619,9 @@ def cmd_upgrade(
         emit_data(payload, text_renderer=_render)
         return
 
-    cmd = _detect_upgrade_command()
+    # Пинуем ровно ту версию, которую только что увидели на PyPI: иначе менеджер
+    # решал по своему кэшу индекса, что обновлять нечего, и upgrade был пустышкой.
+    cmd = _detect_upgrade_command(latest)
     console.print(
         f"Обновляю {_branding.DIST_NAME}: [bold]{current}[/] → [bold green]{latest}[/]"
     )
@@ -602,7 +630,7 @@ def cmd_upgrade(
     # могут его перезаписать (os error 32). Запускаем апгрейд в ОТДЕЛЬНОМ процессе
     # С ЗАДЕРЖКОЙ (после выхода этой команды), не синхронно.
     if sys.platform == "win32":
-        if _spawn_background_upgrade():
+        if _spawn_background_upgrade(version=latest):
             console.print(
                 "[cyan]↑ Обновление запущено[/] — применится через несколько секунд. "
                 f"Откройте новый терминал и проверьте: [bold]{_branding.APP_NAME} --version[/]."
@@ -624,7 +652,7 @@ def cmd_upgrade(
     try:
         subprocess.run(cmd, check=True)
     except Exception as e:
-        if _spawn_background_upgrade():
+        if _spawn_background_upgrade(version=latest):
             console.print(
                 "[cyan]↑ Синхронно не вышло — доупгрейжу в фоне.[/] "
                 "Откройте новый терминал."

@@ -15,6 +15,20 @@ from skillery_cli.commands import daemon as daemon_cmd
 
 
 class TestEnsureDaemonRunning:
+    @pytest.fixture(autouse=True)
+    def _unlocked(self, monkeypatch):
+        """Считаем, что ЯДЕРНЫЙ лок свободен, если тест не сказал иначе.
+
+        `ensure_daemon_running` спрашивает глобальный лок (#996), поэтому без
+        этой заглушки результат зависел бы от того, крутится ли на машине
+        разработчика настоящий демон — тесты «плавали» бы. Сценарий «лок занят»
+        проверяется отдельно в `test_daemon_single_instance.py`.
+        """
+        monkeypatch.setattr(daemon_cmd, "is_daemon_locked", lambda: False)
+        # После спавна родитель ждёт взятия лока (до ~5с). Лок здесь всегда
+        # «свободен», поэтому без заглушки каждый тест откручивал бы это ожидание.
+        monkeypatch.setattr(daemon_cmd.time, "sleep", lambda s: None)
+
     def test_starts_daemon_when_not_running(self, monkeypatch) -> None:
         monkeypatch.setattr(daemon_cmd, "read_running_pid", lambda: None)
         monkeypatch.setattr(daemon_cmd, "is_process_alive", lambda pid: False)
@@ -386,7 +400,9 @@ class TestUpgradeStopsDaemon:
         monkeypatch.setattr(
             m, "_stop_daemon_for_upgrade", lambda: order.append("stop") or True
         )
-        monkeypatch.setattr(m, "_detect_upgrade_command", lambda: ["echo", "ok"])
+        monkeypatch.setattr(
+            m, "_detect_upgrade_command", lambda *a, **k: ["echo", "ok"]
+        )
 
         import subprocess as _sp
 

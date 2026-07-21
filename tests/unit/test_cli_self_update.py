@@ -108,6 +108,73 @@ def test_detect_upgrade_command(
         assert cmd[-1] == "skillery-cli"
 
 
+def test_uv_upgrade_busts_index_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Без ``--refresh`` обновление молча не наступало.
+
+    uv кэширует индекс PyPI: `uv tool upgrade` отвечал «уже последняя», хотя на
+    PyPI лежала новее — пользователь «обновлялся» и оставался на старой версии.
+    """
+    monkeypatch.setattr(main_mod.sys, "executable", "/x/uv/tools/skillery-cli/bin/python")
+    monkeypatch.setattr("shutil.which", lambda name: name if name == "uv" else None)
+
+    assert "--refresh" in main_mod._detect_upgrade_command()
+
+
+@pytest.mark.parametrize(
+    "exe,which,expected",
+    [
+        (
+            "/x/uv/tools/skillery-cli/bin/python",
+            {"uv"},
+            ["uv", "tool", "install", "--force", "--refresh", "skillery-cli==1.2.3"],
+        ),
+        (
+            "/x/pipx/venvs/skillery-cli/bin/python",
+            {"pipx"},
+            ["pipx", "install", "--force", "skillery-cli==1.2.3"],
+        ),
+    ],
+)
+def test_known_version_is_pinned(
+    monkeypatch: pytest.MonkeyPatch, exe, which, expected
+) -> None:
+    """Версию с PyPI уже знаем — пинуем её, не оставляя резолверу выбора.
+
+    Иначе менеджер решал по своему кэшу, что обновлять нечего, и `upgrade`
+    оказывался пустышкой.
+    """
+    monkeypatch.setattr(main_mod.sys, "executable", exe)
+    monkeypatch.setattr("shutil.which", lambda name: name if name in which else None)
+
+    assert main_mod._detect_upgrade_command("1.2.3") == expected
+
+
+def test_known_version_is_pinned_for_pip(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(main_mod.sys, "executable", "/usr/bin/python3")
+    monkeypatch.setattr("shutil.which", lambda name: None)
+
+    cmd = main_mod._detect_upgrade_command("1.2.3")
+
+    assert cmd[1:] == ["-m", "pip", "install", "--upgrade", "skillery-cli==1.2.3"]
+
+
+def test_background_upgrade_passes_version_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Фоновый апгрейд обязан нести пин — иначе гарантия теряется по дороге."""
+    seen: dict = {}
+    monkeypatch.setattr(
+        main_mod, "_detect_upgrade_command", lambda v=None: seen.setdefault("v", v) or ["uv"]
+    )
+    monkeypatch.setattr(main_mod, "_stop_daemon_for_upgrade", lambda: None)
+    # subprocess импортируется ВНУТРИ функции — патчим сам модуль, не main_mod.
+    monkeypatch.setattr("subprocess.Popen", lambda *a, **k: None)
+
+    main_mod._spawn_background_upgrade(delay=0, version="9.9.9")
+
+    assert seen["v"] == "9.9.9"
+
+
 # ---------------- _maybe_notify_cli_update: JSON-режим молчит ----------------
 def test_notify_silent_in_json_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     from skillery_cli import output as out_mod
@@ -179,7 +246,7 @@ def test_auto_upgrades_on_fresh_check(monkeypatch: pytest.MonkeyPatch) -> None:
     spawned = {"n": 0}
     monkeypatch.setattr(
         main_mod, "_spawn_background_upgrade",
-        lambda: (spawned.__setitem__("n", spawned["n"] + 1) or True),
+        lambda *a, **k: (spawned.__setitem__("n", spawned["n"] + 1) or True),
     )
     main_mod._maybe_notify_cli_update(ClientConfig(base_url="x", cli_auto_upgrade=True))
     assert spawned["n"] == 1
@@ -191,7 +258,7 @@ def test_no_autoupgrade_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
     spawned = {"n": 0}
     monkeypatch.setattr(
         main_mod, "_spawn_background_upgrade",
-        lambda: (spawned.__setitem__("n", spawned["n"] + 1) or True),
+        lambda *a, **k: (spawned.__setitem__("n", spawned["n"] + 1) or True),
     )
     main_mod._maybe_notify_cli_update(ClientConfig(base_url="x", cli_auto_upgrade=False))
     assert spawned["n"] == 0  # авто выключено → только уведомление
@@ -204,7 +271,7 @@ def test_no_autoupgrade_when_not_fresh(monkeypatch: pytest.MonkeyPatch) -> None:
     spawned = {"n": 0}
     monkeypatch.setattr(
         main_mod, "_spawn_background_upgrade",
-        lambda: (spawned.__setitem__("n", spawned["n"] + 1) or True),
+        lambda *a, **k: (spawned.__setitem__("n", spawned["n"] + 1) or True),
     )
     main_mod._maybe_notify_cli_update(ClientConfig(base_url="x", cli_auto_upgrade=True))
     assert spawned["n"] == 0
@@ -221,7 +288,7 @@ def test_spawn_background_upgrade_detached(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr("subprocess.Popen", _FakePopen)
     monkeypatch.setattr(
         main_mod, "_detect_upgrade_command",
-        lambda: ["uv", "tool", "upgrade", "skillery-cli"],
+        lambda *a, **k: ["uv", "tool", "upgrade", "skillery-cli"],
     )
     assert main_mod._spawn_background_upgrade(delay=0) is True
     # Спавнит ИНТЕРПРЕТАТОР с worker-скриптом (задержка + upgrade), НЕ skillery.exe
