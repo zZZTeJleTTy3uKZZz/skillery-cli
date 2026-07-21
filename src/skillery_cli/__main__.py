@@ -1874,11 +1874,18 @@ async def _materialize_from_bundle(
                 shutil.rmtree(tmp_dir, ignore_errors=True)
 
     # Fallback: git clone (приватный репо → нужны клиентские git-креды).
+    #
+    # #943: skill_path ОБЯЗАН доехать сюда. Выше он уже прочитан — им решается
+    # «снапшот или клон» (снапшот применим только для навыка в корне репо). Но в
+    # сам install его не передавали: навык-в-подпапке уходил на клон и получал
+    # КОРЕНЬ монорепозитория — src/, migrations/, pyproject.toml, а SKILL.md
+    # оказывался этажом ниже. В таком виде Claude Code навык не видит вовсе.
     return installer.install(
         slug=dep_slug or None,
         version=dep_version,
         commit_sha=commit_sha,
         repo_url=dep_repo or dep_bundle.get("repo_url"),
+        skill_path=skill_path,
         manifest=manifest,
         project=project_path,
         force=force,
