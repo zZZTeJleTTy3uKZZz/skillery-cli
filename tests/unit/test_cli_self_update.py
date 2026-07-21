@@ -173,21 +173,40 @@ def test_known_version_is_pinned_for_pip(monkeypatch: pytest.MonkeyPatch) -> Non
     assert cmd[1:] == ["-m", "pip", "install", "--upgrade", "skillery-cli==1.2.3"]
 
 
+def _capture_spawn(monkeypatch) -> dict:
+    """Перехватить фоновый спавн апгрейда и вернуть {launcher, cmd, kw, config}.
+
+    Новый контракт: спавнится ``[launcher, worker.py, config.json]``, а команды
+    обновления и путь бинаря демона лежат в config.json (не в строке worker'а).
+    """
+    calls: dict[str, Any] = {}
+    monkeypatch.setattr("subprocess.Popen", lambda cmd, **kw: calls.update(cmd=cmd, kw=kw))
+    monkeypatch.setattr(main_mod, "_stop_daemon_for_upgrade", lambda: None)
+    monkeypatch.setattr(main_mod, "_upgrade_already_running", lambda: False)
+
+    def _read():
+        import json
+
+        cfg_path = calls["cmd"][2]
+        calls["launcher"] = calls["cmd"][0]
+        calls["config"] = json.loads(open(cfg_path, encoding="utf-8").read())
+        return calls
+
+    calls["read"] = _read
+    return calls
+
+
 def test_background_upgrade_passes_version_through(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Фоновый апгрейд обязан нести пин — иначе гарантия теряется по дороге."""
-    seen: dict = {}
-    monkeypatch.setattr(
-        main_mod, "_detect_upgrade_command", lambda v=None: seen.setdefault("v", v) or ["uv"]
-    )
-    monkeypatch.setattr(main_mod, "_stop_daemon_for_upgrade", lambda: None)
-    # subprocess импортируется ВНУТРИ функции — патчим сам модуль, не main_mod.
-    monkeypatch.setattr("subprocess.Popen", lambda *a, **k: None)
+    cap = _capture_spawn(monkeypatch)
 
-    main_mod._spawn_background_upgrade(delay=0, version="9.9.9")
+    assert main_mod._spawn_background_upgrade(delay=0, version="9.9.9") is True
+    cap["read"]()
 
-    assert seen["v"] == "9.9.9"
+    commands = cap["config"]["commands"]
+    assert any("skillery-cli==9.9.9" in c[-1] for c in commands)
 
 
 # ---------------- _maybe_notify_cli_update: JSON-режим молчит ----------------
@@ -293,54 +312,39 @@ def test_no_autoupgrade_when_not_fresh(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_spawn_background_upgrade_detached(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: dict[str, Any] = {}
+    cap = _capture_spawn(monkeypatch)
 
-    class _FakePopen:
-        def __init__(self, cmd, **kw):
-            calls["cmd"] = cmd
-            calls["kw"] = kw
+    assert main_mod._spawn_background_upgrade(delay=0, version="1.2.3") is True
+    cap["read"]()
 
-    monkeypatch.setattr("subprocess.Popen", _FakePopen)
-    monkeypatch.setattr(
-        main_mod, "_detect_upgrade_command",
-        lambda *a, **k: ["uv", "tool", "upgrade", "skillery-cli"],
-    )
-    assert main_mod._spawn_background_upgrade(delay=0) is True
-    # Спавнит ИНТЕРПРЕТАТОР с worker-скриптом (задержка + upgrade), НЕ skillery.exe
-    # — иначе launcher .exe залочен и uv не перезапишет его (Windows os error 32).
-    assert calls["cmd"][1] == "-c"
-    assert "['uv', 'tool', 'upgrade', 'skillery-cli']" in calls["cmd"][2]
-    assert "subprocess.run(c," in calls["cmd"][2]
-    assert "time.sleep" in calls["cmd"][2]
     import subprocess
-    assert calls["kw"]["stdout"] == subprocess.DEVNULL
+
+    # Спавнит ИНТЕРПРЕТАТОР + файл worker'а (не строку -c, не skillery.exe):
+    # cmd = [launcher, worker.py, config.json]. Команды апгрейда — в config.
+    assert cap["cmd"][1].endswith("_upgrade_worker.py")
+    assert cap["cmd"][2].endswith("_upgrade_worker.json")
+    assert cap["kw"]["stdout"] == subprocess.DEVNULL
+    assert cap["config"]["commands"], "цепочка команд не должна быть пустой"
 
 
 def test_worker_falls_back_when_pinned_version_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Пин может транзиентно упасть — воркер обязан добрать обычным upgrade.
+    """Пин может транзиентно упасть — цепочка обязана добрать обычным upgrade.
 
     Сразу после релиза индекс PyPI ещё не разъехался по CDN, и `pkg==X.Y.Z`
     отвечает «no version». Без цепочки обновление сорвалось бы с ошибкой.
     """
-    calls: dict[str, Any] = {}
-
-    class _FakePopen:
-        def __init__(self, cmd, **kw):
-            calls["cmd"] = cmd
-
-    monkeypatch.setattr("subprocess.Popen", _FakePopen)
+    cap = _capture_spawn(monkeypatch)
     monkeypatch.setattr(main_mod.sys, "executable", "/x/uv/tools/skillery-cli/bin/python")
     monkeypatch.setattr("shutil.which", lambda name: name if name == "uv" else None)
-    monkeypatch.setattr(main_mod, "_stop_daemon_for_upgrade", lambda: None)
 
     main_mod._spawn_background_upgrade(delay=0, version="1.2.3")
-    worker = calls["cmd"][2]
+    commands = cap["read"]()["config"]["commands"]
 
-    assert "skillery-cli==1.2.3" in worker           # сначала точная версия
-    assert "'--refresh', 'skillery-cli'" in worker   # затем фолбэк без пина
-    assert "break" in worker                         # до первой удачной
+    assert commands[0][-1] == "skillery-cli==1.2.3"   # сначала точная версия
+    assert commands[-1][-1] == "skillery-cli"         # затем фолбэк без пина
+    assert "--refresh" in commands[-1]
 
 
 def test_worker_runs_outside_tool_dir(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -352,11 +356,7 @@ def test_worker_runs_outside_tool_dir(monkeypatch: pytest.MonkeyPatch) -> None:
     Снаружи это выглядело как «обновление запущено» и полная тишина: worker
     блокировал сам себя. Берём базовый интерпретатор — он вне tool-каталога.
     """
-    calls: dict[str, Any] = {}
-    monkeypatch.setattr(
-        "subprocess.Popen", lambda cmd, **kw: calls.__setitem__("cmd", cmd)
-    )
-    monkeypatch.setattr(main_mod, "_stop_daemon_for_upgrade", lambda: None)
+    cap = _capture_spawn(monkeypatch)
     monkeypatch.setattr(
         main_mod.sys, "executable", "/x/uv/tools/skillery-cli/Scripts/python.exe"
     )
@@ -364,8 +364,8 @@ def test_worker_runs_outside_tool_dir(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(main_mod.Path, "exists", lambda self: True)
 
     main_mod._spawn_background_upgrade(delay=0)
+    launcher = cap["read"]()["launcher"]
 
-    launcher = calls["cmd"][0]
     assert "tools" not in launcher.replace("\\", "/").split("/")
     assert launcher != main_mod.sys.executable
 
@@ -373,37 +373,23 @@ def test_worker_runs_outside_tool_dir(monkeypatch: pytest.MonkeyPatch) -> None:
 class TestNoVisibleConsoleWindows:
     """Апгрейд не должен показывать НИ ОДНОГО окна.
 
-    Замерено живьём: worker detached ⇒ собственной консоли у него нет, и когда он
-    запускает консольный `uv` БЕЗ флагов, Windows 11 отдаёт консоль ребёнка
-    терминалу по умолчанию — всплывает вкладка Windows Terminal с видимым окном.
-    С `CREATE_NO_WINDOW` у внутреннего вызова окно не появляется.
+    Само подавление окна у ВНУТРЕННИХ вызовов теперь живёт в worker'е и покрыто
+    ``tests/test_upgrade_worker.py`` (worker detached ⇒ консоли нет, и без
+    CREATE_NO_WINDOW консольный uv всплыл бы вкладкой Windows Terminal). Здесь
+    держим инварианты СПАВНА worker'а из CLI.
     """
 
-    @pytest.fixture
-    def spawned(self, monkeypatch):
-        calls: dict[str, Any] = {}
-        monkeypatch.setattr(
-            "subprocess.Popen",
-            lambda cmd, **kw: calls.update({"cmd": cmd, "kw": kw}),
-        )
-        monkeypatch.setattr(main_mod, "_stop_daemon_for_upgrade", lambda: None)
-        monkeypatch.setattr(main_mod.sys, "platform", "win32")
-        monkeypatch.setattr(main_mod.Path, "exists", lambda self: True)
-        main_mod._spawn_background_upgrade(delay=0, version="1.2.3")
-        return calls
-
-    def test_inner_call_suppresses_window(self, spawned) -> None:
-        worker = spawned["cmd"][2]
-        assert "creationflags=0x08000000" in worker, (
-            "внутренний вызов без CREATE_NO_WINDOW всплывает вкладкой терминала"
-        )
-
-    def test_outer_does_not_mix_exclusive_flags(self, spawned) -> None:
+    def test_outer_does_not_mix_exclusive_flags(self, monkeypatch) -> None:
         """CREATE_NO_WINDOW ИГНОРИРУЕТСЯ вместе с DETACHED_PROCESS (док Win32).
 
         Комбинация создавала ложное ощущение, будто окно подавлено именно ею.
         """
-        flags = spawned["kw"]["creationflags"]
+        cap = _capture_spawn(monkeypatch)
+        monkeypatch.setattr(main_mod.sys, "platform", "win32")
+        monkeypatch.setattr(main_mod.Path, "exists", lambda self: True)
+
+        main_mod._spawn_background_upgrade(delay=0, version="1.2.3")
+        flags = cap["read"]()["kw"]["creationflags"]
         assert flags == 0x00000008, hex(flags)
 
     def test_launcher_prefers_windowless_python(self, monkeypatch) -> None:

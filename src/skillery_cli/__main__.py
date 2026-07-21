@@ -462,6 +462,31 @@ def _stop_daemon_for_upgrade() -> bool:
         return False
 
 
+def _upgrade_already_running() -> bool:
+    """Идёт ли апгрейд прямо сейчас (лок держит worker).
+
+    Два одновременных `upgrade` рвут установку: worker'ы перезаписывают одни и
+    те же файлы, и trampoline остаётся битым — `skillery` падает с «uv trampoline
+    failed to canonicalize script path», лечится только переустановкой.
+
+    Лок берём тем же ядерным механизмом, что и у демона (mutex/flock), просто под
+    своим именем — второй реализации единственности не заводим.
+    """
+    try:
+        from skillery_cli._upgrade_worker import MUTEX_NAME, lock_path
+        from skillery_cli.daemon.single_instance import acquire_daemon_lock
+
+        # И имя мьютекса, и файл — те же, что берёт worker: иначе на POSIX
+        # проверка смотрела бы в другой файл и не увидела бы идущий апгрейд.
+        lock = acquire_daemon_lock(mutex_name=MUTEX_NAME, lock_path=lock_path())
+        if not lock.acquired:
+            return True
+        lock.release()
+        return False
+    except Exception:  # noqa: BLE001 — недоступность лока не повод не обновляться
+        return False
+
+
 def _upgrade_launcher() -> str:
     """Интерпретатор для worker'а — ОБЯЗАТЕЛЬНО вне каталога самого инструмента.
 
@@ -502,33 +527,48 @@ def _spawn_background_upgrade(
     launcher снова залочит .exe. venv обновляется, launcher пересоздаётся; новая
     версия применяется со СЛЕДУЮЩЕГО запуска CLI. True если процесс стартовал.
     """
+    import json
+    import shutil
     import subprocess
 
+    from skillery_cli import _upgrade_worker as worker_mod
+
+    # Два одновременных апгрейда перезаписывают одни и те же файлы и оставляют
+    # trampoline битым («uv trampoline failed to canonicalize script path»).
+    if _upgrade_already_running():
+        return False
+
     # Демон держит открытыми файлы окружения (Scripts/, Lib/) — без остановки
-    # апгрейд падает с «Отказано в доступе» (os error 5). Гасим его ДО замены
-    # файлов; обратно он поднимется сам при следующей команде (самолечение).
+    # апгрейд падает с «Отказано в доступе» (os error 5). Здесь гасим заранее,
+    # но ГЛАВНОЕ гашение делает worker непосредственно перед заменой файлов:
+    # между нашим выходом и его стартом демон мог бы вернуться самолечением.
     _stop_daemon_for_upgrade()
 
     cmds = _upgrade_commands(version)
-    # worker: подождать (текущий launcher выйдет) → пройти цепочку команд до
-    # первой удачной. Цепочка, а не одна команда: пин точной версии может
-    # транзиентно упасть («no version»), если индекс PyPI ещё не разъехался по
-    # CDN сразу после релиза — тогда добираем обычным upgrade.
-    # ВНУТРЕННИЕ вызовы тоже должны быть без окна. Сам worker detached, то есть
-    # КОНСОЛИ У НЕГО НЕТ — и когда он запускает консольный uv/pipx/pip без флагов,
-    # Windows 11 отдаёт консоль ребёнка терминалу по умолчанию и на экране
-    # ВСПЛЫВАЕТ вкладка Windows Terminal. Замерено: без флагов появляется
-    # WindowsTerminal с видимым окном, с CREATE_NO_WINDOW — не появляется.
-    no_window = "" if sys.platform != "win32" else ", creationflags=0x08000000"
-    worker = (
-        "import time,subprocess\n"
-        f"time.sleep({delay})\n"
-        f"for c in {cmds!r}:\n"
-        "    try:\n"
-        f"        if subprocess.run(c, stdout=subprocess.DEVNULL,"
-        f" stderr=subprocess.DEVNULL{no_window}).returncode == 0: break\n"
-        "    except Exception: pass\n"
-    )
+
+    # Worker кладём ВНЕ tool-каталога: этот каталог целиком перезаписывается,
+    # а скрипт должен пережить замену и не держать его открытым.
+    home = Path.home() / _branding.HOME_DIR_NAME
+    home.mkdir(parents=True, exist_ok=True)
+    worker_py = home / "_upgrade_worker.py"
+    config_json = home / "_upgrade_worker.json"
+    try:
+        shutil.copyfile(worker_mod.__file__, worker_py)
+        config_json.write_text(
+            json.dumps(
+                {
+                    "delay": delay,
+                    "commands": cmds,
+                    # Демон поднимаем УЖЕ НОВЫМ бинарём сразу после апгрейда,
+                    # не дожидаясь следующей команды пользователя.
+                    "daemon_binary": shutil.which(_branding.APP_NAME) or "",
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+    except Exception:
+        return False
     popen_kw: dict = {
         "stdout": subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,
@@ -544,7 +584,7 @@ def _spawn_background_upgrade(
         popen_kw["start_new_session"] = True
     try:
         subprocess.Popen(  # noqa: S603
-            [_upgrade_launcher(), "-c", worker], **popen_kw
+            [_upgrade_launcher(), str(worker_py), str(config_json)], **popen_kw
         )
         return True
     except Exception:
