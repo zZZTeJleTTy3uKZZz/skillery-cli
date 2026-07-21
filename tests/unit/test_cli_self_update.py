@@ -310,7 +310,7 @@ def test_spawn_background_upgrade_detached(monkeypatch: pytest.MonkeyPatch) -> N
     # — иначе launcher .exe залочен и uv не перезапишет его (Windows os error 32).
     assert calls["cmd"][1] == "-c"
     assert "['uv', 'tool', 'upgrade', 'skillery-cli']" in calls["cmd"][2]
-    assert "subprocess.run(c)" in calls["cmd"][2]
+    assert "subprocess.run(c," in calls["cmd"][2]
     assert "time.sleep" in calls["cmd"][2]
     import subprocess
     assert calls["kw"]["stdout"] == subprocess.DEVNULL
@@ -368,6 +368,50 @@ def test_worker_runs_outside_tool_dir(monkeypatch: pytest.MonkeyPatch) -> None:
     launcher = calls["cmd"][0]
     assert "tools" not in launcher.replace("\\", "/").split("/")
     assert launcher != main_mod.sys.executable
+
+
+class TestNoVisibleConsoleWindows:
+    """Апгрейд не должен показывать НИ ОДНОГО окна.
+
+    Замерено живьём: worker detached ⇒ собственной консоли у него нет, и когда он
+    запускает консольный `uv` БЕЗ флагов, Windows 11 отдаёт консоль ребёнка
+    терминалу по умолчанию — всплывает вкладка Windows Terminal с видимым окном.
+    С `CREATE_NO_WINDOW` у внутреннего вызова окно не появляется.
+    """
+
+    @pytest.fixture
+    def spawned(self, monkeypatch):
+        calls: dict[str, Any] = {}
+        monkeypatch.setattr(
+            "subprocess.Popen",
+            lambda cmd, **kw: calls.update({"cmd": cmd, "kw": kw}),
+        )
+        monkeypatch.setattr(main_mod, "_stop_daemon_for_upgrade", lambda: None)
+        monkeypatch.setattr(main_mod.sys, "platform", "win32")
+        monkeypatch.setattr(main_mod.Path, "exists", lambda self: True)
+        main_mod._spawn_background_upgrade(delay=0, version="1.2.3")
+        return calls
+
+    def test_inner_call_suppresses_window(self, spawned) -> None:
+        worker = spawned["cmd"][2]
+        assert "creationflags=0x08000000" in worker, (
+            "внутренний вызов без CREATE_NO_WINDOW всплывает вкладкой терминала"
+        )
+
+    def test_outer_does_not_mix_exclusive_flags(self, spawned) -> None:
+        """CREATE_NO_WINDOW ИГНОРИРУЕТСЯ вместе с DETACHED_PROCESS (док Win32).
+
+        Комбинация создавала ложное ощущение, будто окно подавлено именно ею.
+        """
+        flags = spawned["kw"]["creationflags"]
+        assert flags == 0x00000008, hex(flags)
+
+    def test_launcher_prefers_windowless_python(self, monkeypatch) -> None:
+        monkeypatch.setattr(main_mod.sys, "platform", "win32")
+        monkeypatch.setattr(main_mod.sys, "base_prefix", "/base")
+        monkeypatch.setattr(main_mod.Path, "exists", lambda self: True)
+
+        assert main_mod._upgrade_launcher().endswith("pythonw.exe")
 
 
 def test_upgrade_chain_is_single_command_without_version(

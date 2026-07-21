@@ -476,8 +476,10 @@ def _upgrade_launcher() -> str:
     пакет он не импортирует.
     """
     base = Path(sys.base_prefix)
+    # На Windows pythonw ПЕРВЫМ: у него нет консольной подсистемы, поэтому окно
+    # не может всплыть даже если флаги создания процесса кто-то потеряет.
     names = (
-        ("python.exe", "pythonw.exe")
+        ("pythonw.exe", "python.exe")
         if sys.platform == "win32"
         else ("python3", "python")
     )
@@ -512,12 +514,19 @@ def _spawn_background_upgrade(
     # первой удачной. Цепочка, а не одна команда: пин точной версии может
     # транзиентно упасть («no version»), если индекс PyPI ещё не разъехался по
     # CDN сразу после релиза — тогда добираем обычным upgrade.
+    # ВНУТРЕННИЕ вызовы тоже должны быть без окна. Сам worker detached, то есть
+    # КОНСОЛИ У НЕГО НЕТ — и когда он запускает консольный uv/pipx/pip без флагов,
+    # Windows 11 отдаёт консоль ребёнка терминалу по умолчанию и на экране
+    # ВСПЛЫВАЕТ вкладка Windows Terminal. Замерено: без флагов появляется
+    # WindowsTerminal с видимым окном, с CREATE_NO_WINDOW — не появляется.
+    no_window = "" if sys.platform != "win32" else ", creationflags=0x08000000"
     worker = (
         "import time,subprocess\n"
         f"time.sleep({delay})\n"
         f"for c in {cmds!r}:\n"
         "    try:\n"
-        "        if subprocess.run(c).returncode == 0: break\n"
+        f"        if subprocess.run(c, stdout=subprocess.DEVNULL,"
+        f" stderr=subprocess.DEVNULL{no_window}).returncode == 0: break\n"
         "    except Exception: pass\n"
     )
     popen_kw: dict = {
@@ -526,7 +535,11 @@ def _spawn_background_upgrade(
         "stdin": subprocess.DEVNULL,
     }
     if sys.platform == "win32":
-        popen_kw["creationflags"] = subprocess.CREATE_NO_WINDOW | 0x00000008  # DETACHED_PROCESS
+        # ⚠ Только DETACHED_PROCESS: по документации Win32 CREATE_NO_WINDOW
+        # ИГНОРИРУЕТСЯ, если задан DETACHED_PROCESS (флаги взаимоисключающие).
+        # Консоли у процесса не будет и так; комбинация лишь вводила в
+        # заблуждение, будто окно подавлено именно ею.
+        popen_kw["creationflags"] = 0x00000008  # DETACHED_PROCESS
     else:
         popen_kw["start_new_session"] = True
     try:
