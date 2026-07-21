@@ -531,11 +531,11 @@ def _detect_upgrade_command(version: str | None = None) -> list[str]:
     spec = f"{dist}=={version}" if version else dist
     exe = (sys.executable or "").replace("\\", "/").lower()
 
-    uv_cmd = (
-        ["uv", "tool", "install", "--force", "--refresh", spec]
-        if version
-        else ["uv", "tool", "upgrade", "--refresh", dist]
-    )
+    # ВСЕГДА `tool install --force --refresh`, а НЕ `tool upgrade`: у `uv tool
+    # upgrade` нет флага `--refresh` (он падает «unexpected argument»), а без
+    # обхода кэша индекса обновление и не наступало. `install --force` ставит
+    # latest ровно так же, но умеет обойти кэш.
+    uv_cmd = ["uv", "tool", "install", "--force", "--refresh", spec]
     pipx_cmd = (
         ["pipx", "install", "--force", spec] if version else ["pipx", "upgrade", dist]
     )

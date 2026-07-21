@@ -90,7 +90,7 @@ def test_check_cli_update_none_when_not_newer(monkeypatch: pytest.MonkeyPatch) -
 @pytest.mark.parametrize(
     "exe,which,expected_head",
     [
-        ("/home/u/.local/share/uv/tools/skillery-cli/bin/python", {"uv"}, ["uv", "tool", "upgrade"]),
+        ("/home/u/.local/share/uv/tools/skillery-cli/bin/python", {"uv"}, ["uv", "tool", "install"]),
         ("/home/u/.local/pipx/venvs/skillery-cli/bin/python", {"pipx"}, ["pipx", "upgrade"]),
         ("/usr/bin/python3", set(), None),  # ни uv ни pipx → pip
     ],
@@ -118,6 +118,21 @@ def test_uv_upgrade_busts_index_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("shutil.which", lambda name: name if name == "uv" else None)
 
     assert "--refresh" in main_mod._detect_upgrade_command()
+
+
+def test_uv_never_uses_tool_upgrade(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`uv tool upgrade` НЕ принимает `--refresh` — команда падает целиком.
+
+    Ловили живьём: `error: unexpected argument '--refresh' found`. Без обхода
+    кэша обновление не наступает, а с ним `tool upgrade` не запускается вовсе —
+    поэтому uv-ветка обязана идти через `tool install --force --refresh`.
+    """
+    monkeypatch.setattr(main_mod.sys, "executable", "/x/uv/tools/skillery-cli/bin/python")
+    monkeypatch.setattr("shutil.which", lambda name: name if name == "uv" else None)
+
+    for cmd in main_mod._upgrade_commands("1.2.3") + [main_mod._detect_upgrade_command()]:
+        assert cmd[:3] == ["uv", "tool", "install"], cmd
+        assert "--refresh" in cmd, cmd
 
 
 @pytest.mark.parametrize(
@@ -325,7 +340,7 @@ def test_worker_falls_back_when_pinned_version_missing(
     worker = calls["cmd"][2]
 
     assert "skillery-cli==1.2.3" in worker           # сначала точная версия
-    assert "'upgrade', '--refresh'" in worker        # затем фолбэк
+    assert "'--refresh', 'skillery-cli'" in worker   # затем фолбэк без пина
     assert "break" in worker                         # до первой удачной
 
 
@@ -337,7 +352,7 @@ def test_upgrade_chain_is_single_command_without_version(
     monkeypatch.setattr("shutil.which", lambda name: name if name == "uv" else None)
 
     assert main_mod._upgrade_commands() == [
-        ["uv", "tool", "upgrade", "--refresh", "skillery-cli"]
+        ["uv", "tool", "install", "--force", "--refresh", "skillery-cli"]
     ]
 
 
