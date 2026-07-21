@@ -44,6 +44,21 @@ def lock_path() -> Path:
     return Path.home() / ".skillery" / LOCK_FILENAME
 
 
+def _log(msg: str) -> None:
+    """Дневник апгрейда: worker фоновый и невидимый, без лога он — чёрный ящик.
+
+    Именно из-за этого «обновление запущено → и тишина» диагностировалось только
+    по внешним симптомам. Пишем ход в ~/.skillery/upgrade.log (best-effort).
+    """
+    try:
+        p = Path.home() / ".skillery" / "upgrade.log"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a", encoding="utf-8") as f:
+            f.write(msg.rstrip() + "\n")
+    except Exception:
+        pass
+
+
 def _no_window_kwargs() -> dict:
     """Флаги, чтобы дочерний процесс не показал консольное окно.
 
@@ -175,35 +190,65 @@ def stop_daemons(timeout: float = 10.0) -> list[int]:
 # --------------------------------------------------------------------------
 #  апгрейд + возврат демона
 # --------------------------------------------------------------------------
-def run_upgrade(commands: list[list[str]]) -> bool:
-    """Цепочка команд до первой удачной.
+def run_upgrade(commands: list[list[str]], retries: int = 6, delay: float = 15.0) -> bool:
+    """Прогнать команды до первой удачной, с ПОВТОРАМИ на первой (пин версии).
 
-    Цепочка, а не одна команда: пин точной версии транзиентно отвечает
-    «no version», пока свежий релиз не разъехался по CDN PyPI.
+    Первая команда — пин точной версии (её мы уже видели на PyPI). Сразу после
+    релиза индекс ещё не разъехался по CDN и пин транзиентно отвечает «no
+    version». Раньше мы на этом откатывались на голый `install latest` — но
+    отставший edge-узел отдавал СТАРУЮ версию как latest, и апгрейд «успешно»
+    ставил то же самое. Поэтому пин ПОВТОРЯЕМ с бэкоффом (CDN догоняет за
+    секунды-минуты), и только если он так и не дался — пробуем прочие команды
+    как последнее средство.
     """
-    for cmd in commands:
+    primary, rest = (commands[0], commands[1:]) if commands else (None, [])
+    if primary is not None:
+        for attempt in range(1, retries + 1):
+            try:
+                rc = subprocess.run(primary, timeout=600, **_no_window_kwargs()).returncode
+                _log(f"upgrade attempt {attempt}/{retries}: {' '.join(primary)} → rc={rc}")
+                if rc == 0:
+                    return True
+            except Exception as e:  # noqa: BLE001
+                _log(f"upgrade attempt {attempt}/{retries} EXC: {e}")
+            if attempt < retries:
+                time.sleep(delay)
+    for cmd in rest:
         try:
-            if subprocess.run(cmd, timeout=600, **_no_window_kwargs()).returncode == 0:
+            rc = subprocess.run(cmd, timeout=600, **_no_window_kwargs()).returncode
+            _log(f"upgrade fallback: {' '.join(cmd)} → rc={rc}")
+            if rc == 0:
                 return True
-        except Exception:
-            continue
+        except Exception as e:  # noqa: BLE001
+            _log(f"upgrade fallback EXC: {e}")
     return False
 
 
 def start_daemon(binary: str) -> bool:
-    """Поднять демон НОВЫМ бинарём — сразу, не дожидаясь команды пользователя."""
+    """Поднять демон НОВЫМ бинарём — сразу, не дожидаясь команды пользователя.
+
+    С ПОВТОРАМИ: сразу после апгрейда trampoline `skillery.exe` пересоздаётся и
+    несколько секунд может быть в переходном состоянии («uv trampoline failed to
+    canonicalize script path»). Запускаем СИНХРОННО и проверяем returncode —
+    Popen «выстрелил и забыл» не отличал бы успех от битого бинаря. `daemon
+    start` быстрый: сам поднимает detached-демон и выходит.
+    """
     if not binary:
+        _log("start_daemon: пустой daemon_binary — пропуск")
         return False
-    kw = dict(_no_window_kwargs())
-    if IS_WIN:
-        kw["creationflags"] = CREATE_NO_WINDOW | DETACHED_PROCESS
-    else:
-        kw["start_new_session"] = True
-    try:
-        subprocess.Popen([binary, "daemon", "start"], **kw)
-        return True
-    except Exception:
-        return False
+    kw = dict(_no_window_kwargs())  # без окна; ждём завершения самой команды
+    for attempt in range(1, 6):
+        try:
+            rc = subprocess.run(
+                [binary, "daemon", "start"], timeout=60, **kw
+            ).returncode
+            _log(f"start_daemon attempt {attempt}: rc={rc}")
+            if rc == 0:
+                return True
+        except Exception as e:  # noqa: BLE001
+            _log(f"start_daemon attempt {attempt} EXC: {e}")
+        time.sleep(3)
+    return False
 
 
 def main(argv: list[str]) -> int:
@@ -211,19 +256,25 @@ def main(argv: list[str]) -> int:
         return 2
     try:
         cfg = json.loads(Path(argv[1]).read_text(encoding="utf-8"))
-    except Exception:
+    except Exception as e:
+        _log(f"worker start: bad config: {e}")
         return 2
 
     lock = acquire_lock()
     if lock is None:
+        _log("worker start: апгрейд уже идёт — выходим")
         return 0  # апгрейд уже идёт — второй worker не нужен
 
+    _log(f"--- worker start pid={os.getpid()} ---")
     time.sleep(float(cfg.get("delay", 4.0)))
-    stop_daemons()
+    killed = stop_daemons()
+    _log(f"stop_daemons killed={killed}")
     ok = run_upgrade([list(c) for c in cfg.get("commands", [])])
+    _log(f"run_upgrade → {ok}")
     # Демон возвращаем в ЛЮБОМ случае: даже если обновиться не вышло, оставлять
     # пользователя без демона нельзя — очередь заданий перестанет применяться.
     start_daemon(cfg.get("daemon_binary", ""))
+    _log(f"--- worker done ok={ok} ---")
     return 0 if ok else 1
 
 

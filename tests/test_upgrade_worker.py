@@ -134,16 +134,35 @@ class TestNoWindows:
         assert w._no_window_kwargs()["creationflags"] == w.CREATE_NO_WINDOW
 
     @pytest.mark.skipif(sys.platform != "win32", reason="windows-специфика")
-    def test_daemon_start_is_detached_and_windowless(self, monkeypatch) -> None:
+    def test_daemon_start_is_windowless_and_checks_rc(self, monkeypatch) -> None:
+        """Синхронный запуск (проверяем rc), без окна. Detach делает cmd_daemon_start."""
         captured: dict = {}
-        monkeypatch.setattr(
-            w.subprocess, "Popen", lambda cmd, **kw: captured.update(cmd=cmd, kw=kw)
-        )
+
+        class _R:
+            returncode = 0
+
+        def _run(cmd, **kw):
+            captured.update(cmd=cmd, kw=kw)
+            return _R()
+
+        monkeypatch.setattr(w.subprocess, "run", _run)
 
         assert w.start_daemon("skillery.exe") is True
-        flags = captured["kw"]["creationflags"]
-        assert flags & w.CREATE_NO_WINDOW
-        assert flags & w.DETACHED_PROCESS
+        assert captured["kw"]["creationflags"] & w.CREATE_NO_WINDOW
+        assert captured["cmd"] == ["skillery.exe", "daemon", "start"]
+
+    def test_daemon_start_retries_broken_trampoline(self, monkeypatch) -> None:
+        """Сразу после апгрейда trampoline транзиентно битый — повторяем."""
+        rcs = iter([1, 1, 0])  # первые два раза бинарь ещё не готов
+        monkeypatch.setattr(w.time, "sleep", lambda s: None)
+
+        class _R:
+            def __init__(self, rc):
+                self.returncode = rc
+
+        monkeypatch.setattr(w.subprocess, "run", lambda cmd, **kw: _R(next(rcs)))
+
+        assert w.start_daemon("skillery.exe") is True
 
     def test_chain_stops_at_first_success(self, monkeypatch) -> None:
         calls: list = []
