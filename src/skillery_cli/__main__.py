@@ -14,6 +14,7 @@ import asyncio
 import os
 import re
 import sys
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -431,6 +432,36 @@ def _check_cli_update(cfg: ClientConfig, *, now: datetime | None = None) -> str 
     return _check_cli_update_detailed(cfg, now=now)[0]
 
 
+def _stop_daemon_for_upgrade() -> bool:
+    """Остановить демона перед обновлением CLI. Идемпотентно, тихо.
+
+    Демон живёт внутри того же окружения, что и CLI, и держит его файлы
+    открытыми: `uv tool install --force` спотыкается о `Scripts/` с «Отказано в
+    доступе». После апгрейда демон вернётся сам — любая команда CLI поднимает
+    его (см. `_heal_daemon_if_dead`).
+    """
+    try:
+        import os as _os
+        import signal as _signal
+
+        from skillery_cli.daemon.daemon_runner import (
+            is_process_alive,
+            read_running_pid,
+        )
+
+        pid = read_running_pid()
+        if pid is None or not is_process_alive(pid):
+            return False
+        _os.kill(pid, _signal.SIGTERM)
+        for _ in range(20):  # ждём до ~2с, пока отпустит файлы
+            if not is_process_alive(pid):
+                return True
+            time.sleep(0.1)
+        return True
+    except Exception:  # noqa: BLE001 — апгрейд важнее аккуратной остановки
+        return False
+
+
 def _spawn_background_upgrade(delay: float = 4.0) -> bool:
     """Обновление CLI в ОТДЕЛЬНОМ процессе С ЗАДЕРЖКОЙ, НЕ дожидаясь его.
 
@@ -442,6 +473,11 @@ def _spawn_background_upgrade(delay: float = 4.0) -> bool:
     версия применяется со СЛЕДУЮЩЕГО запуска CLI. True если процесс стартовал.
     """
     import subprocess
+
+    # Демон держит открытыми файлы окружения (Scripts/, Lib/) — без остановки
+    # апгрейд падает с «Отказано в доступе» (os error 5). Гасим его ДО замены
+    # файлов; обратно он поднимется сам при следующей команде (самолечение).
+    _stop_daemon_for_upgrade()
 
     cmd = _detect_upgrade_command()
     # worker: подождать (текущий launcher выйдет) → запустить апгрейд.
@@ -583,6 +619,8 @@ def cmd_upgrade(
     console.print(f"[dim]$ {' '.join(cmd)}[/]")
     import subprocess
 
+    # То же, что и на Windows: демон держит файлы окружения.
+    _stop_daemon_for_upgrade()
     try:
         subprocess.run(cmd, check=True)
     except Exception as e:

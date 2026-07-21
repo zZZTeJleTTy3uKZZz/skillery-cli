@@ -314,3 +314,87 @@ class TestNoConsoleWindow:
         script = autostart._windows_startup_dir(tmp_path) / "skillery-daemon.vbs"
         body = script.read_text(encoding="utf-8")
         assert '"""C:\Program Files\skillery.exe""' in body
+
+
+class TestUpgradeStopsDaemon:
+    """#989: демон держит файлы окружения — апгрейд обязан гасить его первым.
+
+    Воспроизведение: `uv tool install --force skillery-cli` при живом демоне →
+    «failed to remove directory … Scripts: Отказано в доступе (os error 5)».
+    """
+
+    def test_stops_running_daemon(self, monkeypatch) -> None:
+        killed: list[int] = []
+        alive = {"state": True}
+
+        monkeypatch.setattr(
+            "skillery_cli.daemon.daemon_runner.read_running_pid", lambda: 4242
+        )
+        monkeypatch.setattr(
+            "skillery_cli.daemon.daemon_runner.is_process_alive",
+            lambda pid: alive["state"],
+        )
+
+        def _kill(pid, sig):  # type: ignore[no-untyped-def]
+            killed.append(pid)
+            alive["state"] = False
+
+        monkeypatch.setattr(m.os, "kill", _kill)
+
+        assert m._stop_daemon_for_upgrade() is True
+        assert killed == [4242]
+
+    def test_noop_when_daemon_not_running(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "skillery_cli.daemon.daemon_runner.read_running_pid", lambda: None
+        )
+        assert m._stop_daemon_for_upgrade() is False
+
+    def test_stale_pid_is_not_killed(self, monkeypatch) -> None:
+        """PID-файл от мёртвого процесса — убивать нечего и некого."""
+        monkeypatch.setattr(
+            "skillery_cli.daemon.daemon_runner.read_running_pid", lambda: 999
+        )
+        monkeypatch.setattr(
+            "skillery_cli.daemon.daemon_runner.is_process_alive", lambda pid: False
+        )
+
+        def _boom(pid, sig):  # type: ignore[no-untyped-def]
+            raise AssertionError("нельзя слать сигнал мёртвому PID")
+
+        monkeypatch.setattr(m.os, "kill", _boom)
+        assert m._stop_daemon_for_upgrade() is False
+
+    def test_failure_does_not_block_upgrade(self, monkeypatch) -> None:
+        """Не смогли погасить — апгрейд всё равно должен идти дальше."""
+        monkeypatch.setattr(
+            "skillery_cli.daemon.daemon_runner.read_running_pid", lambda: 7
+        )
+        monkeypatch.setattr(
+            "skillery_cli.daemon.daemon_runner.is_process_alive", lambda pid: True
+        )
+
+        def _denied(pid, sig):  # type: ignore[no-untyped-def]
+            raise PermissionError("отказано")
+
+        monkeypatch.setattr(m.os, "kill", _denied)
+        assert m._stop_daemon_for_upgrade() is False  # не бросает
+
+    def test_background_upgrade_stops_daemon_first(self, monkeypatch) -> None:
+        """Порядок важен: сначала гасим демона, потом планируем замену файлов."""
+        order: list[str] = []
+        monkeypatch.setattr(
+            m, "_stop_daemon_for_upgrade", lambda: order.append("stop") or True
+        )
+        monkeypatch.setattr(m, "_detect_upgrade_command", lambda: ["echo", "ok"])
+
+        import subprocess as _sp
+
+        class _P:
+            def __init__(self, *a, **k):
+                order.append("spawn")
+
+        monkeypatch.setattr(_sp, "Popen", _P)
+
+        m._spawn_background_upgrade(delay=0.0)
+        assert order[:2] == ["stop", "spawn"]
