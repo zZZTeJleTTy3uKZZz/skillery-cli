@@ -203,12 +203,22 @@ def _spawn_detached_daemon(interval: float) -> int:
 
     from skillery_cli import _branding
 
-    binary = shutil.which(_branding.APP_NAME) or sys.executable
-    args = [binary, "daemon", "run", "--interval", str(interval)]
-    if binary == sys.executable:
-        # CLI не на PATH (dev-окружение) — запускаем пакет как модуль.
-        pkg = (__package__ or "").split(".")[0]
-        args = [sys.executable, "-m", pkg, "daemon", "run", "--interval", str(interval)]
+    pkg = (__package__ or "").split(".")[0] or "skillery_cli"
+    if sys.platform == "win32":
+        # Запускаем интерпретатором напрямую (`pythonw -m skillery_cli`), а НЕ
+        # через `skillery.exe`: exe — это uv-трамплин, он добавляет лишний
+        # процесс в цепочку и требует наличия CLI на PATH. pythonw (без консоли)
+        # рядом с sys.executable — если его нет, сам sys.executable + CREATE_NO_WINDOW.
+        exe = Path(sys.executable)
+        pythonw = exe.with_name("pythonw.exe")
+        launcher = str(pythonw) if pythonw.exists() else sys.executable
+        args = [launcher, "-m", pkg, "daemon", "run", "--interval", str(interval)]
+    else:
+        binary = shutil.which(_branding.APP_NAME) or sys.executable
+        args = [binary, "daemon", "run", "--interval", str(interval)]
+        if binary == sys.executable:
+            # CLI не на PATH (dev-окружение) — запускаем пакет как модуль.
+            args = [sys.executable, "-m", pkg, "daemon", "run", "--interval", str(interval)]
     if sys.platform == "win32":
         DETACHED_PROCESS = 0x00000008
         CREATE_NEW_PROCESS_GROUP = 0x00000200
@@ -368,9 +378,13 @@ def cmd_daemon_stop() -> None:
             "stopped": stopped,
             "found": targets,
         },
+        # «процессов», а не «экземпляров»: одна логическая копия демона на
+        # Windows — это ЦЕПОЧКА процессов (launcher-трамплин uv → venv-редиректор
+        # → базовый интерпретатор). Три процесса ≠ три демона; говорить
+        # «экземпляров: 3» вводило в заблуждение.
         text_renderer=lambda payload: console.print(
-            f"[green]✓[/] Остановлено экземпляров: {len(payload['stopped'])} "
-            f"(pid={', '.join(str(x) for x in payload['stopped'])})"
+            f"[green]✓[/] Демон остановлен (процессов снято: "
+            f"{len(payload['stopped'])}; pid={', '.join(str(x) for x in payload['stopped'])})"
             if payload["stopped"]
             else f"[red]Не удалось остановить: {payload['found']}[/]"
         ),
