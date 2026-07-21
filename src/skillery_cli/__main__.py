@@ -614,12 +614,27 @@ def _ensure_daemon_after_login() -> dict:
     бесконечно), а устройство выглядело офлайн — признак «на связи» даёт
     именно опрос очереди демоном. Ошибка запуска НЕ ломает вход.
     """
+    state: dict = {"event": "failed", "pid": None}
     try:
         from skillery_cli.commands.daemon import ensure_daemon_running
 
-        return ensure_daemon_running()
+        state = dict(ensure_daemon_running())
     except Exception as exc:  # noqa: BLE001
-        return {"event": "failed", "pid": None, "error": str(exc)}
+        state = {"event": "failed", "pid": None, "error": str(exc)}
+
+    # Автозапуск: демон, поднятый только сейчас, умрёт с перезагрузкой — тогда
+    # устройство «пропадёт» из веба, а задания снова начнут копиться в очереди.
+    # Команды user-scope (без sudo). Отключается SKILLERY_NO_AUTOSTART=1.
+    if os.environ.get("SKILLERY_NO_AUTOSTART", "").strip() not in ("", "0"):
+        state["autostart"] = {"activated": False, "error": "отключено переменной окружения"}
+        return state
+    try:
+        from skillery_cli.daemon.autostart import ensure_autostart
+
+        state["autostart"] = ensure_autostart()
+    except Exception as exc:  # noqa: BLE001
+        state["autostart"] = {"activated": False, "error": str(exc)}
+    return state
 
 
 def _print_daemon_hint(state: dict) -> None:
@@ -638,10 +653,44 @@ def _print_daemon_hint(state: dict) -> None:
             "будут. Запустите вручную: skillery daemon start[/]"
         )
         return
-    console.print(
-        "[dim]  Чтобы демон стартовал после перезагрузки: "
-        "skillery daemon install[/]"
-    )
+    auto = state.get("autostart") or {}
+    if auto.get("activated"):
+        console.print(
+            "  Автозапуск:  включён — демон поднимется после перезагрузки"
+        )
+    else:
+        reason = str(auto.get("error") or "").strip()
+        console.print(
+            "[dim]  Автозапуск не включён"
+            + (f" ({reason[:80]})" if reason else "")
+            + " — команда: skillery daemon install[/]"
+        )
+
+
+def _heal_daemon_if_dead() -> None:
+    """Самолечение: любая команда CLI поднимает демона, если тот умер.
+
+    Автозапуск покрывает перезагрузку, но демон может упасть и посреди сессии —
+    тогда устройство молча «уходит в офлайн», а задания из веба перестают
+    применяться. Проверка дешёвая (чтение PID-файла + проверка процесса) и
+    полностью тихая: ни вывода, ни исключений, ни задержки для самих команд
+    демона (иначе `daemon stop` тут же поднимал бы его обратно).
+    """
+    if os.environ.get("SKILLERY_NO_DAEMON_HEAL", "").strip() not in ("", "0"):
+        return
+    argv = " ".join(sys.argv[1:])
+    if "daemon" in argv or "--help" in argv or "--version" in argv:
+        return
+    try:
+        from skillery_cli.config import ClientConfig
+
+        if not ClientConfig.load().is_logged_in():
+            return  # незалогиненному демон не нужен
+        from skillery_cli.commands.daemon import ensure_daemon_running
+
+        ensure_daemon_running()
+    except Exception:  # noqa: BLE001 — самолечение не должно мешать команде
+        return
 
 
 def cmd_login(
@@ -4031,6 +4080,7 @@ def build_app() -> typer.Typer:
         контракт вывода (дефолт text, режим уже инициализирован пре-проходом).
         """
         _ = profile, json_output, version
+        _heal_daemon_if_dead()
 
     # === Always-on ===
     app.command(name="login")(cmd_login)

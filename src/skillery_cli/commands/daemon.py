@@ -49,6 +49,14 @@ console = Console()
 # ~минуту применилось. Раньше 300с: web-install демон замечал только через 5 мин.
 _RECONCILE_MIN_INTERVAL_SECONDS = 60.0
 
+# #956: ритм опроса очереди адаптивный — он же heartbeat устройства («на связи»
+# в вебе даёт именно этот запрос). Пока есть работа, опрашиваем часто: нажатие
+# «Установить» не должно ждать минуту. В простое разряжаем вдвое против прежних
+# 60с — на парк из N машин это вдвое меньше запросов к хабу на ровном месте.
+# Окно «онлайн» на бэкенде согласовано с _IDLE_POLL_SECONDS (2.5×).
+_BUSY_POLL_SECONDS = 20.0
+_IDLE_POLL_SECONDS = 120.0
+
 
 def _build_runner(
     *, interval_seconds: float, reconcile_installs: bool = True
@@ -91,10 +99,12 @@ def _build_runner(
     reconcile = None
     if reconcile_installs and cfg.is_logged_in():
         last_run: dict[str, float] = {"at": 0.0}
+        # Первый цикл — «быстрый»: после логина задания обычно уже ждут.
+        poll_every: dict[str, float] = {"sec": _BUSY_POLL_SECONDS}
 
         async def _reconcile() -> None:
             now = _time.monotonic()
-            if now - last_run["at"] < _RECONCILE_MIN_INTERVAL_SECONDS:
+            if now - last_run["at"] < poll_every["sec"]:
                 return
             last_run["at"] = now
             access = _current_access()
@@ -112,8 +122,17 @@ def _build_runner(
             # 0) #905: АДРЕСНАЯ очередь этого устройства (веб выбрал устройства).
             #    Применяем и РАПОРТУЕМ факт — сервер узнаёт, что реально встало.
             #    Идёт первым: это явные задания пользователя.
-            await _reconcile_device_queue(
+            queue_report = await _reconcile_device_queue(
                 cfg, access, channel="published", agent_target=target,
+            )
+            # Была работа → держим быстрый ритм (следующее задание применится
+            # почти сразу). Тишина → разряжаем и не жжём бэкенд впустую.
+            had_work = bool(
+                (queue_report or {}).get("applied")
+                or (queue_report or {}).get("failed")
+            )
+            poll_every["sec"] = (
+                _BUSY_POLL_SECONDS if had_work else _IDLE_POLL_SECONDS
             )
             # 1) device-sync: «нажал Установить в вебе → демон скачал» (набор
             #    установленного между устройствами по installed_version).

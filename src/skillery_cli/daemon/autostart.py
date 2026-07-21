@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -356,3 +357,67 @@ def uninstall_for_platform(
         removed=removed,
         instructions=_uninstall_instructions(actual, unit_path),
     )
+
+
+# === Активация (не только генерация unit-файла) ===
+def _activation_command(platform: str, unit_path: Path) -> list[str] | None:
+    """Команда, которая РЕАЛЬНО ставит демон на автозапуск (user-scope, без sudo)."""
+    if platform == "macos":
+        return ["launchctl", "load", "-w", str(unit_path)]
+    if platform == "linux":
+        return [
+            "systemctl", "--user", "enable", "--now",
+            f"{_UNIT_BASENAME}.service",
+        ]
+    if platform == "windows":
+        return [
+            "schtasks", "/Create", "/F", "/TN", _TASK_NAME, "/XML", str(unit_path),
+        ]
+    return None
+
+
+def activate_autostart(artifact: AutostartArtifact) -> dict[str, object]:
+    """Включить автозапуск демона. Идемпотентно, никогда не бросает.
+
+    Раньше ``daemon install`` только ПИСАЛ unit-файл, а активацию оставлял
+    пользователю строкой в инструкции — и почти никто её не выполнял: демон не
+    переживал перезагрузку, устройство «пропадало» из веба, задания копились в
+    очереди. Команды тут user-scope (без sudo, без system-wide изменений).
+
+    Возвращает ``{"activated": bool, "command": …, "error": …}``.
+    """
+    cmd = _activation_command(artifact.platform, artifact.unit_path)
+    if cmd is None:
+        return {"activated": False, "command": None, "error": "неизвестная платформа"}
+    if shutil.which(cmd[0]) is None:
+        return {
+            "activated": False,
+            "command": " ".join(cmd),
+            "error": f"{cmd[0]} не найден в PATH",
+        }
+    try:
+        # systemd требует перечитать юниты перед enable.
+        if artifact.platform == "linux":
+            subprocess.run(
+                ["systemctl", "--user", "daemon-reload"],
+                check=False, capture_output=True, timeout=30,
+            )
+        proc = subprocess.run(cmd, check=False, capture_output=True, timeout=60)
+        if proc.returncode == 0:
+            return {"activated": True, "command": " ".join(cmd), "error": None}
+        err = (proc.stderr or b"").decode("utf-8", "ignore").strip()
+        return {"activated": False, "command": " ".join(cmd), "error": err[:300]}
+    except Exception as exc:  # автозапуск — не повод валить вход
+        return {"activated": False, "command": " ".join(cmd), "error": str(exc)}
+
+
+def ensure_autostart(*, home_dir: Path | None = None) -> dict[str, object]:
+    """Сгенерировать unit-файл И включить автозапуск. Best-effort, идемпотентно."""
+    try:
+        artifact = install_for_platform(None, home_dir=home_dir or Path.home())
+    except Exception as exc:  # noqa: BLE001
+        return {"activated": False, "command": None, "error": str(exc)}
+    result = activate_autostart(artifact)
+    result["unit_path"] = str(artifact.unit_path)
+    result["platform"] = artifact.platform
+    return result

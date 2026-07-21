@@ -78,3 +78,139 @@ class TestLoginHint:
         m._print_daemon_hint({"event": "failed", "pid": None})
         out = capsys.readouterr().out
         assert "задания из веба" in out
+
+
+class TestAutostartActivation:
+    """#955: автозапуск теперь ВКЛЮЧАЕТСЯ, а не только генерируется файлом."""
+
+    def test_activation_command_per_platform(self) -> None:
+        from pathlib import Path
+
+        from skillery_cli.daemon.autostart import _activation_command
+
+        unit = Path("/tmp/unit")
+        assert _activation_command("macos", unit)[:2] == ["launchctl", "load"]
+        assert _activation_command("linux", unit)[:3] == [
+            "systemctl", "--user", "enable",
+        ]
+        assert _activation_command("windows", unit)[:2] == ["schtasks", "/Create"]
+        assert _activation_command("plan9", unit) is None
+
+    def test_activation_uses_user_scope_only(self) -> None:
+        """Ни sudo, ни system-wide: автозапуск не трогает систему целиком."""
+        from pathlib import Path
+
+        from skillery_cli.daemon.autostart import _activation_command
+
+        for platform in ("macos", "linux", "windows"):
+            cmd = _activation_command(platform, Path("/tmp/unit"))
+            assert cmd is not None
+            assert "sudo" not in cmd
+            assert "--system" not in cmd
+
+    def test_missing_tool_reported_not_raised(self, monkeypatch) -> None:
+        from pathlib import Path
+
+        from skillery_cli.daemon import autostart
+
+        artifact = autostart.AutostartArtifact(
+            platform="linux",
+            unit_path=Path("/tmp/unit"),
+            content="",
+            instructions=[],
+        )
+        monkeypatch.setattr(autostart.shutil, "which", lambda name: None)
+
+        result = autostart.activate_autostart(artifact)
+        assert result["activated"] is False
+        assert "systemctl" in str(result["error"])
+
+    def test_failure_never_raises(self, monkeypatch) -> None:
+        from pathlib import Path
+
+        from skillery_cli.daemon import autostart
+
+        artifact = autostart.AutostartArtifact(
+            platform="windows",
+            unit_path=Path("/tmp/unit.xml"),
+            content="",
+            instructions=[],
+        )
+        monkeypatch.setattr(autostart.shutil, "which", lambda name: "schtasks")
+
+        def _boom(*a, **k):  # type: ignore[no-untyped-def]
+            raise OSError("нет прав")
+
+        monkeypatch.setattr(autostart.subprocess, "run", _boom)
+        result = autostart.activate_autostart(artifact)
+        assert result["activated"] is False
+
+
+class TestAdaptivePollRhythm:
+    """#956: ритм опроса адаптивный — быстро при работе, экономно в простое."""
+
+    def test_idle_is_slower_than_busy(self) -> None:
+        from skillery_cli.commands.daemon import (
+            _BUSY_POLL_SECONDS,
+            _IDLE_POLL_SECONDS,
+        )
+
+        assert _BUSY_POLL_SECONDS < _IDLE_POLL_SECONDS
+
+    def test_idle_rhythm_halves_previous_load(self) -> None:
+        """Раньше опрос шёл каждые 60с независимо ни от чего."""
+        from skillery_cli.commands.daemon import _IDLE_POLL_SECONDS
+
+        assert _IDLE_POLL_SECONDS >= 120.0
+
+    def test_online_window_covers_missed_tick(self) -> None:
+        """Окно «онлайн» должно прощать пропуск одного тика (иначе мигание)."""
+        from skillery_cli.commands.daemon import _IDLE_POLL_SECONDS
+
+        online_window_seconds = 5 * 60  # backend _DEVICE_ONLINE_WINDOW
+        assert online_window_seconds >= 2 * _IDLE_POLL_SECONDS
+
+
+class TestDaemonSelfHealing:
+    """Демон умер посреди сессии → следующая команда CLI его поднимает."""
+
+    def test_heal_skips_daemon_commands(self, monkeypatch) -> None:
+        """`daemon stop` не должен тут же воскрешать демона."""
+        called: list[int] = []
+        monkeypatch.setattr(m.sys, "argv", ["skillery", "daemon", "stop"])
+        monkeypatch.setattr(
+            "skillery_cli.commands.daemon.ensure_daemon_running",
+            lambda: called.append(1),
+        )
+        m._heal_daemon_if_dead()
+        assert called == []
+
+    def test_heal_skips_when_not_logged_in(self, monkeypatch) -> None:
+        called: list[int] = []
+        monkeypatch.setattr(m.sys, "argv", ["skillery", "skill", "list"])
+        monkeypatch.setattr(
+            "skillery_cli.commands.daemon.ensure_daemon_running",
+            lambda: called.append(1),
+        )
+
+        class _Cfg:
+            @staticmethod
+            def load():  # type: ignore[no-untyped-def]
+                class _C:
+                    @staticmethod
+                    def is_logged_in() -> bool:
+                        return False
+
+                return _C()
+
+        monkeypatch.setattr("skillery_cli.config.ClientConfig", _Cfg)
+        m._heal_daemon_if_dead()
+        assert called == []
+
+    def test_heal_is_silent_on_error(self, monkeypatch) -> None:
+        monkeypatch.setattr(m.sys, "argv", ["skillery", "skill", "list"])
+        monkeypatch.setattr(
+            "skillery_cli.config.ClientConfig",
+            property(lambda self: (_ for _ in ()).throw(RuntimeError("boom"))),
+        )
+        m._heal_daemon_if_dead()  # не бросает
