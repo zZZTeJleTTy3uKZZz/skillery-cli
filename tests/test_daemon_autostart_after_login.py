@@ -214,3 +214,55 @@ class TestDaemonSelfHealing:
             property(lambda self: (_ for _ in ()).throw(RuntimeError("boom"))),
         )
         m._heal_daemon_if_dead()  # не бросает
+
+
+class TestWindowsAutostartFallback:
+    """Планировщик Windows часто отказывает без админ-прав → папка автозагрузки."""
+
+    def test_falls_back_to_startup_folder(self, tmp_path, monkeypatch) -> None:
+        from skillery_cli.daemon import autostart
+
+        monkeypatch.setenv("APPDATA", str(tmp_path / "AppData" / "Roaming"))
+        monkeypatch.setattr(autostart, "_resolve_cli_binary", lambda: "C:/bin/skillery.exe")
+
+        result = autostart._install_windows_startup_shortcut(tmp_path)
+
+        assert result["activated"] is True
+        script = tmp_path / "AppData" / "Roaming" / "Microsoft" / "Windows"
+        script = script / "Start Menu" / "Programs" / "Startup" / "skillery-daemon.cmd"
+        assert script.exists()
+        body = script.read_text(encoding="utf-8")
+        assert "daemon start" in body
+        assert "/b" in body, "демон должен стартовать без окна консоли"
+
+    def test_fallback_is_idempotent(self, tmp_path, monkeypatch) -> None:
+        from skillery_cli.daemon import autostart
+
+        monkeypatch.setenv("APPDATA", str(tmp_path / "AppData" / "Roaming"))
+        monkeypatch.setattr(autostart, "_resolve_cli_binary", lambda: "skillery")
+
+        first = autostart._install_windows_startup_shortcut(tmp_path)
+        second = autostart._install_windows_startup_shortcut(tmp_path)
+
+        assert first["unit_path"] == second["unit_path"]
+        assert second["activated"] is True
+
+    def test_ensure_autostart_uses_fallback_when_scheduler_denies(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Именно тот случай, что был живьём: schtasks → «Access is denied»."""
+        from skillery_cli.daemon import autostart
+
+        monkeypatch.setenv("APPDATA", str(tmp_path / "AppData" / "Roaming"))
+        monkeypatch.setattr(autostart, "detect_platform", lambda: "windows")
+        monkeypatch.setattr(autostart, "_resolve_cli_binary", lambda: "skillery")
+        monkeypatch.setattr(
+            autostart,
+            "activate_autostart",
+            lambda artifact: {"activated": False, "error": "Access is denied."},
+        )
+
+        result = autostart.ensure_autostart(home_dir=tmp_path)
+
+        assert result["activated"] is True
+        assert "startup:" in str(result["command"])

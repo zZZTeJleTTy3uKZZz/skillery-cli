@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -418,6 +419,45 @@ def ensure_autostart(*, home_dir: Path | None = None) -> dict[str, object]:
     except Exception as exc:  # noqa: BLE001
         return {"activated": False, "command": None, "error": str(exc)}
     result = activate_autostart(artifact)
+    if not result.get("activated") and artifact.platform == "windows":
+        # Планировщик отказал (обычно «Access is denied» — задача в корне
+        # требует администратора) → кладём скрипт в папку автозагрузки.
+        fallback = _install_windows_startup_shortcut(home_dir or Path.home())
+        if fallback.get("activated"):
+            fallback["platform"] = artifact.platform
+            return fallback
     result["unit_path"] = str(artifact.unit_path)
     result["platform"] = artifact.platform
     return result
+
+
+def _windows_startup_dir(home_dir: Path) -> Path:
+    """Пользовательская папка автозагрузки Windows (без админ-прав)."""
+    appdata = os.environ.get("APPDATA")
+    base = Path(appdata) if appdata else home_dir / "AppData" / "Roaming"
+    return base / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+
+
+def _install_windows_startup_shortcut(home_dir: Path) -> dict[str, object]:
+    """Fallback автозапуска Windows: .cmd в папке Startup.
+
+    `schtasks /Create` на многих системах отвечает «Access is denied» —
+    создание задачи планировщика в корне требует администратора. Папка
+    автозагрузки прав не требует и срабатывает при входе пользователя, чего для
+    фонового демона достаточно. Запуск скрытый: `start "" /b`.
+    """
+    try:
+        binary = _resolve_cli_binary()
+        startup = _windows_startup_dir(home_dir)
+        startup.mkdir(parents=True, exist_ok=True)
+        script = startup / "skillery-daemon.cmd"
+        body = ["@echo off", f'start "" /b "{binary}" daemon start', ""]
+        script.write_text("\r\n".join(body), encoding="utf-8")
+        return {
+            "activated": True,
+            "command": f"startup: {script}",
+            "error": None,
+            "unit_path": str(script),
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"activated": False, "command": None, "error": str(exc)}
