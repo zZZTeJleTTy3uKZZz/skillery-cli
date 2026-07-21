@@ -3587,7 +3587,18 @@ def cmd_publish(
 
     version = tag.lstrip("v")
     manifest = build_manifest(skill_dir, version=version)
-    actual_commit = commit_sha or git_commit_sha(skill_dir) or ("0" * 7)
+    actual_commit = commit_sha or git_commit_sha(skill_dir)
+    if not actual_commit:
+        # Папка вне git (или git недоступен) — коммита нет. Плейсхолдер
+        # остаётся ради контракта хаба (commit_sha обязателен), но пользователь
+        # должен знать: такой «sha» не резолвится ни в одном провайдере, и
+        # превью репозитория будет опираться на теги, а не на версию.
+        actual_commit = "0" * 7
+        emit_message(
+            "Коммит не определён (папка вне git) — версия будет опубликована "
+            "без привязки к коммиту; вкладка «Исходники» покажет последний тег.",
+            level="warning",
+        )
 
     # Приватный репо → per-project scoped авторизация автосинка (GitLab:
     # авто-project-токен через glab; GitHub: подсказка установить App). В
