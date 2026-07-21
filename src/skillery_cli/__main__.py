@@ -481,9 +481,19 @@ def _spawn_background_upgrade(
     # файлов; обратно он поднимется сам при следующей команде (самолечение).
     _stop_daemon_for_upgrade()
 
-    cmd = _detect_upgrade_command(version)
-    # worker: подождать (текущий launcher выйдет) → запустить апгрейд.
-    worker = f"import time,subprocess;time.sleep({delay});subprocess.run({cmd!r})"
+    cmds = _upgrade_commands(version)
+    # worker: подождать (текущий launcher выйдет) → пройти цепочку команд до
+    # первой удачной. Цепочка, а не одна команда: пин точной версии может
+    # транзиентно упасть («no version»), если индекс PyPI ещё не разъехался по
+    # CDN сразу после релиза — тогда добираем обычным upgrade.
+    worker = (
+        "import time,subprocess\n"
+        f"time.sleep({delay})\n"
+        f"for c in {cmds!r}:\n"
+        "    try:\n"
+        "        if subprocess.run(c).returncode == 0: break\n"
+        "    except Exception: pass\n"
+    )
     popen_kw: dict = {
         "stdout": subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,
@@ -539,6 +549,21 @@ def _detect_upgrade_command(version: str | None = None) -> list[str]:
     if shutil.which("pipx"):
         return pipx_cmd
     return [sys.executable, "-m", "pip", "install", "--upgrade", spec]
+
+
+def _upgrade_commands(version: str | None = None) -> list[list[str]]:
+    """Цепочка команд обновления: точная версия → общий upgrade.
+
+    Пин даёт детерминизм, но сразу после релиза индекс PyPI ещё не разъехался
+    по CDN, и `pkg==X.Y.Z` может транзиентно ответить «no version». Тогда
+    добираем обычным `upgrade --refresh` — он поставит latest, который узел уже
+    отдаёт. Так обновление не срывается ни от кэша, ни от лага индекса.
+    """
+    primary = _detect_upgrade_command(version)
+    if not version:
+        return [primary]
+    fallback = _detect_upgrade_command(None)
+    return [primary] if fallback == primary else [primary, fallback]
 
 
 def _maybe_notify_cli_update(cfg: ClientConfig) -> None:

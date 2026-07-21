@@ -295,10 +295,50 @@ def test_spawn_background_upgrade_detached(monkeypatch: pytest.MonkeyPatch) -> N
     # — иначе launcher .exe залочен и uv не перезапишет его (Windows os error 32).
     assert calls["cmd"][0] == main_mod.sys.executable
     assert calls["cmd"][1] == "-c"
-    assert "subprocess.run(['uv', 'tool', 'upgrade', 'skillery-cli'])" in calls["cmd"][2]
+    assert "['uv', 'tool', 'upgrade', 'skillery-cli']" in calls["cmd"][2]
+    assert "subprocess.run(c)" in calls["cmd"][2]
     assert "time.sleep" in calls["cmd"][2]
     import subprocess
     assert calls["kw"]["stdout"] == subprocess.DEVNULL
+
+
+def test_worker_falls_back_when_pinned_version_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Пин может транзиентно упасть — воркер обязан добрать обычным upgrade.
+
+    Сразу после релиза индекс PyPI ещё не разъехался по CDN, и `pkg==X.Y.Z`
+    отвечает «no version». Без цепочки обновление сорвалось бы с ошибкой.
+    """
+    calls: dict[str, Any] = {}
+
+    class _FakePopen:
+        def __init__(self, cmd, **kw):
+            calls["cmd"] = cmd
+
+    monkeypatch.setattr("subprocess.Popen", _FakePopen)
+    monkeypatch.setattr(main_mod.sys, "executable", "/x/uv/tools/skillery-cli/bin/python")
+    monkeypatch.setattr("shutil.which", lambda name: name if name == "uv" else None)
+    monkeypatch.setattr(main_mod, "_stop_daemon_for_upgrade", lambda: None)
+
+    main_mod._spawn_background_upgrade(delay=0, version="1.2.3")
+    worker = calls["cmd"][2]
+
+    assert "skillery-cli==1.2.3" in worker           # сначала точная версия
+    assert "'upgrade', '--refresh'" in worker        # затем фолбэк
+    assert "break" in worker                         # до первой удачной
+
+
+def test_upgrade_chain_is_single_command_without_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Версия неизвестна — фолбэку неоткуда взяться, цепочка из одной команды."""
+    monkeypatch.setattr(main_mod.sys, "executable", "/x/uv/tools/skillery-cli/bin/python")
+    monkeypatch.setattr("shutil.which", lambda name: name if name == "uv" else None)
+
+    assert main_mod._upgrade_commands() == [
+        ["uv", "tool", "upgrade", "--refresh", "skillery-cli"]
+    ]
 
 
 def test_cmd_upgrade_windows_spawns_background(monkeypatch: pytest.MonkeyPatch) -> None:
