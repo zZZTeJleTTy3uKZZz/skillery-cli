@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -173,13 +174,22 @@ def test_known_version_is_pinned_for_pip(monkeypatch: pytest.MonkeyPatch) -> Non
     assert cmd[1:] == ["-m", "pip", "install", "--upgrade", "skillery-cli==1.2.3"]
 
 
-def _capture_spawn(monkeypatch) -> dict:
+def _capture_spawn(monkeypatch, home=None) -> dict:
     """Перехватить фоновый спавн апгрейда и вернуть {launcher, cmd, kw, config}.
 
     Новый контракт: спавнится ``[launcher, worker.py, config.json]``, а команды
     обновления и путь бинаря демона лежат в config.json (не в строке worker'а).
+
+    Домашний каталог изолируем во временный: `_spawn_background_upgrade` кладёт
+    worker.py/config.json в `~/.skillery`, и без изоляции тесты писали бы в
+    РЕАЛЬНЫЙ дом пользователя (однажды это подсунуло живому апгрейду config с
+    тестовой версией).
     """
+    import tempfile
+
     calls: dict[str, Any] = {}
+    tmp_home = Path(home or tempfile.mkdtemp())
+    monkeypatch.setattr(main_mod.Path, "home", classmethod(lambda cls: tmp_home))
     monkeypatch.setattr("subprocess.Popen", lambda cmd, **kw: calls.update(cmd=cmd, kw=kw))
     monkeypatch.setattr(main_mod, "_stop_daemon_for_upgrade", lambda: None)
     monkeypatch.setattr(main_mod, "_upgrade_already_running", lambda: False)

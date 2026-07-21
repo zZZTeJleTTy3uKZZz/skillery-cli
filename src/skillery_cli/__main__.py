@@ -851,7 +851,19 @@ def _heal_daemon_if_dead() -> None:
     if os.environ.get("SKILLERY_NO_DAEMON_HEAL", "").strip() not in ("", "0"):
         return
     argv = " ".join(sys.argv[1:])
-    if "daemon" in argv or "--help" in argv or "--version" in argv:
+    if (
+        "daemon" in argv
+        or "upgrade" in argv
+        or "--help" in argv
+        or "--version" in argv
+    ):
+        return
+    # Пока идёт апгрейд — демон поднимать НЕЛЬЗЯ: он держит файлы окружения
+    # (Scripts/), и `uv tool install` виснет/падает на их замене. Демон вернёт
+    # сам worker апгрейда новым бинарём в самом конце. Раньше любая команда
+    # (даже параллельный `upgrade`) через самолечение возвращала демона в
+    # середину апгрейда и подвешивала его.
+    if _upgrade_already_running():
         return
     try:
         from skillery_cli.config import ClientConfig

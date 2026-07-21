@@ -394,9 +394,14 @@ class TestUpgradeStopsDaemon:
         monkeypatch.setattr(m.os, "kill", _denied)
         assert m._stop_daemon_for_upgrade() is False  # не бросает
 
-    def test_background_upgrade_stops_daemon_first(self, monkeypatch) -> None:
+    def test_background_upgrade_stops_daemon_first(self, monkeypatch, tmp_path) -> None:
         """Порядок важен: сначала гасим демона, потом планируем замену файлов."""
+        import pathlib
+
         order: list[str] = []
+        # Изолируем дом: worker.py/config.json пишутся в ~/.skillery.
+        monkeypatch.setattr(pathlib.Path, "home", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr(m, "_upgrade_already_running", lambda: False)
         monkeypatch.setattr(
             m, "_stop_daemon_for_upgrade", lambda: order.append("stop") or True
         )
