@@ -436,29 +436,61 @@ def ensure_autostart(*, home_dir: Path | None = None) -> dict[str, object]:
     return result
 
 
-def install_watchdog(*, interval_min: int = 10) -> dict[str, object]:
+def _write_watchdog_vbs(home_dir: Path) -> Path:
+    """Безоконный .vbs-лаунчер для watchdog-задачи (тот же приём, что автозапуск).
+
+    Task Scheduler, запуская КОНСОЛЬНЫЙ ``skillery.exe daemon start`` напрямую,
+    показывает окно консоли на секунду каждый тик (и мелькает «Daemon уже
+    запущен (pid=…)»). ``WScript.Shell.Run(..., 0, False)`` (флаг 0 = скрыто)
+    окна не создаёт вовсе.
+    """
+    binary = _resolve_cli_binary()
+    home = home_dir / _HOME
+    home.mkdir(parents=True, exist_ok=True)
+    vbs = home / "skillery-watchdog.vbs"
+    quoted = binary.replace('"', '""')
+    body = [
+        "' Skillery: watchdog — тихо поднимает демон, если умер. Без окна.",
+        'CreateObject("WScript.Shell").Run """' + quoted + '"" daemon start", 0, False',
+        "",
+    ]
+    vbs.write_text(_WIN_EOL.join(body), encoding="utf-8")
+    return vbs
+
+
+def install_watchdog(
+    *, interval_min: int = 10, home_dir: Path | None = None
+) -> dict[str, object]:
     """Периодическая проверка «демон жив» (best-effort, user-scope).
 
-    Windows — Task Scheduler с ``/SC MINUTE /MO N`` (без админа, /F перезаписью).
+    Windows — Task Scheduler ``/SC MINUTE /MO N`` (без админа, /F перезаписью).
+    ⚠️ Задача запускает НЕ консольный ``skillery.exe`` напрямую (Task Scheduler
+    показал бы окно консоли каждый тик), а ``wscript.exe //B <vbs>``: wscript —
+    GUI-хост (своей консоли нет), а .vbs поднимает демон скрытым флагом. Двойная
+    гарантия «без окна».
+
     Linux — systemd timer уже покрывает Restart; macOS — launchd KeepAlive. На
     не-Windows возвращаем no-op (там автозапуск и так самоперезапускающийся).
     """
     if sys.platform != "win32":
         return {"installed": False, "reason": "не требуется (launchd/systemd)"}
-    binary = _resolve_cli_binary()
     task = f"{_TASK_NAME}Watchdog"
     try:
+        vbs = _write_watchdog_vbs(home_dir or Path.home())
+        # /TR = wscript //B (batch, без диалогов) на безоконный .vbs.
+        tr = f'wscript.exe //B //Nologo "{vbs}"'
         proc = subprocess.run(
             ["schtasks", "/Create", "/F", "/SC", "MINUTE", "/MO", str(interval_min),
-             "/TN", task, "/TR", f'"{binary}" daemon start'],
+             "/TN", task, "/TR", tr],
             capture_output=True, timeout=30, check=False,
-            creationflags=0x08000000,  # CREATE_NO_WINDOW — без вспышки консоли
+            creationflags=0x08000000,  # без вспышки у самой команды создания
         )
         ok = proc.returncode == 0
         return {
             "installed": ok,
             "task": task,
             "interval_min": interval_min,
+            "launcher": str(vbs),
             "error": None if ok else (proc.stderr or b"").decode("utf-8", "ignore")[:200],
         }
     except Exception as exc:  # noqa: BLE001 — watchdog не критичен

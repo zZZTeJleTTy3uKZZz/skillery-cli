@@ -419,3 +419,47 @@ class TestUpgradeStopsDaemon:
 
         m._spawn_background_upgrade(delay=0.0)
         assert order[:2] == ["stop", "spawn"]
+
+
+class TestWatchdogWindowless:
+    """#1021 followup: watchdog-задача не должна показывать окно.
+
+    Task Scheduler, запуская КОНСОЛЬНЫЙ `skillery.exe daemon start` напрямую,
+    мигал окном консоли каждый тик (и «Daemon уже запущен (pid=…)»). Запуск
+    идёт через wscript + безоконный .vbs.
+    """
+
+    def _win(self, monkeypatch, tmp_path):
+        from skillery_cli.daemon import autostart
+
+        monkeypatch.setattr(autostart.sys, "platform", "win32")
+        monkeypatch.setattr(
+            autostart, "_resolve_cli_binary", lambda: r"C:\bin\skillery.exe"
+        )
+        calls: dict = {}
+        monkeypatch.setattr(
+            autostart.subprocess,
+            "run",
+            lambda cmd, **kw: calls.update(cmd=cmd, kw=kw)
+            or type("R", (), {"returncode": 0, "stderr": b""})(),
+        )
+        return autostart, calls
+
+    def test_task_runs_via_wscript_not_console_exe(self, monkeypatch, tmp_path):
+        autostart, calls = self._win(monkeypatch, tmp_path)
+        res = autostart.install_watchdog(interval_min=10, home_dir=tmp_path)
+        assert res["installed"] is True
+        tr = calls["cmd"][calls["cmd"].index("/TR") + 1]
+        # НЕ голый консольный exe в /TR (он бы мигал окном), а wscript-хост.
+        assert "wscript" in tr.lower()
+        assert "skillery.exe\" daemon start" not in tr
+
+    def test_vbs_launches_hidden(self, monkeypatch, tmp_path):
+        autostart, _ = self._win(monkeypatch, tmp_path)
+        autostart.install_watchdog(interval_min=10, home_dir=tmp_path)
+        vbs = tmp_path / ".skillery" / "skillery-watchdog.vbs"
+        assert vbs.exists()
+        body = vbs.read_text(encoding="utf-8")
+        # WScript.Shell.Run(..., 0, False) — флаг 0 = окна нет.
+        assert ", 0, False" in body
+        assert "daemon start" in body
