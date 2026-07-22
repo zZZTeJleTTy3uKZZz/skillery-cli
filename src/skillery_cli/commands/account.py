@@ -129,8 +129,9 @@ def _render_session(cfg: ClientConfig, headline: str) -> None:
     roles_descr = []
     if cfg.is_hub_admin():
         roles_descr.append("hub-admin")
-    if cfg.is_skill_creator():
-        roles_descr.append("skill-creator")
+    # skill-creator — это ПРАВО (`skill.create`), а не роль (RBAC-канон:
+    # isSkillCreator убран в пользу can("skill.create")). В роли его не
+    # показываем — оно и так учтено в счётчике Permissions ниже.
     if cfg.permissions and not roles_descr:
         roles_descr.append("member")
     console.print(f"  Роли:        {', '.join(roles_descr) or '—'}")
