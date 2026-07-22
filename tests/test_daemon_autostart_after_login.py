@@ -227,6 +227,10 @@ class TestDaemonSelfHealing:
             "skillery_cli.config.ClientConfig",
             property(lambda self: (_ for _ in ()).throw(RuntimeError("boom"))),
         )
+        # Лог провала — в файл, не в реальный ~/.skillery (иначе тест засоряет
+        # пользовательский daemon.log ложными ошибками). «Silent» = без вывода
+        # в команду, а сам факт провала фиксируется (проверяется отдельно).
+        monkeypatch.setattr(m, "_log_daemon_issue", lambda msg: None)
         m._heal_daemon_if_dead()  # не бросает
 
 
