@@ -281,6 +281,13 @@ class TestWindowsAutostartFallback:
             "activate_autostart",
             lambda artifact: {"activated": False, "error": "Access is denied."},
         )
+        # ⚠️ ensure_autostart теперь ВСЕГДА зовёт install_watchdog — без мока на
+        # реальной Windows-машине тест зарегистрировал бы НАСТОЯЩИЙ schtasks-таск
+        # с temp-путём (pytest его потом удаляет → таск падает вечно).
+        monkeypatch.setattr(
+            autostart, "install_watchdog",
+            lambda **kw: {"installed": True, "task": "W"},
+        )
 
         result = autostart.ensure_autostart(home_dir=tmp_path)
 
