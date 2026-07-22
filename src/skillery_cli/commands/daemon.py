@@ -63,6 +63,16 @@ _RECONCILE_MIN_INTERVAL_SECONDS = 60.0
 _BUSY_POLL_SECONDS = 20.0
 _IDLE_POLL_SECONDS = 120.0
 
+# LONG-POLL: сколько сек держим запрос очереди открытым (сервер отвечает раньше,
+# если появилось задание). < 30 (потолок сервера) и < idle-таймаута прокси.
+_LONGPOLL_WAIT_SEC = 25
+# Межцикловый sleep при long-poll — малый: переподключаемся сразу после ответа
+# (ритм ведёт сам 25-сек висящий коннект, а не этот интервал).
+_LONGPOLL_LOOP_INTERVAL = 2.0
+# Тяжёлые reconcile (device-sync набора + auto-update до latest) — не каждый
+# long-poll-цикл, а раз в ~3 мин (это фон, не мгновенная доставка задания).
+_HEAVY_RECONCILE_SEC = 180.0
+
 
 def _build_runner(
     *, interval_seconds: float, reconcile_installs: bool = True
@@ -103,16 +113,15 @@ def _build_runner(
     sender = EventSender(collector, _factory)
 
     reconcile = None
+    loop_interval = interval_seconds
     if reconcile_installs and cfg.is_logged_in():
-        last_run: dict[str, float] = {"at": 0.0}
-        # Первый цикл — «быстрый»: после логина задания обычно уже ждут.
-        poll_every: dict[str, float] = {"sec": _BUSY_POLL_SECONDS}
+        # LONG-POLL: очередь устройства висит на сервере до _LONGPOLL_WAIT_SEC,
+        # задание доставляется МГНОВЕННО, а сам висящий коннект = heartbeat.
+        # Тяжёлые reconcile (device-sync НАБОРА + auto-update до latest) — реже
+        # (_HEAVY_RECONCILE_SEC): они не про мгновенную доставку.
+        last_heavy: dict[str, float] = {"at": 0.0}
 
         async def _reconcile() -> None:
-            now = _time.monotonic()
-            if now - last_run["at"] < poll_every["sec"]:
-                return
-            last_run["at"] = now
             access = _current_access()
             if not access:
                 return
@@ -125,37 +134,34 @@ def _build_runner(
             from skillery_cli.core.agents import get_target
 
             target = get_target(cfg.agent)
-            # 0) #905: АДРЕСНАЯ очередь этого устройства (веб выбрал устройства).
-            #    Применяем и РАПОРТУЕМ факт — сервер узнаёт, что реально встало.
-            #    Идёт первым: это явные задания пользователя.
-            queue_report = await _reconcile_device_queue(
+            # 0) #905: АДРЕСНАЯ очередь этого устройства — LONG-POLL (висим до
+            #    ~25с). Применяем и РАПОРТУЕМ факт. Висящий коннект держит
+            #    last_seen свежим (устройство почти всегда «на связи»).
+            await _reconcile_device_queue(
                 cfg, access, channel="published", agent_target=target,
+                wait=_LONGPOLL_WAIT_SEC,
             )
-            # Была работа → держим быстрый ритм (следующее задание применится
-            # почти сразу). Тишина → разряжаем и не жжём бэкенд впустую.
-            had_work = bool(
-                (queue_report or {}).get("applied")
-                or (queue_report or {}).get("failed")
-            )
-            poll_every["sec"] = (
-                _BUSY_POLL_SECONDS if had_work else _IDLE_POLL_SECONDS
-            )
-            # 1) device-sync: «нажал Установить в вебе → демон скачал» (набор
-            #    установленного между устройствами по installed_version).
-            await _reconcile_hub_installs(
-                cfg, access, channel="published", agent_target=target,
-            )
-            # 2) auto-update: поднять установленные хаб-навыки до latest published
-            #    хаба (device-sync выше синхронизирует лишь НАБОР по записанной в
-            #    вебе версии, а не до latest). Гейтится cfg.auto_update + cooldown.
-            await _auto_update_hub_installs(
-                cfg, access, agent_target=target, channel="published",
-            )
+            # 1-2) device-sync НАБОРА + auto-update до latest — РЕЖЕ (не каждый
+            #    long-poll-цикл; это фон, не мгновенная доставка).
+            now = _time.monotonic()
+            if now - last_heavy["at"] >= _HEAVY_RECONCILE_SEC:
+                last_heavy["at"] = now
+                await _reconcile_hub_installs(
+                    cfg, access, channel="published", agent_target=target,
+                )
+                await _auto_update_hub_installs(
+                    cfg, access, agent_target=target, channel="published",
+                )
 
         reconcile = _reconcile
+        # Ритм ведёт long-poll (25с блок); межцикловый sleep малый, чтобы
+        # переподключаться сразу после ответа. ⚠️СТАРЫЙ backend без ?wait
+        # вернёт очередь мгновенно → этот tight-loop опрашивал бы часто; поэтому
+        # backend с long-poll ДЕПЛОИТСЯ ПЕРВЫМ (он уже поддерживает ?wait).
+        loop_interval = _LONGPOLL_LOOP_INTERVAL
 
     return DaemonRunner(
-        sender, interval_seconds=interval_seconds, reconcile=reconcile
+        sender, interval_seconds=loop_interval, reconcile=reconcile
     )
 
 

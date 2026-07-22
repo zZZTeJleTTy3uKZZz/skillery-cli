@@ -479,7 +479,7 @@ class HubClient:
         return await self._request("POST", "/me/devices", json=body)
 
     async def fetch_device_queue(
-        self, *, auto_update: bool | None = None
+        self, *, auto_update: bool | None = None, wait: int = 0
     ) -> list[dict[str, Any]]:
         """GET /me/device-queue — задания ЭТОГО устройства (#905).
 
@@ -487,14 +487,27 @@ class HubClient:
         отдельный параметр не нужен. Возвращает список
         ``{skill_id, slug, desired_version, applied_version, status}``.
 
-        #919: заодно сообщаем, включено ли автообновление НА ЭТОЙ машине —
-        иначе веб не может показать это состояние, а пользователь не понимает,
-        почему на одном устройстве версия поднялась сама, а на другом нет.
+        #919: заодно сообщаем, включено ли автообновление НА ЭТОЙ машине.
+
+        ``wait>0`` — LONG-POLL: сервер держит запрос открытым до <wait> сек, пока
+        не появится задание (мгновенная доставка). Таймаут HTTP-клиента поднимаем
+        выше wait (иначе клиент отвалится РАНЬШЕ ответа сервера). Старый сервер
+        без поддержки ?wait просто вернёт очередь сразу (обратно совместимо).
         """
-        path = "/me/device-queue"
+        from urllib.parse import urlencode
+
+        params: dict[str, str] = {}
         if auto_update is not None:
-            path += f"?auto_update={'true' if auto_update else 'false'}"
-        data = await self._request("GET", path)
+            params["auto_update"] = "true" if auto_update else "false"
+        if wait > 0:
+            params["wait"] = str(int(wait))
+        path = "/me/device-queue"
+        if params:
+            path += "?" + urlencode(params)
+        kwargs: dict[str, Any] = {}
+        if wait > 0:
+            kwargs["timeout"] = float(wait) + 10.0
+        data = await self._request("GET", path, **kwargs)
         return list(data.get("items", []) if isinstance(data, dict) else [])
 
     async def report_device_apply(

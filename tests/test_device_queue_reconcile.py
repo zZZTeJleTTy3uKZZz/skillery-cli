@@ -128,6 +128,6 @@ class TestAutoUpdateStateReported:
             cfg, "tok", channel="published", agent_target=object()
         )
 
-        assert fake.queue_kwargs == {"auto_update": False}, (
+        assert fake.queue_kwargs == {"auto_update": False, "wait": 0}, (
             "веб не узнает про выключенное автообновление на устройстве"
         )

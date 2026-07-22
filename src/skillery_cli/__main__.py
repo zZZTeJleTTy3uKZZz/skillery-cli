@@ -2903,8 +2903,13 @@ async def _reconcile_device_queue(
     *,
     channel: str,
     agent_target,  # IAgentTarget
+    wait: int = 0,
 ) -> dict[str, list]:
     """#905: забрать очередь ЭТОГО устройства, применить и ОТРАПОРТОВАТЬ факт.
+
+    ``wait>0`` — LONG-POLL: запрос очереди висит на сервере до <wait> сек, пока
+    не появится задание (мгновенная доставка + heartbeat). Сам факт висящего
+    коннекта держит устройство «на связи».
 
     Отличие от :func:`_reconcile_hub_installs`: сервер адресует задания
     конкретному устройству (``desired_version`` на ``(user, device, skill)``), а
@@ -2922,7 +2927,9 @@ async def _reconcile_device_queue(
     )
     try:
         try:
-            queue = await client.fetch_device_queue(auto_update=cfg.auto_update)
+            queue = await client.fetch_device_queue(
+                auto_update=cfg.auto_update, wait=wait
+            )
         except Exception:
             # Старый backend / нет устройства в UA — молча уступаем legacy-пути.
             return report
