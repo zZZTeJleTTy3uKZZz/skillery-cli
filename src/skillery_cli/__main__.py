@@ -1682,6 +1682,35 @@ def _scan_installed(
     return items
 
 
+def _dedupe_installed_by_realpath(items: list[dict]) -> list[dict]:
+    """Убрать дубли навыков по РЕАЛЬНОМУ пути на диске.
+
+    Задвоение: `--installed` сканирует global (`~/.claude/skills/`) и project
+    (`<project>/.claude/skills/`) РАЗДЕЛЬНО. Но когда project scope резолвится в
+    ту же физическую папку, что и global (команда запущена из home; или
+    `.claude/skills` проекта — junction/symlink на глобальную), один и тот же
+    навык попадал в вывод дважды — как «global» и как «project» с ОДНИМ путём.
+
+    Дедупим по ``realpath`` (резолвит junction/symlink) + ``normcase`` (Windows
+    регистронезависим). Порядок сохраняем — global сканируется первым, поэтому
+    у одинаковой физической папки остаётся канонический scope=global. Реальные
+    раздельные установки (разные физические папки) не схлопываются.
+    """
+    seen: set[str] = set()
+    out: list[dict] = []
+    for it in items:
+        raw = it.get("path") or ""
+        try:
+            key = os.path.normcase(os.path.realpath(raw))
+        except Exception:  # noqa: BLE001 — на кривом пути не роняем листинг
+            key = os.path.normcase(raw)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(it)
+    return out
+
+
 def _unwrap_list_payload(payload: object) -> list:
     """Развернуть ответ листинга в список строк, устойчиво к форме.
 
@@ -1734,6 +1763,9 @@ def cmd_list(
             items.extend(_scan_installed(target, project=None))
         if wanted_scope in ("project", "all"):
             items.extend(_scan_installed(target, project=actual_project))
+        # Не задваивать: project scope, резолвящийся в ту же физическую папку,
+        # что и global (cwd=home / junction), не должен дублировать навыки.
+        items = _dedupe_installed_by_realpath(items)
 
         def _render(rows: list) -> None:
             if not rows:
