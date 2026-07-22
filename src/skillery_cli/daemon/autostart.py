@@ -413,26 +413,69 @@ def activate_autostart(artifact: AutostartArtifact) -> dict[str, object]:
         return {"activated": False, "command": " ".join(cmd), "error": str(exc)}
 
 
-def ensure_autostart(*, home_dir: Path | None = None) -> dict[str, object]:
-    """Сгенерировать unit-файл И включить автозапуск. Best-effort, идемпотентно."""
+def _log_autostart(msg: str, *, level: str = "error") -> None:
+    """Записать проблему автозапуска в ``logs/daemon.log`` (best-effort).
+
+    Раньше сбои autostart/watchdog глотались молча — при разборе «почему
+    устройство офлайн» смотреть было нечего. Пишем в общий журнал демона тем же
+    инициализатором, что и сам демон (единый файл, без дубля логгера).
+    """
     try:
-        artifact = install_for_platform(None, home_dir=home_dir or Path.home())
+        from skillery_cli.core.logging_setup import configure_logging, get_logger
+
+        configure_logging(filename="daemon.log")  # идемпотентно
+        logger = get_logger("autostart")
+        getattr(logger, level, logger.error)(msg)
+    except Exception:  # noqa: BLE001 — лог не должен валить автозапуск
+        pass
+
+
+def ensure_autostart(*, home_dir: Path | None = None) -> dict[str, object]:
+    """Сгенерировать unit-файл, включить автозапуск И watchdog. Идемпотентно.
+
+    Две независимые гарантии «устройство в сети»:
+    1. **Автозапуск при входе** — logon/boot-таск (Task Scheduler). На Windows
+       без админа event-триггеры в корне планировщика отдают «Access is denied»
+       → падаем в user-scope папку автозагрузки (.vbs, тоже покрывает вход).
+    2. **Watchdog** — периодический ``/SC MINUTE`` таск (time-триггер прав
+       администратора НЕ требует), воскрешает демон после краха/upgrade/загрузки
+       в пределах интервала. Ставится ВСЕГДА, в т.ч. когда п.1 ушёл в fallback
+       (раньше ранний ``return`` на fallback его пропускал — на schtasks-denied
+       машинах watchdog не ставился вовсе и «всегда в сети» не выполнялось).
+    """
+    home = home_dir or Path.home()
+    try:
+        artifact = install_for_platform(None, home_dir=home)
     except Exception as exc:  # noqa: BLE001
+        _log_autostart(f"install_for_platform failed: {exc}")
         return {"activated": False, "command": None, "error": str(exc)}
     result = activate_autostart(artifact)
     if not result.get("activated") and artifact.platform == "windows":
-        # Планировщик отказал (обычно «Access is denied» — задача в корне
-        # требует администратора) → кладём скрипт в папку автозагрузки.
-        fallback = _install_windows_startup_shortcut(home_dir or Path.home())
+        # Планировщик отказал (обычно «Access is denied» — logon/boot-триггеры
+        # в корне требуют администратора) → кладём скрипт в папку автозагрузки.
+        # НЕ return-им: watchdog ниже ставится в любом случае.
+        fallback = _install_windows_startup_shortcut(home)
         if fallback.get("activated"):
             fallback["platform"] = artifact.platform
-            return fallback
-    result["unit_path"] = str(artifact.unit_path)
+            _log_autostart(
+                f"logon-таск недоступен ({result.get('error')}), "
+                "автозапуск через папку автозагрузки",
+                level="warning",
+            )
+            result = fallback
+        else:
+            _log_autostart(
+                f"автозапуск не включён: schtasks={result.get('error')}; "
+                f"startup-fallback={fallback.get('error')}"
+            )
+    result.setdefault("unit_path", str(artifact.unit_path))
     result["platform"] = artifact.platform
-    # Watchdog: периодически поднимаем демон, если он умер посреди сессии и ни
-    # одна команда не сработала (login-autostart покрывает только вход). Idem-
-    # potent: `daemon start` держит single-instance лок, дублей не будет.
-    result["watchdog"] = install_watchdog()
+    # Watchdog — периодическое воскрешение демона. Idempotent: `daemon start`
+    # держит single-instance лок, дублей не будет.
+    wd = install_watchdog(home_dir=home)
+    result["watchdog"] = wd
+    if not wd.get("installed"):
+        _log_autostart(f"watchdog не установлен: {wd.get('error')}")
     return result
 
 
@@ -459,7 +502,7 @@ def _write_watchdog_vbs(home_dir: Path) -> Path:
 
 
 def install_watchdog(
-    *, interval_min: int = 10, home_dir: Path | None = None
+    *, interval_min: int = 3, home_dir: Path | None = None
 ) -> dict[str, object]:
     """Периодическая проверка «демон жив» (best-effort, user-scope).
 

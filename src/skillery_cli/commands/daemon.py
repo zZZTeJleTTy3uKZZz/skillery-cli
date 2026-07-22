@@ -30,6 +30,7 @@ from skillery_cli.daemon.single_instance import (
 from skillery_cli.daemon.autostart import (
     detect_platform,
     install_for_platform,
+    install_watchdog,
     uninstall_for_platform,
 )
 from skillery_cli.daemon.daemon_runner import (
@@ -199,6 +200,19 @@ def cmd_daemon_run(
         _log.info("daemon started", extra={"context": {"pid": os.getpid()}})
     except Exception:  # noqa: BLE001 — логи не критичны
         _log = None
+    # Watchdog самоподдержка: демон при КАЖДОМ старте (пере)регистрирует свой
+    # периодический watchdog-таск. Если login-time установка не сработала (или
+    # машину не логинили через CLI после включения фичи), живой демон всё равно
+    # поднимет страховку «всегда в сети». Idempotent (/F), best-effort, только
+    # Windows (на launchd/systemd перезапуск встроен). При live-демоне watchdog
+    # находит лок и выходит, так что повторной регистрации на каждый тик нет.
+    if sys.platform == "win32":
+        try:
+            wd = install_watchdog()
+            if _log and not wd.get("installed"):
+                _log.error("watchdog install failed", extra={"context": wd})
+        except Exception:  # noqa: BLE001 — страховка не критична
+            pass
     try:
         runner = _build_runner(interval_seconds=interval)
         try:

@@ -840,6 +840,17 @@ def _print_daemon_hint(state: dict) -> None:
         )
 
 
+def _log_daemon_issue(msg: str) -> None:
+    """Тихо (без вывода в команду) записать проблему демона в logs/daemon.log."""
+    try:
+        from skillery_cli.core.logging_setup import configure_logging, get_logger
+
+        configure_logging(filename="daemon.log")  # идемпотентно
+        get_logger("heal").error(msg)
+    except Exception:  # noqa: BLE001 — лог не должен мешать команде
+        pass
+
+
 def _heal_daemon_if_dead() -> None:
     """Самолечение: любая команда CLI поднимает демона, если тот умер.
 
@@ -873,8 +884,15 @@ def _heal_daemon_if_dead() -> None:
             return  # незалогиненному демон не нужен
         from skillery_cli.commands.daemon import ensure_daemon_running
 
-        ensure_daemon_running()
-    except Exception:  # noqa: BLE001 — самолечение не должно мешать команде
+        state = ensure_daemon_running()
+        event = str((state or {}).get("event") or "")
+        if event not in ("started", "already_running"):
+            # Тихо для пользователя (никакого вывода в команду), но НЕ молча:
+            # провал самолечения = устройство может уйти в офлайн — это стоит
+            # увидеть в логах при разборе «почему не на связи».
+            _log_daemon_issue(f"self-heal не поднял демон: {state}")
+    except Exception as exc:  # noqa: BLE001 — самолечение не мешает команде
+        _log_daemon_issue(f"self-heal исключение: {exc}")
         return
 
 
@@ -1034,6 +1052,9 @@ def _do_code_login(cfg: ClientConfig, *, code: str) -> None:
         cfg.user_email = user_email
         populate_from_jwt(cfg, data["access_token"])
         cfg.save()
+        # #954: любой login-путь (не только invite/browser) поднимает демон +
+        # автозапуск + watchdog — иначе устройство «офлайн», задания копятся.
+        daemon_state = _ensure_daemon_after_login()
 
         result = {
             "event": "logged_in",
@@ -1061,6 +1082,7 @@ def _do_code_login(cfg: ClientConfig, *, code: str) -> None:
                 roles_descr.append("member")
             console.print(f"  Роли:        {', '.join(roles_descr) or '—'}")
             console.print(f"  Permissions: {len(cfg.permissions)} прав")
+            _print_daemon_hint(daemon_state)
 
         emit_data(result, text_renderer=_render)
 
@@ -1195,6 +1217,8 @@ def _do_password_login(cfg: ClientConfig, *, email: str, password: str) -> None:
         cfg.user_email = email
         populate_from_jwt(cfg, data["access_token"])
         cfg.save()
+        # #954: password-login тоже поднимает демон + автозапуск + watchdog.
+        daemon_state = _ensure_daemon_after_login()
         result = {
             "event": "logged_in",
             "method": "password",
@@ -1218,6 +1242,7 @@ def _do_password_login(cfg: ClientConfig, *, email: str, password: str) -> None:
                 roles_descr.append("member")
             console.print(f"  Роли:        {', '.join(roles_descr) or '—'}")
             console.print(f"  Permissions: {len(cfg.permissions)} прав")
+            _print_daemon_hint(daemon_state)
 
         emit_data(result, text_renderer=_render)
 
