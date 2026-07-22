@@ -4601,12 +4601,26 @@ def build_app() -> typer.Typer:
     # cli-kits W6: → command_kit.gated (1:1 одиночные команды).
     from skillery_cli.commands import comment as _comment_mod
 
-    gated(app, permission="comment.post", has_permission=cfg.has_permission,
-          name="comment")(_comment_mod.cmd_comment_post)
+    # Ресурс-группа `comment` (canon #890): глаголы — ПОДКОМАНДЫ (`comment edit`),
+    # а не приклеенные дефисом (`comment-edit`). Старые дефисные формы оставлены
+    # СКРЫТЫМИ алиасами — скрипты не ломаются.
+    comment_app = typer.Typer(
+        no_args_is_help=True, help="Комментарии к навыкам: add/edit/delete/list."
+    )
+    gated(comment_app, permission="comment.post", has_permission=cfg.has_permission,
+          name="add")(_comment_mod.cmd_comment_post)
+    gated(comment_app, permission="comment.edit_own", has_permission=cfg.has_permission,
+          name="edit")(_comment_mod.cmd_comment_edit)
+    gated(comment_app, permission="comment.delete_own", has_permission=cfg.has_permission,
+          name="delete")(_comment_mod.cmd_comment_delete)
+    gated(comment_app, permission="comment.post", has_permission=cfg.has_permission,
+          name="list")(_comment_mod.cmd_comments_list)
+    app.add_typer(comment_app, name="comment")
+    # Back-compat СКРЫТЫЕ алиасы (прежние плоские дефисные формы).
     gated(app, permission="comment.edit_own", has_permission=cfg.has_permission,
-          name="comment-edit")(_comment_mod.cmd_comment_edit)
+          name="comment-edit", hidden=True)(_comment_mod.cmd_comment_edit)
     gated(app, permission="comment.delete_own", has_permission=cfg.has_permission,
-          name="comment-delete")(_comment_mod.cmd_comment_delete)
+          name="comment-delete", hidden=True)(_comment_mod.cmd_comment_delete)
 
     # === Support tickets ===
     if cfg.has_permission("ticket.create") or cfg.has_permission("ticket.read"):

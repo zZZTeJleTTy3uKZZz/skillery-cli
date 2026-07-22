@@ -354,4 +354,11 @@ def register(app: typer.Typer) -> None:
     """Регистрирует always-on команды register/join/accept-invite (``build_app``)."""
     app.command(name="register")(cmd_register)
     app.command(name="join")(cmd_join)
-    app.command(name="accept-invite")(cmd_accept_invite)
+    # Ресурс-группа `invite` (canon #890): `invite accept` вместо дефисной
+    # `accept-invite`. Дефисную форму держим СКРЫТЫМ алиасом (back-compat).
+    invite_app = typer.Typer(
+        no_args_is_help=True, help="Инвайты: accept (принять приглашение)."
+    )
+    invite_app.command(name="accept")(cmd_accept_invite)
+    app.add_typer(invite_app, name="invite")
+    app.command(name="accept-invite", hidden=True)(cmd_accept_invite)

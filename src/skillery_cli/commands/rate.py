@@ -94,4 +94,11 @@ def cmd_rating_summary(
 def register(app: typer.Typer) -> None:
     """Регистрирует команды в главном app (зовётся из ``build_app``)."""
     app.command(name="rate")(cmd_rate)
-    app.command(name="rating-summary")(cmd_rating_summary)
+    # Ресурс-группа `rating` (canon #890): `rating summary` вместо дефисной
+    # `rating-summary`. Дефисную форму держим СКРЫТЫМ алиасом (back-compat).
+    rating_app = typer.Typer(
+        no_args_is_help=True, help="Рейтинг навыков: summary."
+    )
+    rating_app.command(name="summary")(cmd_rating_summary)
+    app.add_typer(rating_app, name="rating")
+    app.command(name="rating-summary", hidden=True)(cmd_rating_summary)
