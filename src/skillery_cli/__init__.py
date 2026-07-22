@@ -1,2 +1,2 @@
 """Skillery CLI — клиент."""
-__version__ = "0.5.57"
+__version__ = "0.5.58"

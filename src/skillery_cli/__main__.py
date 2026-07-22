@@ -1580,6 +1580,9 @@ def cmd_status(
     )
     global_items = _scan_installed(target, project=None)
     project_items = _scan_installed(target, project=actual_project)
+    # Что демон поставил в фоне (его onboarding-печать ушла бы в DEVNULL) —
+    # показываем агенту/пользователю здесь: что установилось и что доделать.
+    pending = _read_pending_onboarding()
     payload = {
         "agent": target.name,
         "global_skills_dir": str(target.base_dir()),
@@ -1590,6 +1593,7 @@ def cmd_status(
         "default_install_scope": cfg.default_install_scope,
         "installed_global": global_items,
         "installed_project": project_items,
+        "pending_onboarding": pending,
     }
 
     def _render(p: dict) -> None:
@@ -1606,8 +1610,27 @@ def cmd_status(
             f"Installed:       global={len(p['installed_global'])}  "
             f"project={len(p['installed_project'])}"
         )
+        pend = p.get("pending_onboarding") or []
+        if pend:
+            console.print("")
+            console.print(
+                f"[bold cyan]🆕 Установлено в фоне ({len(pend)}) — что доделать:[/]"
+            )
+            for it in pend:
+                head = it.get("slug") or "—"
+                if it.get("summary"):
+                    head += f" — {it['summary']}"
+                console.print(f"  • [bold]{head}[/]")
+                for i, step in enumerate(it.get("next_steps") or [], 1):
+                    console.print(f"      {i}. {step}")
+                if it.get("docs"):
+                    console.print(f"      Документация: {it['docs']}")
 
     emit_data(payload, text_renderer=_render)
+    # Показали (в тексте И в json-payload) — вычищаем: агент/пользователь узнали,
+    # висеть вечно журналу незачем. Понадобится снова — в SKILL.md навыка.
+    if pending:
+        _clear_pending_onboarding()
 
 
 def cmd_set_tokens(
@@ -1957,7 +1980,67 @@ def _merge_tooling_from_store(manifest: dict | None, store_dir) -> dict:
     return out
 
 
-def _emit_onboarding(manifest: dict | None, *, slug: str) -> None:
+def _pending_onboarding_path() -> Path:
+    """Журнал onboarding'а навыков, поставленных ФОНОВО (демоном).
+
+    Демон headless (stdout → DEVNULL), поэтому напечатанный `_emit_onboarding`
+    блок «что дальше» терялся — агент не узнавал, что поставилось в фоне и что
+    доделать. Демон пишет его сюда, `skillery status` показывает и вычищает.
+    """
+    from skillery_cli.daemon.daemon_runner import _default_data_dir
+
+    return _default_data_dir() / "pending-onboarding.json"
+
+
+def _record_pending_onboarding(entry: dict) -> None:
+    """Добавить onboarding фоновой установки (dedupe по slug, cap 50)."""
+    import json
+
+    p = _pending_onboarding_path()
+    try:
+        data = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+    except Exception:  # noqa: BLE001
+        data = {}
+    items = [it for it in (data.get("items") or []) if isinstance(it, dict)]
+    # Свежая запись вытесняет прежнюю по тому же slug (не копим дубли апдейтов).
+    items = [it for it in items if it.get("slug") != entry.get("slug")]
+    items.append(entry)
+    items = items[-50:]
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(
+            json.dumps({"items": items}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:  # noqa: BLE001 — журнал не критичен
+        pass
+
+
+def _read_pending_onboarding() -> list[dict]:
+    """Прочитать журнал фонового onboarding'а (устойчиво к битому файлу)."""
+    import json
+
+    p = _pending_onboarding_path()
+    try:
+        data = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+    except Exception:  # noqa: BLE001
+        return []
+    return [it for it in (data.get("items") or []) if isinstance(it, dict)]
+
+
+def _clear_pending_onboarding() -> None:
+    """Вычистить журнал (агент/пользователь увидели в `status`)."""
+    p = _pending_onboarding_path()
+    try:
+        if p.exists():
+            p.unlink()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _emit_onboarding(
+    manifest: dict | None, *, slug: str, headless: bool = False
+) -> None:
     """Онбординг «что делать дальше» ПОСЛЕ установки навыка (#889).
 
     Источник — декларация навыка в ``_skill_meta.toml``::
@@ -1983,6 +2066,19 @@ def _emit_onboarding(manifest: dict | None, *, slug: str) -> None:
     summary = str(ob.get("summary") or "").strip()
     docs = str(ob.get("docs") or "").strip()
     if not (steps or summary or docs):
+        return
+    if headless:
+        # Демон: stdout → DEVNULL, печать потерялась бы. Пишем в журнал, чтобы
+        # `skillery status` показал агенту/пользователю, что поставилось в фоне.
+        _record_pending_onboarding(
+            {
+                "slug": slug,
+                "summary": summary,
+                "next_steps": steps,
+                "docs": docs or None,
+                "ts": datetime.now(UTC).isoformat(),
+            }
+        )
         return
     lines = [f"Навык «{slug}» установлен. Что дальше:"]
     if summary:
@@ -2362,8 +2458,12 @@ async def _install_chain(
     force: bool,
     agent_target,  # IAgentTarget
     source: dict | None = None,
+    headless: bool = False,
 ) -> list[dict]:
     """Качает bundle (+deps), материализует в стор, линкует в scope.
+
+    ``headless=True`` (демон) → onboarding не печатается (stdout в DEVNULL), а
+    пишется в журнал pending-onboarding для последующего `skillery status`.
 
     source (стратегия источника):
     - None / {"kind":"hub"} → backend bundle + git (как раньше; нужен access);
@@ -2439,6 +2539,7 @@ async def _install_chain(
                 _emit_onboarding(
                     _tooling_manifest,
                     slug=dep_slug or (str(dep_id) if dep_id is not None else ""),
+                    headless=headless,
                 )
                 ref = dep_slug or (str(dep_id) if dep_id is not None else "")
                 # Источник = hub (бэкенд-bundle + git clone).
@@ -2920,6 +3021,7 @@ async def _reconcile_hub_installs(
             await _install_chain(
                 cfg, access, slug=str(ref), channel=channel, scope="global",
                 project_path=None, force=force, agent_target=agent_target,
+                headless=True,
             )
             report[bucket].append(ref)
         except Exception:
@@ -3019,7 +3121,7 @@ async def _reconcile_device_queue(
                 await _install_chain(
                     cfg, access, slug=str(ref), channel=channel,
                     scope="global", project_path=None, force=False,
-                    agent_target=agent_target,
+                    agent_target=agent_target, headless=True,
                 )
                 applied = (read_meta(store_root / ref) or {}).get("version")
                 await client.report_device_apply(
