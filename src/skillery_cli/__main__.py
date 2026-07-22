@@ -2921,9 +2921,13 @@ async def _reconcile_device_queue(
     """
     store_root = cfg.effective_store_dir()
     report: dict[str, list] = {"applied": [], "failed": [], "skipped": []}
+    # Long-poll держит коннект до <wait>с — HTTP-таймаут клиента ОБЯЗАН быть
+    # больше wait, иначе клиент отвалится РАНЬШЕ ответа сервера (таймаут задаётся
+    # на КОНСТРУКЦИИ HubClient — транспорт кита не принимает per-request timeout).
     client = HubClient(
         base_url=cfg.base_url, access_token=access,
         on_token_refresh=_make_refresh_callback(cfg),
+        timeout=(float(wait) + 10.0) if wait > 0 else 30.0,
     )
     try:
         try:

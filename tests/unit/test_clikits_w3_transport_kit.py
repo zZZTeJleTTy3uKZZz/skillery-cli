@@ -129,6 +129,36 @@ async def test_401_auto_refresh_tuple_callback_preserved() -> None:
 
 
 @pytest.mark.asyncio
+async def test_device_queue_longpoll_wait_routes_through_transport() -> None:
+    """Long-poll ``wait>0`` идёт через РЕАЛЬНЫЙ транспорт кита без TypeError.
+
+    Регресс на баг CLI 0.5.54: ``fetch_device_queue(wait=25)`` клал
+    ``timeout=`` в kwargs, а те пробрасывались в ``HttpxTransport.request``,
+    который такой аргумент НЕ принимает → мгновенный ``TypeError``, long-poll
+    падал молча (проглатывался ``except Exception`` в демоне), устройство
+    висело офлайн. FakeClient-тест этого не ловил — только реальный транспорт.
+    Per-request timeout НЕ передаём; таймаут задаётся при создании HubClient.
+    """
+    with respx.mock(base_url="http://localhost:8000") as router:
+        route = router.get("/me/device-queue").mock(
+            return_value=Response(200, json={"items": [{"slug": "atlas"}]})
+        )
+        # timeout>wait как в демоне (транспорт держит коннект дольше long-poll'а).
+        client = HubClient(
+            base_url="http://localhost:8000", access_token="t", timeout=35.0
+        )
+        try:
+            items = await client.fetch_device_queue(auto_update=True, wait=25)
+        finally:
+            await client.close()
+    assert items == [{"slug": "atlas"}]
+    # ?wait и ?auto_update реально доехали до сервера в query.
+    q = str(route.calls.last.request.url)
+    assert "wait=25" in q
+    assert "auto_update=true" in q
+
+
+@pytest.mark.asyncio
 async def test_multipart_still_routes_through_transport() -> None:
     """multipart-комментарий ходит через тот же транспорт (data + files)."""
     with respx.mock(base_url="http://localhost:8000") as router:

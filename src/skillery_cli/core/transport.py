@@ -504,10 +504,11 @@ class HubClient:
         path = "/me/device-queue"
         if params:
             path += "?" + urlencode(params)
-        kwargs: dict[str, Any] = {}
-        if wait > 0:
-            kwargs["timeout"] = float(wait) + 10.0
-        data = await self._request("GET", path, **kwargs)
+        # ⚠️ per-request timeout НЕ пробрасываем через транспорт кита
+        # (HttpxTransport.request его не принимает → TypeError, long-poll падал бы
+        # молча). Таймаут задаётся при СОЗДАНИИ HubClient (см. вызов в демоне:
+        # timeout=wait+буфер), поэтому здесь ничего не передаём.
+        data = await self._request("GET", path)
         return list(data.get("items", []) if isinstance(data, dict) else [])
 
     async def report_device_apply(
