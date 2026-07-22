@@ -183,12 +183,24 @@ def cmd_daemon_run(
             ),
         )
         return
+    # Логи демона в ~/.skillery/logs/daemon.log (уровень из конфига).
+    try:
+        from skillery_cli.config import ClientConfig
+        from skillery_cli.core.logging_setup import configure_logging, get_logger
+
+        configure_logging(ClientConfig.load().log_level, filename="daemon.log")
+        _log = get_logger("daemon")
+        _log.info("daemon started", extra={"context": {"pid": os.getpid()}})
+    except Exception:  # noqa: BLE001 — логи не критичны
+        _log = None
     try:
         runner = _build_runner(interval_seconds=interval)
         try:
             asyncio.run(runner.run_forever())
         except KeyboardInterrupt:
             emit_message("daemon stopped (KeyboardInterrupt)", level="warn")
+            if _log:
+                _log.warning("daemon stopped (KeyboardInterrupt)")
     finally:
         lock.release()
 

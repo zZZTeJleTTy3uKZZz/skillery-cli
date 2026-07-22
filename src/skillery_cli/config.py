@@ -124,6 +124,7 @@ class _HubAppConfig(AppConfig):
     cli_update_check_at: str | None = None
     cli_latest_version: str | None = None
     cli_auto_upgrade: bool = True
+    log_level: str = "error"
 
 
 @dataclass
@@ -131,6 +132,9 @@ class ClientConfig:
     base_url: str = ""
     user_email: str | None = None
     user_display_name: str | None = None
+    log_level: str = "error"
+    """Уровень логов CLI (error|warning|info|debug|trace). Пишутся в
+    ~/.skillery/logs/. По умолчанию error; debug/trace — для разбора."""
     agent: str | None = None
     permissions: list[str] = field(default_factory=list)
     """Permission keys из JWT (используется для модульной регистрации команд).
@@ -259,6 +263,7 @@ class ClientConfig:
             cli_update_check_at=ac.cli_update_check_at,
             cli_latest_version=ac.cli_latest_version,
             cli_auto_upgrade=bool(ac.cli_auto_upgrade),
+            log_level=str(ac.log_level or "error"),
         )
 
     def save(self, path: Path | None = None) -> None:
@@ -275,6 +280,8 @@ class ClientConfig:
             data["user_email"] = self.user_email
         if self.user_display_name:
             data["user_display_name"] = self.user_display_name
+        if self.log_level and self.log_level != "error":
+            data["log_level"] = self.log_level
         if self.agent:
             data["agent"] = self.agent
         if self.permissions:

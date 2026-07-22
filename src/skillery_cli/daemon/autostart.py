@@ -429,7 +429,40 @@ def ensure_autostart(*, home_dir: Path | None = None) -> dict[str, object]:
             return fallback
     result["unit_path"] = str(artifact.unit_path)
     result["platform"] = artifact.platform
+    # Watchdog: периодически поднимаем демон, если он умер посреди сессии и ни
+    # одна команда не сработала (login-autostart покрывает только вход). Idem-
+    # potent: `daemon start` держит single-instance лок, дублей не будет.
+    result["watchdog"] = install_watchdog()
     return result
+
+
+def install_watchdog(*, interval_min: int = 10) -> dict[str, object]:
+    """Периодическая проверка «демон жив» (best-effort, user-scope).
+
+    Windows — Task Scheduler с ``/SC MINUTE /MO N`` (без админа, /F перезаписью).
+    Linux — systemd timer уже покрывает Restart; macOS — launchd KeepAlive. На
+    не-Windows возвращаем no-op (там автозапуск и так самоперезапускающийся).
+    """
+    if sys.platform != "win32":
+        return {"installed": False, "reason": "не требуется (launchd/systemd)"}
+    binary = _resolve_cli_binary()
+    task = f"{_TASK_NAME}Watchdog"
+    try:
+        proc = subprocess.run(
+            ["schtasks", "/Create", "/F", "/SC", "MINUTE", "/MO", str(interval_min),
+             "/TN", task, "/TR", f'"{binary}" daemon start'],
+            capture_output=True, timeout=30, check=False,
+            creationflags=0x08000000,  # CREATE_NO_WINDOW — без вспышки консоли
+        )
+        ok = proc.returncode == 0
+        return {
+            "installed": ok,
+            "task": task,
+            "interval_min": interval_min,
+            "error": None if ok else (proc.stderr or b"").decode("utf-8", "ignore")[:200],
+        }
+    except Exception as exc:  # noqa: BLE001 — watchdog не критичен
+        return {"installed": False, "error": str(exc)}
 
 
 def _windows_startup_dir(home_dir: Path) -> Path:

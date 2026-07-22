@@ -4440,6 +4440,11 @@ def build_app() -> typer.Typer:
         контракт вывода (дефолт text, режим уже инициализирован пре-проходом).
         """
         _ = profile, json_output, version
+        # Логи CLI в ~/.skillery/logs/ (уровень из конфига, по умолчанию error).
+        with suppress(Exception):
+            from skillery_cli.core.logging_setup import configure_logging
+
+            configure_logging(ClientConfig.load().log_level)
         _heal_daemon_if_dead()
 
     # === Always-on ===
@@ -4461,6 +4466,11 @@ def build_app() -> typer.Typer:
     app.command(name="logout")(cmd_logout)
     app.command(name="whoami")(cmd_whoami)
     app.command(name="devices")(cmd_devices)
+    from skillery_cli.commands.installed import cmd_installed
+    from skillery_cli.commands.logs import cmd_logs
+
+    app.command(name="installed")(cmd_installed)
+    app.command(name="logs")(cmd_logs)
     app.command(name="config")(cmd_config)
     app.command(name="web")(cmd_web)
     # upgrade — обновить сам CLI (skillery-cli) с PyPI (uv tool / pipx / pip).
