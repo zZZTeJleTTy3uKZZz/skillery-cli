@@ -2957,6 +2957,14 @@ async def _reconcile_device_queue(
                 await client.report_device_apply(
                     slug=str(ref), ok=True, version=str(applied or desired)
                 )
+                # #1024: установка видна в вебе /logs с привязкой к пользователю.
+                with suppress(Exception):
+                    await client.report_cli_log(
+                        level="info",
+                        message=f"CLI: навык {ref} установлен (v{applied or desired})",
+                        logger="cli.install",
+                        context={"skill": str(ref), "version": str(applied or desired)},
+                    )
                 attempts.pop(key, None)  # успех — счётчик сбрасываем
                 report["applied"].append(ref)
             except Exception as exc:  # noqa: BLE001 — провал ОБЯЗАН быть виден

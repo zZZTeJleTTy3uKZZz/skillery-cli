@@ -77,6 +77,14 @@ async def hydrate_session_permissions(
             cfg.user_email = email
     except Exception:  # noqa: BLE001 — профиль не критичен для логина
         pass
+    # #1024: действие «вход» видно в вебе /logs с привязкой к пользователю.
+    try:
+        await client.report_cli_log(
+            level="info", message="CLI: вход выполнен", logger="cli.login",
+            context={"device": (email or name or "")},
+        )
+    except Exception:  # noqa: BLE001 — телеметрия не ломает логин
+        pass
 
 
 def local_device_identity() -> tuple[str, str, str]:

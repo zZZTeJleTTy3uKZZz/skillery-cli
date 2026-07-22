@@ -369,6 +369,34 @@ class HubClient:
         """
         return await self._request("GET", "/me")
 
+    async def report_cli_log(
+        self,
+        *,
+        level: str,
+        message: str,
+        logger: str,
+        context: dict | None = None,
+    ) -> None:
+        """#1024: отправить лог действия CLI в веб /logs (source=cli).
+
+        Best-effort: телеметрия не должна ломать команду. Actor резолвится
+        бэкендом из Bearer — действие привязывается к пользователю в вебе.
+        """
+        await self._request(
+            "POST",
+            "/cli-logs",
+            json={
+                "items": [
+                    {
+                        "level": level,
+                        "message": message,
+                        "logger": logger,
+                        "context": context or {},
+                    }
+                ]
+            },
+        )
+
     # --- P1 account ---
     async def register(
         self, *, email: str, password: str, display_name: str
