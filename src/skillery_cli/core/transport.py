@@ -479,15 +479,24 @@ class HubClient:
         return await self._request("POST", "/me/devices", json=body)
 
     async def fetch_device_queue(
-        self, *, auto_update: bool | None = None, wait: int = 0
+        self,
+        *,
+        auto_update: bool | None = None,
+        wait: int = 0,
+        supports_removal: bool = True,
     ) -> list[dict[str, Any]]:
         """GET /me/device-queue — задания ЭТОГО устройства (#905).
 
         Устройство backend определяет по ``id:{cdid}`` в User-Agent, поэтому
         отдельный параметр не нужен. Возвращает список
-        ``{skill_id, slug, desired_version, applied_version, status}``.
+        ``{skill_id, slug, desired_version, applied_version, status, action}``.
 
         #919: заодно сообщаем, включено ли автообновление НА ЭТОЙ машине.
+
+        #13: ``supports_removal`` заявляет серверу, что этот CLI УМЕЕТ снимать
+        навыки — иначе removal-задания (``action=remove``) сервер нам не отдаёт
+        (старый CLI без флага переустановил бы навык вместо снятия). Дефолт True:
+        любая версия с этим методом снятие поддерживает.
 
         ``wait>0`` — LONG-POLL: сервер держит запрос открытым до <wait> сек, пока
         не появится задание (мгновенная доставка). Таймаут HTTP-клиента поднимаем
@@ -501,6 +510,8 @@ class HubClient:
             params["auto_update"] = "true" if auto_update else "false"
         if wait > 0:
             params["wait"] = str(int(wait))
+        if supports_removal:
+            params["supports_removal"] = "true"
         path = "/me/device-queue"
         if params:
             path += "?" + urlencode(params)

@@ -3091,7 +3091,8 @@ async def _reconcile_device_queue(
     try:
         try:
             queue = await client.fetch_device_queue(
-                auto_update=cfg.auto_update, wait=wait
+                auto_update=cfg.auto_update, wait=wait,
+                supports_removal=True,  # #13: этот CLI умеет снимать навыки
             )
         except Exception:
             # Старый backend / нет устройства в UA — молча уступаем legacy-пути.
@@ -3116,6 +3117,46 @@ async def _reconcile_device_queue(
             # поднимая видимое окно git-bash. Отказ уже отрапортован серверу.
             if tried >= _MAX_INSTALL_ATTEMPTS:
                 report["skipped"].append(ref)
+                continue
+            # #13: removal-задание — СНЯТЬ навык с устройства, а не ставить.
+            # Отдаётся только демонам, заявившим supports_removal (backend-гейт),
+            # поэтому старый CLI сюда не попадёт и навык не переустановит.
+            if str(item.get("action") or "install") == "remove":
+                try:
+                    # revert CLI/MCP навыка ДО remove — при purge стор (и его
+                    # манифест) удаляется, revert читает манифест пока он на месте.
+                    _revert_tooling(
+                        str(ref), agent_target=agent_target, project=None,
+                        store_dir=store_root / str(ref),
+                    )
+                    SkillInstaller(agent_target, store_root).remove(
+                        slug=str(ref), project=None, keep_local=False,
+                        purge=True,
+                    )
+                    with suppress(Exception):
+                        track_skill_event(
+                            "skill.uninstall", slug=str(ref),
+                            scope="global", agent=agent_target.name,
+                        )
+                    # Рапорт об успешном снятии — без версии (backend по
+                    # action=remove удалит строку очереди).
+                    await client.report_device_apply(slug=str(ref), ok=True)
+                    with suppress(Exception):
+                        await client.report_cli_log(
+                            level="info",
+                            message=f"CLI: навык {ref} снят с устройства",
+                            logger="cli.uninstall",
+                            context={"skill": str(ref)},
+                        )
+                    attempts.pop(key, None)
+                    report["applied"].append(ref)
+                except Exception as exc:  # noqa: BLE001 — провал ОБЯЗАН быть виден
+                    attempts[key] = tried + 1
+                    with suppress(Exception):
+                        await client.report_device_apply(
+                            slug=str(ref), ok=False, error=str(exc)
+                        )
+                    report["failed"].append(ref)
                 continue
             try:
                 await _install_chain(

@@ -114,6 +114,69 @@ class TestReconcileDeviceQueue:
         assert rep["applied"] == [] and rep["failed"] == []
 
 
+class _Agent:
+    name = "claude"
+
+
+class TestReconcileRemoval:
+    """#13: removal-задание (action=remove) СНИМАЕТ навык, а не ставит."""
+
+    def _mock_uninstall(self, monkeypatch):  # type: ignore[no-untyped-def]
+        removed: dict = {}
+
+        class _FakeInstaller:
+            def __init__(self, target, store):  # type: ignore[no-untyped-def]
+                pass
+
+            def remove(self, **kw):  # type: ignore[no-untyped-def]
+                if getattr(_FakeInstaller, "_boom", False):
+                    raise RuntimeError("permission denied")
+                removed.update(kw)
+
+        monkeypatch.setattr(m, "SkillInstaller", _FakeInstaller)
+        monkeypatch.setattr(m, "_revert_tooling", lambda *a, **k: None)
+        monkeypatch.setattr(m, "track_skill_event", lambda *a, **k: None)
+        return removed, _FakeInstaller
+
+    async def test_removal_uninstalls_and_reports_ok(
+        self, cfg, monkeypatch
+    ) -> None:
+        fake = _FakeClient(
+            [{"slug": "atlas", "desired_version": "0.4.0", "action": "remove"}]
+        )
+        _install(fake, monkeypatch)
+        removed, _ = self._mock_uninstall(monkeypatch)
+
+        rep = await m._reconcile_device_queue(
+            cfg, "tok", channel="published", agent_target=_Agent()
+        )
+        assert rep["applied"] == ["atlas"]
+        # снос из стора + global-ссылки (purge=True, project=None)
+        assert removed == {
+            "slug": "atlas",
+            "project": None,
+            "keep_local": False,
+            "purge": True,
+        }
+        # рапорт об успешном снятии — БЕЗ версии.
+        assert fake.reports == [{"slug": "atlas", "ok": True}]
+
+    async def test_removal_failure_reported(self, cfg, monkeypatch) -> None:
+        fake = _FakeClient(
+            [{"slug": "atlas", "desired_version": "0.4.0", "action": "remove"}]
+        )
+        _install(fake, monkeypatch)
+        _, Installer = self._mock_uninstall(monkeypatch)
+        Installer._boom = True  # type: ignore[attr-defined]
+
+        rep = await m._reconcile_device_queue(
+            cfg, "tok", channel="published", agent_target=_Agent()
+        )
+        assert rep["failed"] == ["atlas"]
+        assert fake.reports[0]["ok"] is False
+        assert "permission denied" in fake.reports[0]["error"]
+
+
 class TestAutoUpdateStateReported:
     """#919: демон сообщает хабу, включено ли автообновление на этой машине."""
 
@@ -128,6 +191,8 @@ class TestAutoUpdateStateReported:
             cfg, "tok", channel="published", agent_target=object()
         )
 
-        assert fake.queue_kwargs == {"auto_update": False, "wait": 0}, (
-            "веб не узнает про выключенное автообновление на устройстве"
-        )
+        assert fake.queue_kwargs == {
+            "auto_update": False,
+            "wait": 0,
+            "supports_removal": True,
+        }, "веб не узнает про выключенное автообновление на устройстве"
