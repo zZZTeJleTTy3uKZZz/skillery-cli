@@ -2714,6 +2714,40 @@ def cmd_install(
                     level="warn",
                 )
 
+        # A2 (голос 07-24): ручная установка из ХАБА должна РАПОРТОВАТЬ факт
+        # per-device — иначе навык, поставленный `skillery install`, не виден как
+        # «установлен на ЭТОМ устройстве» в вебе/профиле (раньше факт слал только
+        # демон-очередь). Backend при отсутствии задания создаёт факт-строку сам
+        # (устройство резолвится по id:<cdid> в User-Agent). Только hub-режим
+        # (source is None), только реально применённые (не skipped/не stub),
+        # best-effort — сбой рапорта не ломает установку. В _install_chain НЕ
+        # кладём: демон-путь (_reconcile_device_queue) рапортует сам → дубль.
+        if source is None and access:
+            rep_client = HubClient(
+                base_url=cfg.base_url, access_token=access,
+                on_token_refresh=_make_refresh_callback(cfg),
+            )
+            try:
+                reported: set[str] = set()
+                for item in installed_chain:
+                    if item.get("skipped") or item.get("content") == "stub":
+                        continue
+                    ref = item.get("slug") or (
+                        str(item["skill_id"])
+                        if item.get("skill_id") is not None
+                        else None
+                    )
+                    ver = item.get("version")
+                    if not ref or not ver or ref in reported:
+                        continue
+                    reported.add(str(ref))
+                    with suppress(Exception):
+                        await rep_client.report_device_apply(
+                            slug=str(ref), ok=True, version=str(ver)
+                        )
+            finally:
+                await rep_client.close()
+
         def _render(items: list) -> None:
             for item in items:
                 agent_tag = f"[{item['agent']}] " if item.get("agent") else ""
