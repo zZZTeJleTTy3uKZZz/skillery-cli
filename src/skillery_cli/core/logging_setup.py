@@ -95,3 +95,37 @@ def get_logger(name: str = _ROOT_NAME) -> logging.Logger:
     if name == _ROOT_NAME:
         return logging.getLogger(_ROOT_NAME)
     return logging.getLogger(f"{_ROOT_NAME}.{name}")
+
+
+def install_logger(filename: str = "cli.log") -> logging.Logger:
+    """Аудит-логгер установки навыка — ВСЕГДА пишет INFO в ``logs/<filename>``.
+
+    Обычный уровень cli.log/daemon.log — ERROR (тихо), поэтому шаги установки в
+    него не попадали, и «тихий пропуск» установки CLI-пакета (SK-2) невозможно было
+    диагностировать без ручного разбора (cli.log/daemon.log были 0 байт). Этот
+    логгер несёт СВОЙ файл-хендлер на уровне INFO и ``propagate=False``: аудит
+    установки пишется всегда и в тот же файл, но НЕ зависит от общего уровня и не
+    делает лог демона болтливым (прочие логгеры остаются на своём уровне).
+
+    ``filename`` — ``cli.log`` (foreground) или ``daemon.log`` (фоновый демон:
+    stdout→DEVNULL, поэтому только файл). Идемпотентно (хендлер на файл — один).
+    """
+    lg = logging.getLogger(f"{_ROOT_NAME}.install")
+    lg.setLevel(logging.INFO)
+    lg.propagate = False
+    target = log_dir() / filename
+    key = str(target)
+    for h in lg.handlers:
+        if getattr(h, "_skillery_target", None) == key:
+            return lg
+    try:
+        handler = logging.handlers.RotatingFileHandler(
+            target, maxBytes=2_000_000, backupCount=5, encoding="utf-8"
+        )
+    except Exception:  # noqa: BLE001 — логи не должны валить install
+        return lg
+    handler._skillery_target = key  # type: ignore[attr-defined]
+    handler.setFormatter(_JsonFormatter())
+    handler.setLevel(logging.INFO)
+    lg.addHandler(handler)
+    return lg

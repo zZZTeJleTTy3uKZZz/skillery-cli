@@ -2291,7 +2291,9 @@ def _report_cli_package(rep: dict, expected: list[str]) -> None:
         )
 
 
-def _apply_tooling(result, manifest: dict | None, *, agent_target, project) -> None:
+def _apply_tooling(
+    result, manifest: dict | None, *, agent_target, project, log_file: str = "cli.log"
+) -> None:
     """поставить CLI/MCP/runtime-deps навыка (если он tooling). Graceful.
 
     Свой CLI-пакет навыка (pyproject в корне репо, сохранён в ``.pkgsrc``) ставим
@@ -2301,9 +2303,17 @@ def _apply_tooling(result, manifest: dict | None, *, agent_target, project) -> N
     поставленные команды, чтобы не писать битый shim поверх рабочей uv-tool-команды.
 
     Ошибка установки артефактов НЕ ломает установку самого навыка (warn, degradation).
+
+    ``log_file`` — куда писать аудит установки (SK-5): ``cli.log`` (foreground) или
+    ``daemon.log`` (фоновый демон). Шаги/итог пишутся ВСЕГДА (install_logger, INFO),
+    чтобы тихий пропуск установки пакета был виден в логе.
     """
+    from skillery_cli.core.logging_setup import install_logger
+
+    ilog = install_logger(log_file)
     installed_cli: set[str] = set()
-    pkg_root = _cli_package_root(getattr(result, "store_dir", None))
+    store_dir = getattr(result, "store_dir", None)
+    pkg_root = _cli_package_root(store_dir)
     cmd_names = _manifest_cli_command_names(manifest)
     if pkg_root is not None and cmd_names:
         try:
@@ -2313,12 +2323,22 @@ def _apply_tooling(result, manifest: dict | None, *, agent_target, project) -> N
         except Exception as exc:  # noqa: BLE001 — пакет не валит install навыка
             rep = {"status": "error", "reason": str(exc), "package": None, "commands": []}
         _report_cli_package(rep, cmd_names)
+        # Аудит: результат uv tool install (rc/package/self-check). WARNING на провал
+        # — ровно то, чего не хватало для диагностики тихого пропуска (SK-2).
+        _ctx = {
+            "step": "cli_package", "commands": cmd_names,
+            "status": rep.get("status"), "package": rep.get("package"),
+            "self_check": rep.get("commands"), "reason": rep.get("reason") or "",
+        }
         if rep.get("status") == "installed":
+            ilog.info("установлен CLI-пакет навыка (uv tool)", extra={"context": _ctx})
             installed_cli = set(cmd_names)
             # Убрать устаревший skillery-shim прошлого (битого) install — он бы
             # затенял рабочую uv-tool-команду в PATH.
             for name in cmd_names:
                 _remove_stale_shim(name)
+        else:
+            ilog.warning("CLI-пакет навыка НЕ установлен", extra={"context": _ctx})
 
     kit_manifest = _manifest_without_cli(manifest, installed_cli)
     try:
@@ -2326,11 +2346,21 @@ def _apply_tooling(result, manifest: dict | None, *, agent_target, project) -> N
             result, agent_target=agent_target, project=project, manifest=kit_manifest
         )
     except Exception as exc:  # noqa: BLE001 — артефакты не валят install навыка
+        ilog.warning("сбой доустановки CLI/MCP/зависимостей", extra={
+            "context": {"step": "tooling_artifacts", "error": str(exc)}})
         emit_message(
             f"Не удалось доустановить CLI/MCP/зависимости навыка: {exc}",
             level="warn",
         )
         return
+    # Аудит MCP/runtime-deps (кол-во зарегистрированных/поставленных/провалов).
+    _deps = report.get("deps") or {}
+    ilog.info("tooling-артефакты применены", extra={"context": {
+        "step": "tooling_artifacts",
+        "cli": [c.get("command_name") for c in report.get("cli") or []],
+        "mcp": [mm.get("server_name") for mm in report.get("mcp") or []],
+        "deps_failed": [d.get("spec") for d in _deps.get("failed") or []],
+    }})
     _report_tooling(report)
 
 
@@ -2721,6 +2751,10 @@ async def _install_chain(
         base_url=cfg.base_url, access_token=access,
         on_token_refresh=_make_refresh_callback(cfg),
     )
+    from skillery_cli.core.logging_setup import install_logger
+
+    _log_file = "daemon.log" if headless else "cli.log"
+    ilog = install_logger(_log_file)
     try:
         bundle = await client.install_bundle(slug, channel=channel)
         installer = SkillInstaller(agent_target, cfg.effective_store_dir())
@@ -2763,6 +2797,13 @@ async def _install_chain(
                 entry["skipped"] = True
                 entry["skip_reason"] = result.skip_reason
             installed_chain.append(entry)
+            # Аудит материализации (SK-5): что и как легло в стор.
+            ilog.info("навык материализован", extra={"context": {
+                "step": "materialize", "slug": dep_slug, "version": dep_version,
+                "scope": result.scope, "content": result.content,
+                "skipped": result.skipped,
+                "skip_reason": result.skip_reason if result.skipped else None,
+            }})
             if not result.skipped:
                 # tooling-навык → CLI в PATH-стор + MCP в конфиг агента +
                 # runtime-deps. #889: манифест бандла ДОПОЛНЯЕМ декларацией из
@@ -2774,6 +2815,7 @@ async def _install_chain(
                 _apply_tooling(
                     result, _tooling_manifest,
                     agent_target=agent_target, project=project_path,
+                    log_file=_log_file,
                 )
                 _emit_onboarding(
                     _tooling_manifest,
