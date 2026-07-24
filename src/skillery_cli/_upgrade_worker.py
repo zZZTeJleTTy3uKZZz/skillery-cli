@@ -44,6 +44,41 @@ def lock_path() -> Path:
     return Path.home() / ".skillery" / LOCK_FILENAME
 
 
+def result_path() -> Path:
+    """Итог апгрейда для CLI. Общий путь с ``_consume_upgrade_result`` в CLI."""
+    return Path.home() / ".skillery" / "_upgrade_result.json"
+
+
+def write_result(cfg: dict, ok: bool, error: str = "", *, base: Path | None = None) -> None:
+    """Записать итог фонового апгрейда, чтобы CLI показал его при следующем запуске.
+
+    ``upgrade`` на Windows/в фоне запускает worker отдельным процессом и сразу
+    выходит («обновление запущено»), поэтому пользователь не узнавал, чем оно
+    кончилось — успех и провал выглядели одинаково. Кладём результат в
+    ~/.skillery/_upgrade_result.json; CLI покажет его один раз и удалит.
+
+    ``base`` — для тестов (иначе путь считает :func:`result_path`). Best-effort:
+    сбой записи не должен ронять и без того хрупкий финал апгрейда.
+    """
+    try:
+        path = (base / "_upgrade_result.json") if base is not None else result_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "ok": bool(ok),
+                    "from": cfg.get("from_version", ""),
+                    "to": cfg.get("to_version", ""),
+                    "error": error or "",
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
 def _log(msg: str) -> None:
     """Дневник апгрейда: worker фоновый и невидимый, без лога он — чёрный ящик.
 
@@ -271,6 +306,9 @@ def main(argv: list[str]) -> int:
     _log(f"stop_daemons killed={killed}")
     ok = run_upgrade([list(c) for c in cfg.get("commands", [])])
     _log(f"run_upgrade → {ok}")
+    # Итог — для CLI: показать при следующем запуске, чтобы «запущено → тишина»
+    # сменилось явным «✓ обновлён» / «✗ не удалось».
+    write_result(cfg, ok, "" if ok else "команды обновления завершились с ошибкой")
     # Демон возвращаем в ЛЮБОМ случае: даже если обновиться не вышло, оставлять
     # пользователя без демона нельзя — очередь заданий перестанет применяться.
     start_daemon(cfg.get("daemon_binary", ""))

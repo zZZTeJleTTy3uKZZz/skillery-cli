@@ -489,3 +489,67 @@ def test_invoke_app_passes_systemexit_through(monkeypatch: pytest.MonkeyPatch) -
         main_mod._invoke_app(retry=True)
     assert e.value.code == 2
     assert healed["n"] == 0  # доктор НЕ звался
+
+
+# ---------------- A6: итог фонового апгрейда (upgrade result sidecar) ----------------
+def test_format_upgrade_result_success() -> None:
+    msg = main_mod._format_upgrade_result({"ok": True, "from": "0.5.59", "to": "0.5.60"})
+    assert msg is not None and "0.5.59" in msg and "0.5.60" in msg and "✓" in msg
+
+
+def test_format_upgrade_result_failure_has_manual_hint() -> None:
+    msg = main_mod._format_upgrade_result(
+        {"ok": False, "from": "0.5.59", "to": "0.5.60", "error": "os error 5"}
+    )
+    assert msg is not None and "✗" in msg and "os error 5" in msg and "upgrade" in msg
+
+
+def test_consume_upgrade_result_shows_and_deletes(tmp_path: Path) -> None:
+    import json
+
+    (tmp_path / "_upgrade_result.json").write_text(
+        json.dumps({"ok": True, "from": "0.5.59", "to": "0.5.60"}), encoding="utf-8"
+    )
+    msg = main_mod._consume_upgrade_result(base=tmp_path)
+    assert msg is not None and "0.5.60" in msg
+    # one-shot: файл удалён, повтор ничего не показывает
+    assert not (tmp_path / "_upgrade_result.json").exists()
+    assert main_mod._consume_upgrade_result(base=tmp_path) is None
+
+
+def test_consume_upgrade_result_absent_is_noop(tmp_path: Path) -> None:
+    assert main_mod._consume_upgrade_result(base=tmp_path) is None
+
+
+def test_consume_upgrade_result_silent_in_json_mode(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import json
+
+    from skillery_cli import output as _output
+
+    (tmp_path / "_upgrade_result.json").write_text(
+        json.dumps({"ok": True, "from": "0.5.59", "to": "0.5.60"}), encoding="utf-8"
+    )
+    monkeypatch.setattr(_output, "_mode", "json", raising=False)
+    # В JSON-режиме молчим и НЕ трогаем файл (покажем в текстовом запуске).
+    assert main_mod._consume_upgrade_result(base=tmp_path) is None
+    assert (tmp_path / "_upgrade_result.json").exists()
+
+
+def test_version_fallback_synced_with_pyproject() -> None:
+    """Fallback __version__ не разъезжается с pyproject.
+
+    Регресс на реальный баг: __init__ застрял на 0.5.58, а pyproject ушёл на
+    0.5.60 — CLI сообщал о себе старую версию, апдейт-чек вечно видел «доступно
+    обновление», после апгрейда версия не менялась → бесконечный upgrade-баннер.
+    Теперь правда о версии — метаданные дистрибутива; в dev (пакет не установлен
+    как дистрибутив) действует fallback, и он ОБЯЗАН совпадать с pyproject.
+    """
+    import tomllib
+
+    import skillery_cli
+
+    root = Path(skillery_cli.__file__).resolve().parents[2]
+    data = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    assert skillery_cli.__version__ == data["project"]["version"]

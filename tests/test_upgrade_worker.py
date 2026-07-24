@@ -89,6 +89,7 @@ class TestBringsDaemonBack:
         monkeypatch.setattr(w, "stop_daemons", lambda *a, **k: [])
         monkeypatch.setattr(w, "run_upgrade", lambda cmds: True)
         monkeypatch.setattr(w, "start_daemon", lambda b: started.append(b) or True)
+        monkeypatch.setattr(w, "write_result", lambda *a, **k: None)  # не писать реальный sidecar
 
         cfg = tmp_path / "c.json"
         cfg.write_text('{"delay":0,"commands":[],"daemon_binary":"/x/skillery"}',
@@ -105,6 +106,7 @@ class TestBringsDaemonBack:
         monkeypatch.setattr(w, "stop_daemons", lambda *a, **k: [])
         monkeypatch.setattr(w, "run_upgrade", lambda cmds: False)
         monkeypatch.setattr(w, "start_daemon", lambda b: started.append(b) or True)
+        monkeypatch.setattr(w, "write_result", lambda *a, **k: None)  # не писать реальный sidecar
 
         cfg = tmp_path / "c.json"
         cfg.write_text('{"delay":0,"commands":[],"daemon_binary":"/x/skillery"}',
@@ -112,6 +114,51 @@ class TestBringsDaemonBack:
 
         assert w.main(["worker", str(cfg)]) == 1  # апгрейд не удался…
         assert started == ["/x/skillery"]         # …но демон вернулся
+
+
+class TestWritesResult:
+    """Worker кладёт итог апгрейда — чтобы «запущено → тишина» стало «✓/✗»."""
+
+    def test_write_result_success_shape(self, tmp_path) -> None:
+        import json
+
+        w.write_result(
+            {"from_version": "0.5.59", "to_version": "0.5.60"}, True, base=tmp_path
+        )
+        data = json.loads((tmp_path / "_upgrade_result.json").read_text("utf-8"))
+        assert data == {"ok": True, "from": "0.5.59", "to": "0.5.60", "error": ""}
+
+    def test_write_result_failure_carries_error(self, tmp_path) -> None:
+        import json
+
+        w.write_result(
+            {"from_version": "0.5.59", "to_version": "0.5.60"},
+            False,
+            "boom",
+            base=tmp_path,
+        )
+        data = json.loads((tmp_path / "_upgrade_result.json").read_text("utf-8"))
+        assert data["ok"] is False and data["error"] == "boom"
+
+    def test_main_records_result_after_upgrade(self, monkeypatch, tmp_path) -> None:
+        """main() обязан записать итог (ok=True) после успешного апгрейда."""
+        recorded: list = []
+        monkeypatch.setattr(w, "acquire_lock", lambda: True)
+        monkeypatch.setattr(w.time, "sleep", lambda s: None)
+        monkeypatch.setattr(w, "stop_daemons", lambda *a, **k: [])
+        monkeypatch.setattr(w, "run_upgrade", lambda cmds: True)
+        monkeypatch.setattr(w, "start_daemon", lambda b: True)
+        monkeypatch.setattr(
+            w, "write_result", lambda cfg, ok, *a, **k: recorded.append(ok)
+        )
+
+        cfg = tmp_path / "c.json"
+        cfg.write_text(
+            '{"delay":0,"commands":[],"from_version":"0.5.59","to_version":"0.5.60"}',
+            encoding="utf-8",
+        )
+        assert w.main(["worker", str(cfg)]) == 0
+        assert recorded == [True]
 
     def test_does_nothing_when_upgrade_already_running(self, monkeypatch, tmp_path) -> None:
         touched: list = []

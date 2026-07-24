@@ -555,6 +555,7 @@ def _spawn_background_upgrade(
     import shutil
     import subprocess
 
+    from skillery_cli import __version__ as _current_version
     from skillery_cli import _upgrade_worker as worker_mod
 
     # Два одновременных апгрейда перезаписывают одни и те же файлы и оставляют
@@ -586,6 +587,9 @@ def _spawn_background_upgrade(
                     # Демон поднимаем УЖЕ НОВЫМ бинарём сразу после апгрейда,
                     # не дожидаясь следующей команды пользователя.
                     "daemon_binary": shutil.which(_branding.APP_NAME) or "",
+                    # Для итога-sidecar (A6): CLI покажет «from → to» при след. запуске.
+                    "from_version": _current_version,
+                    "to_version": version or "",
                 },
                 ensure_ascii=False,
             ),
@@ -671,6 +675,59 @@ def _upgrade_commands(version: str | None = None) -> list[list[str]]:
     return [primary] if fallback == primary else [primary, fallback]
 
 
+def _format_upgrade_result(data: dict) -> str | None:
+    """Собрать человекочитаемый итог фонового апгрейда из sidecar-данных.
+
+    Возвращает ``None``, если данные пустые/битые (нечего показывать).
+    """
+    if not isinstance(data, dict):
+        return None
+    frm = data.get("from") or "?"
+    to = data.get("to") or "?"
+    if data.get("ok"):
+        return f"✓ {_branding.DIST_NAME} обновлён {frm} → {to}"
+    detail = (data.get("error") or "").strip()
+    tail = f" ({detail})" if detail else ""
+    return (
+        f"✗ Обновление {_branding.DIST_NAME} {frm} → {to} не удалось{tail}. "
+        f"Обновите вручную: {_branding.APP_NAME} upgrade"
+    )
+
+
+def _consume_upgrade_result(base: Path | None = None) -> str | None:
+    """Показать и удалить (one-shot) итог фонового апгрейда CLI.
+
+    ``upgrade`` запускает обновление отдельным процессом и сразу выходит
+    («запущено») — раньше пользователь не узнавал, чем оно кончилось. Worker
+    пишет итог в ~/.skillery/_upgrade_result.json; здесь показываем его один раз
+    (в stderr, не в JSON-режиме) и удаляем, чтобы не повторять. ``base`` — для
+    тестов. Возвращает показанное сообщение (или ``None``).
+    """
+    import json
+
+    from skillery_cli import output as _output
+
+    if getattr(_output, "_mode", "text") == "json":
+        return None
+    root = base if base is not None else Path.home() / _branding.HOME_DIR_NAME
+    path = root / "_upgrade_result.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    # Удаляем сразу: показать ровно один раз, даже если рендер ниже упадёт.
+    try:
+        path.unlink()
+    except Exception:
+        pass
+    msg = _format_upgrade_result(data)
+    if msg:
+        err = Console(stderr=True)
+        color = "green" if data.get("ok") else "yellow"
+        err.print(f"[{color}]{msg}[/]")
+    return msg
+
+
 def _maybe_notify_cli_update(cfg: ClientConfig) -> None:
     """Самообновление CLI (если включено) ИЛИ уведомление о новой версии.
 
@@ -683,6 +740,8 @@ def _maybe_notify_cli_update(cfg: ClientConfig) -> None:
 
     if getattr(_output, "_mode", "text") == "json":
         return
+    # Итог прошлого фонового апгрейда (A6) — показать до проверки новых версий.
+    _consume_upgrade_result()
     try:
         latest, fresh = _check_cli_update_detailed(cfg)
     except Exception:
