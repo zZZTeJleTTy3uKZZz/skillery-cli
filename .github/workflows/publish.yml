@@ -1,0 +1,87 @@
+# Публикация skillery-cli: тег vX.Y.Z → сборка → PyPI (trusted publishing, OIDC) →
+# подписанный вебхук в Skillery (авто-фан-аут cli_upgrade на все устройства, #1102).
+#
+# Секретов PyPI не храним: OIDC-обмен даёт короткоживущий токен (Trusted Publisher).
+# Вебхук подписывается HMAC-ключом, выданным хабом (Admin → POST /admin/webhook-keys),
+# положенным в GitHub Secrets: SKILLERY_WEBHOOK_KEY_ID, SKILLERY_WEBHOOK_SECRET.
+#
+# Настройка (разово, действия владельца — секреты НЕ через агента):
+#  1) pypi.org → проект skillery-cli → Publishing → Add trusted publisher:
+#       Owner: zZZTeJleTTy3uKZZz · Repository: skillery-cli
+#       Workflow: publish.yml · Environment: (пусто)
+#  2) Хаб-админ: POST /admin/webhook-keys {"name":"github-ci","scopes":["cli.publish"]}
+#       → взять из ответа key_id и secret (секрет виден ОДИН раз) →
+#       GitHub repo → Settings → Secrets → Actions:
+#         SKILLERY_WEBHOOK_KEY_ID = <key_id>
+#         SKILLERY_WEBHOOK_SECRET = <secret>
+#
+# Релиз после настройки: bump версии (pyproject + __init__) → commit → push →
+#   git tag -a vX.Y.Z -m "release vX.Y.Z" && git push origin vX.Y.Z  → дальше CI сам.
+
+name: publish
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write   # OIDC для PyPI Trusted Publishing
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Sanity — тег совпадает с версией пакета
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG=$(uv version --short 2>/dev/null || python -c "import tomllib,sys;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          echo "tag=$TAG pkg=$PKG"
+          test "$TAG" = "$PKG" || { echo "::error::тег $TAG != версии пакета $PKG"; exit 1; }
+
+      - name: Build
+        run: uv build
+
+      - name: Publish to PyPI (Trusted Publishing)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        # OIDC: без токена; PyPI доверяет по связке owner/repo/workflow.
+
+      - name: Notify Skillery hub (signed webhook → авто-обновление устройств)
+        if: success()
+        env:
+          KEY_ID: ${{ secrets.SKILLERY_WEBHOOK_KEY_ID }}
+          SECRET: ${{ secrets.SKILLERY_WEBHOOK_SECRET }}
+          HUB_URL: https://api.skillery.ru/webhooks/cli-published
+        run: |
+          if [ -z "$KEY_ID" ] || [ -z "$SECRET" ]; then
+            echo "::warning::SKILLERY_WEBHOOK_* не заданы — пропускаю вебхук (публикация на PyPI прошла)"
+            exit 0
+          fi
+          python - <<'PY'
+          import hashlib, hmac, json, os, time, urllib.request
+          version = os.environ["GITHUB_REF_NAME"].lstrip("v")
+          # Тело — компактный JSON без пробелов; подпись считается ровно над этими байтами.
+          body = json.dumps({"dist": "skillery-cli", "version": version}, separators=(",", ":"))
+          ts = str(int(time.time()))
+          secret = os.environ["SECRET"].encode()
+          sig = hmac.new(secret, f"{ts}.{body}".encode(), hashlib.sha256).hexdigest()
+          req = urllib.request.Request(
+              os.environ["HUB_URL"], data=body.encode(), method="POST",
+              headers={
+                  "Content-Type": "application/json",
+                  "X-Skillery-Key-Id": os.environ["KEY_ID"],
+                  "X-Skillery-Timestamp": ts,
+                  "X-Skillery-Signature": f"sha256={sig}",
+              },
+          )
+          with urllib.request.urlopen(req, timeout=20) as r:
+              print("hub:", r.status, r.read().decode()[:200])
+          PY
