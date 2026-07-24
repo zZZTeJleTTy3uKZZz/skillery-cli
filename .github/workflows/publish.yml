@@ -31,7 +31,9 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    environment: pypi
+    # environment намеренно НЕ задан: на PyPI trusted publisher настроен с
+    # Environment name = (любая). Меньше подвижных частей — job не зависит от
+    # существования GitHub Environment.
     permissions:
       id-token: write   # OIDC для PyPI Trusted Publishing
     steps:
