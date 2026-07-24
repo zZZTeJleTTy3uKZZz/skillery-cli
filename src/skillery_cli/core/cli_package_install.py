@@ -29,6 +29,21 @@ except ModuleNotFoundError:  # pragma: no cover
 Runner = Callable[[list[str]], int]
 
 
+def _debug(message: str, **ctx: object) -> None:
+    """DEBUG-трейс шага установки (uv tool install rc). Никогда не валит install.
+
+    Level-gated: на стандартном ERROR ничего не пишется, на debug/verbose виден
+    каждый rc. Лениво импортируем логгер, чтобы модуль оставался автономным
+    (subprocess-раннер инъектируется) на пути без логирования.
+    """
+    try:
+        from skillery_cli.core.logging_setup import get_logger
+
+        get_logger("install").debug(message, extra={"context": ctx})
+    except Exception:  # noqa: BLE001 — логи не должны валить установку пакета
+        pass
+
+
 def read_pyproject_cli(pkg_root: Path) -> dict | None:
     """Прочитать ``{name, scripts}`` из ``pyproject.toml`` корня пакета.
 
@@ -102,6 +117,7 @@ def install_cli_package(
     run = runner or _default_runner
     # Ровно как install/install.py навыка: из корня распакованного снапшота.
     rc = run([uv, "tool", "install", "--force", str(pkg_root)])
+    _debug("uv tool install", step="cli_package_uv", package=info["name"], rc=rc)
     if rc != 0:
         report["status"] = "error"
         report["reason"] = f"uv tool install вернул код {rc}"
@@ -115,6 +131,8 @@ def install_cli_package(
         # Проверяем запуск ТОЛЬКО если бинарь уже на PATH — иначе PATH просто не
         # обновился в текущем процессе (не провал установки).
         ok = bool(on_path) and (run([exe, "--version"]) == 0 or run([exe, "--help"]) == 0)
+        _debug("cli command self-check", step="cli_package_check",
+               command=name, on_path=on_path, ok=ok)
         report["commands"].append({"name": name, "on_path": on_path, "ok": ok})
     return report
 

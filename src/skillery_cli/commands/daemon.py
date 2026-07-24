@@ -149,6 +149,7 @@ def _build_runner(
                 last_heavy["at"] = now
                 await _reconcile_hub_installs(
                     cfg, access, channel="published", agent_target=target,
+                    initiator="web-queue",
                 )
                 await _auto_update_hub_installs(
                     cfg, access, agent_target=target, channel="published",

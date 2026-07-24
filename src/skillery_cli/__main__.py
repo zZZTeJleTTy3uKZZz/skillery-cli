@@ -2292,7 +2292,8 @@ def _report_cli_package(rep: dict, expected: list[str]) -> None:
 
 
 def _apply_tooling(
-    result, manifest: dict | None, *, agent_target, project, log_file: str = "cli.log"
+    result, manifest: dict | None, *, agent_target, project,
+    log_file: str = "cli.log", initiator: str = "cli",
 ) -> None:
     """поставить CLI/MCP/runtime-deps навыка (если он tooling). Graceful.
 
@@ -2326,7 +2327,7 @@ def _apply_tooling(
         # Аудит: результат uv tool install (rc/package/self-check). WARNING на провал
         # — ровно то, чего не хватало для диагностики тихого пропуска (SK-2).
         _ctx = {
-            "step": "cli_package", "commands": cmd_names,
+            "step": "cli_package", "commands": cmd_names, "initiator": initiator,
             "status": rep.get("status"), "package": rep.get("package"),
             "self_check": rep.get("commands"), "reason": rep.get("reason") or "",
         }
@@ -2347,7 +2348,8 @@ def _apply_tooling(
         )
     except Exception as exc:  # noqa: BLE001 — артефакты не валят install навыка
         ilog.warning("сбой доустановки CLI/MCP/зависимостей", extra={
-            "context": {"step": "tooling_artifacts", "error": str(exc)}})
+            "context": {"step": "tooling_artifacts", "initiator": initiator,
+                        "error": str(exc)}})
         emit_message(
             f"Не удалось доустановить CLI/MCP/зависимости навыка: {exc}",
             level="warn",
@@ -2356,7 +2358,7 @@ def _apply_tooling(
     # Аудит MCP/runtime-deps (кол-во зарегистрированных/поставленных/провалов).
     _deps = report.get("deps") or {}
     ilog.info("tooling-артефакты применены", extra={"context": {
-        "step": "tooling_artifacts",
+        "step": "tooling_artifacts", "initiator": initiator,
         "cli": [c.get("command_name") for c in report.get("cli") or []],
         "mcp": [mm.get("server_name") for mm in report.get("mcp") or []],
         "deps_failed": [d.get("spec") for d in _deps.get("failed") or []],
@@ -2728,11 +2730,18 @@ async def _install_chain(
     agent_target,  # IAgentTarget
     source: dict | None = None,
     headless: bool = False,
+    initiator: str = "cli",
 ) -> list[dict]:
     """Качает bundle (+deps), материализует в стор, линкует в scope.
 
     ``headless=True`` (демон) → onboarding не печатается (stdout в DEVNULL), а
     пишется в журнал pending-onboarding для последующего `skillery status`.
+
+    ``initiator`` — КТО инициировал установку (для аудита в логах): ``cli``
+    (ручной ``skillery install`` foreground) | ``web-queue`` (демон подобрал
+    задание из веб-очереди устройства) | ``daemon-auto`` (фоновое авто-обновление
+    до latest). Пишется в контекст install-аудита (материализация/провал), чтобы
+    в логе было видно, чьё это действие.
 
     source (стратегия источника):
     - None / {"kind":"hub"} → backend bundle + git (как раньше; нужен access);
@@ -2797,10 +2806,12 @@ async def _install_chain(
                 entry["skipped"] = True
                 entry["skip_reason"] = result.skip_reason
             installed_chain.append(entry)
-            # Аудит материализации (SK-5): что и как легло в стор.
+            # Аудит материализации (SK-5): что и как легло в стор. ``initiator``
+            # (C2) — чьё это действие: cli / web-queue / daemon-auto.
             ilog.info("навык материализован", extra={"context": {
                 "step": "materialize", "slug": dep_slug, "version": dep_version,
                 "scope": result.scope, "content": result.content,
+                "initiator": initiator,
                 "skipped": result.skipped,
                 "skip_reason": result.skip_reason if result.skipped else None,
             }})
@@ -2815,7 +2826,7 @@ async def _install_chain(
                 _apply_tooling(
                     result, _tooling_manifest,
                     agent_target=agent_target, project=project_path,
-                    log_file=_log_file,
+                    log_file=_log_file, initiator=initiator,
                 )
                 _emit_onboarding(
                     _tooling_manifest,
@@ -2836,6 +2847,15 @@ async def _install_chain(
                         scope="project", source="hub", agent=agent_target.name,
                     )
         return installed_chain
+    except Exception as exc:  # noqa: BLE001 — провал ОБЯЗАН оставить причину в логе
+        # C2: причина, почему навык НЕ установился, — в ЛОКАЛЬНЫЙ лог (cli.log при
+        # foreground, daemon.log при headless), а не только в исключение/stderr.
+        with suppress(Exception):
+            ilog.error("установка навыка не удалась", extra={"context": {
+                "step": "install", "slug": slug, "channel": channel,
+                "scope": scope, "initiator": initiator, "error": str(exc),
+            }})
+        raise
     finally:
         await client.close()
 
@@ -3289,6 +3309,7 @@ async def _reconcile_hub_installs(
     channel: str,
     agent_target,  # IAgentTarget
     force: bool = False,
+    initiator: str = "cli",
 ) -> dict[str, list]:
     """«Нажал Установить в вебе → CLI скачал»: подтянуть /me/installs в стор.
 
@@ -3336,10 +3357,20 @@ async def _reconcile_hub_installs(
             await _install_chain(
                 cfg, access, slug=str(ref), channel=channel, scope="global",
                 project_path=None, force=force, agent_target=agent_target,
-                headless=True,
+                headless=True, initiator=initiator,
             )
             report[bucket].append(ref)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 — причина провала ОБЯЗАНА быть видна
+            # Раньше провал молча уходил в report["failed"] без текста — в
+            # daemon.log не оставалось следа, почему навык из веб-набора не встал.
+            with suppress(Exception):
+                from skillery_cli.core.logging_setup import install_logger
+
+                install_logger("daemon.log").error(
+                    "докачка навыка из /me/installs не удалась", extra={
+                        "context": {"step": "install", "skill": str(ref),
+                                    "bucket": bucket, "initiator": initiator,
+                                    "error": str(exc)}})
             report["failed"].append(ref)
     return report
 
@@ -3393,6 +3424,13 @@ async def _reconcile_device_queue(
     Успех рапортуем версией, которая РЕАЛЬНО легла в стор (перечитываем мету),
     а не той, что просили — иначе снова получим намерение вместо факта.
     """
+    from skillery_cli.core.logging_setup import access, get_logger, install_logger
+
+    # Трейс опроса очереди — level-gated (ACCESS/DEBUG видны на debug/verbose);
+    # провал установки — install_logger("daemon.log") пишет ВСЕГДА (как SK-5),
+    # чтобы причина невыполненной веб-задачи была видна и на стандартном ERROR.
+    _rlog = get_logger("reconcile")
+    _ilog = install_logger("daemon.log")
     store_root = cfg.effective_store_dir()
     report: dict[str, list] = {"applied": [], "failed": [], "skipped": []}
     # Long-poll держит коннект до <wait>с — HTTP-таймаут клиента ОБЯЗАН быть
@@ -3413,6 +3451,16 @@ async def _reconcile_device_queue(
             # Старый backend / нет устройства в UA — молча уступаем legacy-пути.
             return report
 
+        # ACCESS: факт опроса очереди + её размер (heartbeat устройства). На
+        # стандартном ERROR не пишется — только на debug/verbose (или ACCESS).
+        with suppress(Exception):
+            access(_rlog, "опрошена очередь устройства", extra={"context": {
+                "queue": len(queue), "wait": wait, "initiator": "web-queue",
+            }})
+        if not queue:
+            with suppress(Exception):
+                _rlog.debug("очередь устройства пуста")
+
         attempts = _load_install_attempts()
         live_keys: set[str] = set()
         for item in queue:
@@ -3431,6 +3479,10 @@ async def _reconcile_device_queue(
             # каждый цикл повторял заведомо провальный git clone приватного репо,
             # поднимая видимое окно git-bash. Отказ уже отрапортован серверу.
             if tried >= _MAX_INSTALL_ATTEMPTS:
+                with suppress(Exception):
+                    _rlog.debug("задание пропущено (лимит попыток)", extra={
+                        "context": {"skill": str(ref), "desired": desired,
+                                    "attempts": tried}})
                 report["skipped"].append(ref)
                 continue
             # #13: removal-задание — СНЯТЬ навык с устройства, а не ставить.
@@ -3468,16 +3520,25 @@ async def _reconcile_device_queue(
                 except Exception as exc:  # noqa: BLE001 — провал ОБЯЗАН быть виден
                     attempts[key] = tried + 1
                     with suppress(Exception):
+                        _ilog.error("снятие навыка (веб-очередь) не удалось", extra={
+                            "context": {"step": "remove", "skill": str(ref),
+                                        "initiator": "web-queue", "error": str(exc)}})
+                    with suppress(Exception):
                         await client.report_device_apply(
                             slug=str(ref), ok=False, error=str(exc)
                         )
                     report["failed"].append(ref)
                 continue
             try:
+                with suppress(Exception):
+                    _rlog.debug("подобрано задание из веб-очереди", extra={
+                        "context": {"skill": str(ref), "desired": desired,
+                                    "initiator": "web-queue"}})
                 await _install_chain(
                     cfg, access, slug=str(ref), channel=channel,
                     scope="global", project_path=None, force=False,
                     agent_target=agent_target, headless=True,
+                    initiator="web-queue",
                 )
                 applied = (read_meta(store_root / ref) or {}).get("version")
                 await client.report_device_apply(
@@ -3502,6 +3563,15 @@ async def _reconcile_device_queue(
                         f"установка не удалась после {_MAX_INSTALL_ATTEMPTS} "
                         f"попыток — прекращаю повторы. Последняя ошибка: {msg}"
                     )
+                # C1/C2: причина провала — в daemon.log (ERROR), не ТОЛЬКО на бэк.
+                # Раньше except слал лишь report_device_apply — в локальном логе
+                # демона не оставалось следа, почему веб-задача не выполнилась.
+                with suppress(Exception):
+                    _ilog.error("установка из веб-очереди не удалась", extra={
+                        "context": {"step": "install", "skill": str(ref),
+                                    "desired": desired, "initiator": "web-queue",
+                                    "attempts": attempts[key], "gave_up": gave_up,
+                                    "error": str(exc)}})
                 try:
                     await client.report_device_apply(
                         slug=str(ref), ok=False, error=msg
@@ -3593,25 +3663,47 @@ async def _auto_update_hub_installs(
     finally:
         await client.close()
 
+    from skillery_cli.core.logging_setup import get_logger, install_logger
+
+    _rlog = get_logger("reconcile")
     for ref, local_version, bundle in candidates:
         remote_version = bundle.get("version") or ""
         # bundle без repo_url = stub-источник — обновлять нечем (тот же инвариант,
         # что в _maybe_auto_update: такой «апдейт» затирал бы контент stub'ом).
         if not bundle.get("repo_url"):
+            with suppress(Exception):
+                _rlog.debug("auto-update: пропуск (stub без repo_url)", extra={
+                    "context": {"skill": str(ref), "initiator": "daemon-auto"}})
             report["skipped"].append(ref)
             continue
         # Не даунгрейд: ставим ТОЛЬКО если latest строго новее локального.
         if not _is_newer(remote_version, local_version):
+            with suppress(Exception):
+                _rlog.debug("auto-update: пропуск (не новее локального)", extra={
+                    "context": {"skill": str(ref), "local": local_version,
+                                "remote": remote_version, "initiator": "daemon-auto"}})
             report["skipped"].append(ref)
             continue
         try:
+            with suppress(Exception):
+                _rlog.debug("auto-update: поднимаю до latest", extra={
+                    "context": {"skill": str(ref), "local": local_version,
+                                "remote": remote_version, "initiator": "daemon-auto"}})
             await _install_chain(
                 cfg, access, slug=str(ref), channel=channel, scope="global",
                 project_path=None, force=False, agent_target=agent_target,
+                initiator="daemon-auto",
             )
             report["updated"].append(ref)
-        except Exception:
-            # Падение установки одного навыка (git/ФС) не трогает остальные.
+        except Exception as exc:  # noqa: BLE001 — один навык не валит фон
+            # Падение установки одного навыка (git/ФС) не трогает остальные, но
+            # причина ОБЯЗАНА быть видна в daemon.log (не молчаливый append).
+            with suppress(Exception):
+                install_logger("daemon.log").error(
+                    "auto-update навыка не удался", extra={
+                        "context": {"step": "install", "skill": str(ref),
+                                    "remote": remote_version,
+                                    "initiator": "daemon-auto", "error": str(exc)}})
             report["failed"].append(ref)
 
     # #912: автообновление обязано РАПОРТОВАТЬ факт. Иначе веб продолжал бы
@@ -4967,6 +5059,16 @@ def build_app() -> typer.Typer:
             callback=_version_callback,
             is_eager=True,
         ),
+        debug: bool = typer.Option(
+            False, "--debug",
+            help="Полный DEBUG-трейс в логи на время процесса (стандарт — только "
+                 "ошибки). Эквивалент env SKILLERY_LOG_LEVEL=debug.",
+        ),
+        verbose: bool = typer.Option(
+            False, "--verbose", "-v",
+            help="Максимальный TRACE-трейс в логи на время процесса "
+                 "(подробнее --debug). Эквивалент env SKILLERY_LOG_LEVEL=trace.",
+        ),
     ) -> None:
         """Корневой callback (профиль + json считаны до построения app).
 
@@ -4974,7 +5076,14 @@ def build_app() -> typer.Typer:
         контракт вывода (дефолт text, режим уже инициализирован пре-проходом).
         """
         _ = profile, json_output, version
-        # Логи CLI в ~/.skillery/logs/ (уровень из конфига, по умолчанию error).
+        # Рантайм-переключатель уровня логов: --debug/--verbose кладут env на
+        # ВРЕМЯ процесса (configure_logging читает env поверх cfg). Стандартный
+        # уровень (error) в конфиге не меняется — это разовый форсаж трейса.
+        if verbose:
+            os.environ["SKILLERY_LOG_LEVEL"] = "trace"
+        elif debug:
+            os.environ["SKILLERY_LOG_LEVEL"] = "debug"
+        # Логи CLI в ~/.skillery/logs/ (уровень из конфига/env, по умолчанию error).
         with suppress(Exception):
             from skillery_cli.core.logging_setup import configure_logging
 

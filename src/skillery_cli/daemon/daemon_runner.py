@@ -23,6 +23,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from skillery_cli.core.logging_setup import get_logger
+
 ReconcileCallback = Callable[[], Awaitable[None]]
 """Опциональный best-effort хук reconcile-инсталлов («нажал в вебе → демон
 скачал»). Вызывается ПОСЛЕ send_once и оборачивается в suppress(Exception),
@@ -31,6 +33,11 @@ ReconcileCallback = Callable[[], Awaitable[None]]
 from skillery_cli.daemon.backoff import BackoffPolicy
 from skillery_cli.daemon.event_collector import EventCollector
 from skillery_cli.daemon.event_sender import EventSender
+
+# Логгер демон-цикла. Пишет в тот файл, что настроил процесс (``daemon.log`` в
+# демоне, ``cli.log`` в foreground). На стандартном ERROR молчит про такты
+# (DEBUG отбрасывается), но ошибки цикла/reconcile видны всегда.
+_log = get_logger("daemon")
 
 
 @dataclass
@@ -224,12 +231,31 @@ class DaemonRunner:
             "last_error": result.last_error,
         }
         self._write_state()
+        # Трейс такта на DEBUG: на стандартном ERROR не пишется (лог не пухнет),
+        # на debug/verbose виден каждый sent/accepted/requeued.
+        with suppress(Exception):
+            _log.debug("daemon cycle", extra={"context": {
+                "cycle": self._state.cycles,
+                "sent": result.sent,
+                "accepted": result.accepted,
+                "skipped": result.skipped,
+                "requeued": result.requeued,
+                "last_error": result.last_error,
+            }})
         # Best-effort reconcile ПОСЛЕ event-flush: «нажал Установить в вебе →
-        # демон скачал». Любая ошибка глотается (suppress) — event-цикл и его
-        # backoff-классификация (по send-результату выше) не должны страдать.
+        # демон скачал». Ошибка reconcile НЕ валит event-цикл и его backoff-
+        # классификацию (по send-результату выше), но теперь ОБЯЗАНА оставить
+        # ERROR-след (раньше глоталась suppress'ом бесследно).
         if self._reconcile is not None:
-            with suppress(Exception):
+            try:
                 await self._reconcile()
+            except Exception as exc:  # noqa: BLE001 — reconcile best-effort
+                with suppress(Exception):
+                    _log.error(
+                        "daemon reconcile failed",
+                        exc_info=exc,
+                        extra={"context": {"error": str(exc)}},
+                    )
         return self._state.last_send
 
     async def run_forever(self) -> None:
@@ -247,8 +273,15 @@ class DaemonRunner:
         try:
             while not self._stop.is_set():
                 last: dict[str, Any] = {}
-                with suppress(Exception):
+                try:
                     last = await self.cycle_once()
+                except Exception as exc:  # noqa: BLE001 — такт не валит демон
+                    with suppress(Exception):
+                        _log.error(
+                            "daemon cycle failed",
+                            exc_info=exc,
+                            extra={"context": {"error": str(exc)}},
+                        )
                 # Классификация исхода для backoff: «провал» = что-то слали, но
                 # всё ушло в requeue (network/5xx). Пустой цикл (sent=0) и успех
                 # сбрасывают backoff к базовому интервалу.
@@ -259,6 +292,10 @@ class DaemonRunner:
                 else:
                     self._backoff.record_success()
                 delay = self._backoff.current_delay(base=self._interval)
+                with suppress(Exception):
+                    _log.debug("daemon backoff", extra={"context": {
+                        "sent": sent, "requeued": requeued, "delay": delay,
+                    }})
                 try:
                     await asyncio.wait_for(self._stop.wait(), timeout=delay)
                 except asyncio.TimeoutError:

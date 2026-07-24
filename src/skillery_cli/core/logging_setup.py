@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import logging.handlers
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -20,8 +21,15 @@ from pathlib import Path
 TRACE = 5
 logging.addLevelName(TRACE, "TRACE")
 
-_LEVELS = {"TRACE": TRACE, "DEBUG": logging.DEBUG, "INFO": logging.INFO,
-           "WARNING": logging.WARNING, "ERROR": logging.ERROR}
+# ACCESS — уровень МЕЖДУ DEBUG и INFO для «фактов доступа/опроса» (long-poll
+# очереди устройства, размер очереди): шумнее INFO-событий, но виден раньше
+# полного DEBUG-трейса. На стандартном ERROR не пишется (лог не пухнет).
+ACCESS = 15
+logging.addLevelName(ACCESS, "ACCESS")
+
+_LEVELS = {"TRACE": TRACE, "DEBUG": logging.DEBUG, "ACCESS": ACCESS,
+           "INFO": logging.INFO, "WARNING": logging.WARNING,
+           "ERROR": logging.ERROR}
 
 _ROOT_NAME = "skillery"
 _configured = False
@@ -38,6 +46,35 @@ def log_dir() -> Path:
 def normalize_level(value: str | None) -> str:
     v = (value or "").strip().upper()
     return v if v in _LEVELS else "ERROR"
+
+
+def _env_level_name() -> str:
+    """Имя env-переменной уровня логов (``SKILLERY_LOG_LEVEL``, brand-agnostic)."""
+    from skillery_cli import _branding
+
+    return f"{_branding.ENV_PREFIX}_LOG_LEVEL"
+
+
+def effective_level(level: str | None) -> str:
+    """Итоговый уровень: env-оверрайд ``SKILLERY_LOG_LEVEL`` ПОВЕРХ cfg-значения.
+
+    Рантайм-переключатель уровня (``--debug``/``--verbose`` кладут env на время
+    процесса, systemd/пользователь могут выставить env глобально) переопределяет
+    ``cfg.log_level`` не трогая конфиг. Пусто/битое → падаем на ``level`` (cfg),
+    пусто/битое и там → ERROR (стандартный тихий режим).
+    """
+    env = os.environ.get(_env_level_name())
+    return normalize_level(env if env else level)
+
+
+def access(logger: logging.Logger, message: str, *args, **kwargs) -> None:
+    """Записать ``message`` на уровне :data:`ACCESS` (факт доступа/опроса).
+
+    Хелпер, а не метод: ``logging.Logger`` не знает про кастомный уровень.
+    Гейтится ``isEnabledFor`` — на ERROR-уровне ничего не форматируется.
+    """
+    if logger.isEnabledFor(ACCESS):
+        logger.log(ACCESS, message, *args, **kwargs)
 
 
 class _JsonFormatter(logging.Formatter):
@@ -65,7 +102,8 @@ def configure_logging(level: str | None = None, *, filename: str = "cli.log") ->
     """
     global _configured
     logger = logging.getLogger(_ROOT_NAME)
-    lvl = _LEVELS[normalize_level(level)]
+    # env-оверрайд (SKILLERY_LOG_LEVEL) поверх cfg-уровня — рантайм-переключатель.
+    lvl = _LEVELS[effective_level(level)]
     logger.setLevel(lvl)
     # Не даём всплывать в root (чтобы не сыпать в stderr пользователю).
     logger.propagate = False
