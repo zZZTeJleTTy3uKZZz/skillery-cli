@@ -312,6 +312,11 @@ async def test_daemon_reconcile_runs_both_passes(
 
     monkeypatch.setattr(main_mod, "_reconcile_hub_installs", _fake_reconcile)
     monkeypatch.setattr(main_mod, "_auto_update_hub_installs", _fake_auto_update)
+    # #1102: каденс self-upgrade не должен ходить в PyPI в этом тесте — глушим.
+    async def _no_self_upgrade(cfg, *, force):  # noqa: ANN001
+        return False
+
+    monkeypatch.setattr(main_mod, "_daemon_cli_self_upgrade", _no_self_upgrade)
 
     runner = daemon_mod._build_runner(interval_seconds=60)
     assert runner._reconcile is not None

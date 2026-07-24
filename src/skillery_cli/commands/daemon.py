@@ -74,6 +74,12 @@ _LONGPOLL_LOOP_INTERVAL = 2.0
 # long-poll-цикл, а раз в ~3 мин (это фон, не мгновенная доставка задания).
 _HEAVY_RECONCILE_SEC = 180.0
 
+# #1102: каденс-fallback авто-апгрейда CLI — если push-задача cli_upgrade не
+# прилетела, живой демон сам сверяется с PyPI. При СТАРТЕ — принудительно (раз),
+# далее периодически раз в час (сам PyPI-запрос гейтит суточный cooldown в
+# `_check_cli_update_detailed`, поэтому реальный опрос — максимум раз в сутки).
+_SELF_UPGRADE_CHECK_SEC = 3600.0
+
 
 def _build_runner(
     *, interval_seconds: float, reconcile_installs: bool = True
@@ -121,24 +127,23 @@ def _build_runner(
         # Тяжёлые reconcile (device-sync НАБОРА + auto-update до latest) — реже
         # (_HEAVY_RECONCILE_SEC): они не про мгновенную доставку.
         last_heavy: dict[str, float] = {"at": 0.0}
+        # #1102: каденс self-upgrade CLI — старт (force, один раз) + раз в час.
+        self_upgrade: dict[str, float | bool] = {"at": 0.0, "started": False}
 
         async def _reconcile() -> None:
             access = _current_access()
             if not access:
                 return
             # Lazy-import: избегаем циклической зависимости __main__ ↔ daemon.
-            from skillery_cli.__main__ import (
-                _auto_update_hub_installs,
-                _reconcile_device_queue,
-                _reconcile_hub_installs,
-            )
+            import skillery_cli.__main__ as main_mod
             from skillery_cli.core.agents import get_target
 
             target = get_target(cfg.agent)
             # 0) #905: АДРЕСНАЯ очередь этого устройства — LONG-POLL (висим до
-            #    ~25с). Применяем и РАПОРТУЕМ факт. Висящий коннект держит
+            #    ~25с). Применяем и РАПОРТУЕМ факт (skill-очередь + #1102
+            #    device_tasks: cli_upgrade и пр.). Висящий коннект держит
             #    last_seen свежим (устройство почти всегда «на связи»).
-            await _reconcile_device_queue(
+            await main_mod._reconcile_device_queue(
                 cfg, access, channel="published", agent_target=target,
                 wait=_LONGPOLL_WAIT_SEC,
             )
@@ -147,13 +152,24 @@ def _build_runner(
             now = _time.monotonic()
             if now - last_heavy["at"] >= _HEAVY_RECONCILE_SEC:
                 last_heavy["at"] = now
-                await _reconcile_hub_installs(
+                await main_mod._reconcile_hub_installs(
                     cfg, access, channel="published", agent_target=target,
                     initiator="web-queue",
                 )
-                await _auto_update_hub_installs(
+                await main_mod._auto_update_hub_installs(
                     cfg, access, agent_target=target, channel="published",
                 )
+            # 3) #1102 каденс-fallback авто-апгрейда CLI: при СТАРТЕ демона —
+            #    принудительно (конвергируем на известный latest), далее раз в час
+            #    (сам PyPI-запрос гейтит суточный cooldown). Push через device_tasks
+            #    остаётся основным каналом; это страховка «демон жив, а не прилетело».
+            if not self_upgrade["started"]:
+                self_upgrade["started"] = True
+                self_upgrade["at"] = now
+                await main_mod._daemon_cli_self_upgrade(cfg, force=True)
+            elif now - float(self_upgrade["at"]) >= _SELF_UPGRADE_CHECK_SEC:
+                self_upgrade["at"] = now
+                await main_mod._daemon_cli_self_upgrade(cfg, force=False)
 
         reconcile = _reconcile
         # Ритм ведёт long-poll (25с блок); межцикловый sleep малый, чтобы

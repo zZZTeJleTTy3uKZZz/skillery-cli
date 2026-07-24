@@ -3443,13 +3443,25 @@ async def _reconcile_device_queue(
     )
     try:
         try:
-            queue = await client.fetch_device_queue(
-                auto_update=cfg.auto_update, wait=wait,
-                supports_removal=True,  # #13: этот CLI умеет снимать навыки
-            )
+            # #1102: берём ПОЛНЫЙ ответ очереди (items + device_tasks) одним
+            # запросом. getattr-фолбэк — для старого транспорта/фейков без
+            # `fetch_device_queue_full` (skill-очередь тогда работает как прежде,
+            # device_tasks просто пусты).
+            if hasattr(client, "fetch_device_queue_full"):
+                resp = await client.fetch_device_queue_full(
+                    auto_update=cfg.auto_update, wait=wait,
+                    supports_removal=True,  # #13: этот CLI умеет снимать навыки
+                )
+            else:
+                items = await client.fetch_device_queue(
+                    auto_update=cfg.auto_update, wait=wait, supports_removal=True,
+                )
+                resp = {"items": items, "device_tasks": []}
         except Exception:
             # Старый backend / нет устройства в UA — молча уступаем legacy-пути.
             return report
+        queue = list(resp.get("items") or [])
+        device_tasks = list(resp.get("device_tasks") or [])
 
         # ACCESS: факт опроса очереди + её размер (heartbeat устройства). На
         # стандартном ERROR не пишется — только на debug/verbose (или ACCESS).
@@ -3582,9 +3594,192 @@ async def _reconcile_device_queue(
         # Забываем счётчики для заданий, которых уже нет в очереди (сняты/сменили
         # версию) — файл не растёт бесконечно.
         _save_install_attempts({k: v for k, v in attempts.items() if k in live_keys})
+        # #1102: обобщённые device-задачи (cli_upgrade / skill_update / generic)
+        # из ТОГО ЖЕ ответа очереди — применяем и рапортуем факт.
+        if device_tasks:
+            with suppress(Exception):
+                await _apply_device_tasks(
+                    client, device_tasks, rlog=_rlog, ilog=_ilog
+                )
     finally:
         await client.close()
     return report
+
+
+async def _report_device_task_safe(
+    client, cdid: str, task_id: int, status: str, error: str | None, *, ilog
+) -> None:
+    """Рапорт о device-task; сбой доставки не валит цикл (backend переотдаст)."""
+    try:
+        await client.report_device_task(
+            client_device_id=cdid, task_id=task_id, status=status, error=error
+        )
+    except Exception as exc:  # noqa: BLE001 — сеть упала → задача останется в очереди
+        with suppress(Exception):
+            ilog.error("device-task: рапорт не доставлен", extra={"context": {
+                "task_id": task_id, "status": status, "error": str(exc)}})
+
+
+async def _apply_cli_upgrade_task(
+    client, cdid: str, task: dict, *, rlog, ilog
+) -> None:
+    """#1102: применить device-task ``cli_upgrade`` — запустить self-upgrade до target.
+
+    Рапорт ``applied`` — при успешном СТАРТЕ фонового апгрейда до ``target``
+    (фактический итог покажет upgrade-result sidecar со следующей версии).
+    ``failed`` с причиной — если спавн не удался. Дедуп: если апгрейд уже идёт
+    (`_upgrade_already_running`), НЕ спавним второй и НЕ шлём терминальный статус —
+    backend переотдаст задачу, а мы отрапортуем, когда лок освободится.
+
+    ЗАПРЕТ произвольных пакетов: ставим ровно ``skillery-cli==<target>``
+    (`_spawn_background_upgrade` пинует dist из `_upgrade_commands`). Даунгрейда
+    не делаем: если текущая версия уже >= target — идемпотентно рапортуем applied.
+    """
+    from skillery_cli import __version__ as current
+    from skillery_cli.core.logging_setup import access as _access
+
+    task_id = task.get("id")
+    payload = task.get("payload") or {}
+    target = str(payload.get("target_version") or "").strip()
+
+    if not target:
+        # Некорректный payload — рапортуем failed, иначе задача переотдаётся вечно.
+        with suppress(Exception):
+            ilog.error("cli_upgrade: пустой target_version", extra={"context": {
+                "task_id": task_id, "task_type": "cli_upgrade",
+                "initiator": "web-queue"}})
+        await _report_device_task_safe(
+            client, cdid, task_id, "failed", "target_version отсутствует", ilog=ilog
+        )
+        return
+
+    # Уже на target (или новее) — апгрейда нет, но целевое состояние достигнуто:
+    # идемпотентно закрываем задачу applied (и не даунгрейдим по ошибочному target).
+    if not _is_newer(target, current):
+        with suppress(Exception):
+            _access(rlog, "cli_upgrade: уже на целевой версии", extra={"context": {
+                "task_id": task_id, "task_type": "cli_upgrade", "target": target,
+                "current": current, "status": "applied", "initiator": "web-queue"}})
+        await _report_device_task_safe(
+            client, cdid, task_id, "applied", None, ilog=ilog
+        )
+        return
+
+    # Дедуп: апгрейд уже идёт — два параллельных рвут trampoline. Не спавним и не
+    # рапортуем терминальный статус (backend переотдаст).
+    if _upgrade_already_running():
+        with suppress(Exception):
+            _access(rlog, "cli_upgrade: апгрейд уже идёт — пропуск", extra={"context": {
+                "task_id": task_id, "task_type": "cli_upgrade", "target": target,
+                "initiator": "web-queue"}})
+        return
+
+    if _spawn_background_upgrade(version=target):
+        with suppress(Exception):
+            _access(rlog, "cli_upgrade запущен", extra={"context": {
+                "task_id": task_id, "task_type": "cli_upgrade", "target": target,
+                "from": current, "status": "applied", "initiator": "web-queue"}})
+        await _report_device_task_safe(
+            client, cdid, task_id, "applied", None, ilog=ilog
+        )
+    else:
+        with suppress(Exception):
+            ilog.error("cli_upgrade: не удалось запустить обновление", extra={"context": {
+                "task_id": task_id, "task_type": "cli_upgrade", "target": target,
+                "initiator": "web-queue"}})
+        await _report_device_task_safe(
+            client, cdid, task_id, "failed",
+            "не удалось запустить фоновое обновление", ilog=ilog,
+        )
+
+
+async def _apply_device_tasks(client, tasks: list[dict], *, rlog, ilog) -> None:
+    """#1102: применить обобщённые device-задачи из очереди (initiator=web-queue).
+
+    - ``cli_upgrade`` — запускаем self-upgrade до target и рапортуем факт
+      (см. :func:`_apply_cli_upgrade_task`).
+    - ``skill_update`` / ``generic`` — ЗАДЕЛ: пока лог (ACCESS) + skip, терминальный
+      статус НЕ шлём (backend переотдаст, когда научимся их применять).
+
+    Каждая задача изолирована: сбой одной не валит остальные и не роняет демон.
+    """
+    from skillery_cli.core.identity import device_uid
+    from skillery_cli.core.logging_setup import access as _access
+
+    cdid = device_uid()
+    for task in tasks:
+        task_id = task.get("id")
+        ttype = str(task.get("task_type") or "generic")
+        if task_id is None:
+            continue
+        try:
+            if ttype == "cli_upgrade":
+                await _apply_cli_upgrade_task(client, cdid, task, rlog=rlog, ilog=ilog)
+            else:
+                # Задел под skill_update/generic: логируем на ACCESS (не пухнет на
+                # стандартном ERROR) и пропускаем без терминального рапорта.
+                with suppress(Exception):
+                    _access(rlog, "device-task пока не поддержана — пропуск", extra={
+                        "context": {"task_id": task_id, "task_type": ttype,
+                                    "status": "skipped", "initiator": "web-queue"}})
+        except Exception as exc:  # noqa: BLE001 — одна задача не валит остальные
+            with suppress(Exception):
+                ilog.error("device-task: обработка не удалась", extra={"context": {
+                    "task_id": task_id, "task_type": ttype,
+                    "initiator": "web-queue", "error": str(exc)}})
+
+
+async def _daemon_cli_self_upgrade(cfg: ClientConfig, *, force: bool) -> bool:
+    """#1102: каденс-fallback авто-апгрейда CLI в демоне (не push, а страховка).
+
+    Слои надёжности, если push-задача ``cli_upgrade`` не прилетела, но демон жив:
+
+    - **при СТАРТЕ демона** (``force=True``) — конвергируем на уже известный
+      latest (из кэша), даже если PyPI в этом вызове не опрашивался: свежезагру-
+      женная машина сразу подтягивается к последней версии;
+    - **периодически** (``force=False``, раз в час из цикла демона) — спавним
+      ТОЛЬКО на СВЕЖЕЙ PyPI-проверке (``fresh``), то есть максимум раз в сутки
+      (суточный cooldown живёт в :func:`_check_cli_update_detailed`).
+
+    Инварианты: PyPI не спамим (кэш ``cli_latest_version`` + 24ч cooldown);
+    параллельных апгрейдов не плодим (`_upgrade_already_running` / лок worker'а).
+    Fail-silent: страховка не должна валить демон-цикл. initiator=daemon-auto.
+    """
+    from skillery_cli import __version__ as current
+    from skillery_cli.core.logging_setup import access as _access
+    from skillery_cli.core.logging_setup import get_logger, install_logger
+
+    if not cfg.cli_auto_upgrade:
+        return False
+    _dlog = get_logger("reconcile")
+    try:
+        latest, fresh = _check_cli_update_detailed(cfg)
+    except Exception:  # noqa: BLE001 — проверка версии не повод валить демон
+        return False
+    if not latest:
+        return False
+    # Периодик — только на свежей проверке (иначе спавнили бы на каждом часе в
+    # пределах суточного cooldown); старт (force) — можно и из кэша.
+    if not (fresh or force):
+        return False
+    # Дедуп: апгрейд уже идёт — второй рвёт trampoline.
+    if _upgrade_already_running():
+        with suppress(Exception):
+            _access(_dlog, "cli self-upgrade: апгрейд уже идёт — пропуск", extra={
+                "context": {"target": latest, "initiator": "daemon-auto"}})
+        return False
+    if _spawn_background_upgrade(version=latest):
+        with suppress(Exception):
+            _access(_dlog, "cli self-upgrade запущен", extra={"context": {
+                "from": current, "target": latest, "force": force,
+                "status": "applied", "initiator": "daemon-auto"}})
+        return True
+    with suppress(Exception):
+        install_logger("daemon.log").error(
+            "cli self-upgrade: не удалось запустить обновление",
+            extra={"context": {"target": latest, "initiator": "daemon-auto"}},
+        )
+    return False
 
 
 async def _auto_update_hub_installs(

@@ -478,18 +478,26 @@ class HubClient:
             body["client_device_id"] = client_device_id
         return await self._request("POST", "/me/devices", json=body)
 
-    async def fetch_device_queue(
+    async def fetch_device_queue_full(
         self,
         *,
         auto_update: bool | None = None,
         wait: int = 0,
         supports_removal: bool = True,
-    ) -> list[dict[str, Any]]:
-        """GET /me/device-queue — задания ЭТОГО устройства (#905).
+    ) -> dict[str, Any]:
+        """GET /me/device-queue — ПОЛНЫЙ ответ очереди устройства (#905/#1102).
+
+        Ответ: ``{"items": [...skill-очередь...], "device_tasks": [...]}``.
+
+        ``items`` — задания навыков ``{skill_id, slug, desired_version,
+        applied_version, status, action}`` (как раньше). ``device_tasks`` —
+        обобщённые задачи устройства ``{id, task_type, payload, status}``
+        (``cli_upgrade``/``skill_update``/``generic``); для ``cli_upgrade``
+        ``payload = {"target_version": "x.y.z"}``. Задача переотдаётся, пока не
+        отрапортован терминальный статус (см. :meth:`report_device_task`).
 
         Устройство backend определяет по ``id:{cdid}`` в User-Agent, поэтому
-        отдельный параметр не нужен. Возвращает список
-        ``{skill_id, slug, desired_version, applied_version, status, action}``.
+        отдельный параметр не нужен.
 
         #919: заодно сообщаем, включено ли автообновление НА ЭТОЙ машине.
 
@@ -501,7 +509,8 @@ class HubClient:
         ``wait>0`` — LONG-POLL: сервер держит запрос открытым до <wait> сек, пока
         не появится задание (мгновенная доставка). Таймаут HTTP-клиента поднимаем
         выше wait (иначе клиент отвалится РАНЬШЕ ответа сервера). Старый сервер
-        без поддержки ?wait просто вернёт очередь сразу (обратно совместимо).
+        без поддержки ?wait просто вернёт очередь сразу (обратно совместимо), а
+        без поля ``device_tasks`` — вернём пустой список (обратно совместимо).
         """
         from urllib.parse import urlencode
 
@@ -520,7 +529,31 @@ class HubClient:
         # молча). Таймаут задаётся при СОЗДАНИИ HubClient (см. вызов в демоне:
         # timeout=wait+буфер), поэтому здесь ничего не передаём.
         data = await self._request("GET", path)
-        return list(data.get("items", []) if isinstance(data, dict) else [])
+        if not isinstance(data, dict):
+            # Совсем старый backend мог вернуть голый список заданий.
+            return {"items": list(data or []), "device_tasks": []}
+        return {
+            "items": list(data.get("items", []) or []),
+            "device_tasks": list(data.get("device_tasks", []) or []),
+        }
+
+    async def fetch_device_queue(
+        self,
+        *,
+        auto_update: bool | None = None,
+        wait: int = 0,
+        supports_removal: bool = True,
+    ) -> list[dict[str, Any]]:
+        """GET /me/device-queue — ТОЛЬКО skill-очередь (тонкая обёртка, #905).
+
+        Обратная совместимость: возвращает список ``items`` (device_tasks
+        игнорирует). Демон использует :meth:`fetch_device_queue_full`, чтобы из
+        ОДНОГО ответа получить и skill-очередь, и device_tasks.
+        """
+        data = await self.fetch_device_queue_full(
+            auto_update=auto_update, wait=wait, supports_removal=supports_removal
+        )
+        return list(data.get("items", []))
 
     async def report_device_apply(
         self,
@@ -541,6 +574,30 @@ class HubClient:
         if error:
             body["error"] = error[:500]
         return await self._request("POST", "/me/device-queue/report", json=body)
+
+    async def report_device_task(
+        self,
+        *,
+        client_device_id: str,
+        task_id: int,
+        status: str,
+        error: str | None = None,
+    ) -> dict[str, Any] | None:
+        """POST /devices/{cdid}/tasks/{task_id}/report — рапорт о device-task (#1102).
+
+        ``status`` — терминальный: ``applied`` (задача выполнена/запущена) либо
+        ``failed`` (с краткой причиной). Пока терминальный статус не отрапортован,
+        backend переотдаёт задачу в очереди. Причину обрезаем до 500 символов
+        (секреты сюда не кладём — только текст ошибки шага).
+        """
+        body: dict[str, Any] = {"status": status}
+        if error:
+            body["error"] = error[:500]
+        return await self._request(
+            "POST",
+            f"/devices/{client_device_id}/tasks/{task_id}/report",
+            json=body,
+        )
 
     async def list_devices(self) -> list[dict[str, Any]]:
         """GET /me/devices — список зарегистрированных устройств пользователя.
