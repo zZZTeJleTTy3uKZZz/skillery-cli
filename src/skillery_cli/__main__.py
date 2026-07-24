@@ -36,7 +36,12 @@ from skillery_cli.config import (
     save_tokens,
     set_active_profile,
 )
-from skillery_cli.core import linker, project_manifest, tooling_install
+from skillery_cli.core import (
+    cli_package_install,
+    linker,
+    project_manifest,
+    tooling_install,
+)
 from skillery_cli.core.agents import (
     AntigravityTarget,
     ClaudeCodeTarget,
@@ -2178,16 +2183,124 @@ def _emit_onboarding(
     )
 
 
+_CLI_PKG_SRC_DIR = ".pkgsrc"  # store/<slug>/.pkgsrc — корень репо с pyproject пакета
+
+
+def _persist_cli_package_source(repo_root: Path, result) -> None:
+    """Сохранить корень репо (pyproject+src) в ``store/<slug>/.pkgsrc``.
+
+    Из него ``_apply_tooling`` ставит CLI-пакет через ``uv tool install`` (как
+    install-скрипт навыка). Best-effort: сбой копирования не валит установку самого
+    навыка — просто не будет рабочей команды (и это честно отразит self-check).
+    """
+    try:
+        import shutil
+
+        store_dir = getattr(result, "store_dir", None)
+        if store_dir is None or not (Path(repo_root) / "pyproject.toml").is_file():
+            return  # корень не пакет — нечего сохранять (доки уже материализованы)
+        dest = Path(store_dir) / _CLI_PKG_SRC_DIR
+        if dest.exists():
+            shutil.rmtree(dest, ignore_errors=True)
+        # Копируем корень БЕЗ тяжёлого/ненужного для сборки (venv, .git, кэши).
+        shutil.copytree(
+            repo_root,
+            dest,
+            ignore=shutil.ignore_patterns(
+                ".git", ".venv", "venv", "__pycache__", "*.pyc", "node_modules",
+                ".pytest_cache", ".ruff_cache", "*.egg-info",
+            ),
+        )
+    except Exception:  # noqa: BLE001 — источник пакета best-effort
+        pass
+
+
+def _cli_package_root(store_dir) -> Path | None:
+    """Корень CLI-пакета навыка: ``store/<slug>/.pkgsrc`` (монорепо) или сам стор
+    (навык-в-корне). ``None`` — если pyproject нет (навык не несёт своего пакета)."""
+    if store_dir is None:
+        return None
+    for cand in (Path(store_dir) / _CLI_PKG_SRC_DIR, Path(store_dir)):
+        if (cand / "pyproject.toml").is_file():
+            return cand
+    return None
+
+
+def _manifest_cli_command_names(manifest: dict | None) -> list[str]:
+    """Имена команд из ``manifest['cli']`` (command_name)."""
+    names: list[str] = []
+    for tool in (manifest or {}).get("cli") or []:
+        name = tool.get("command_name") if isinstance(tool, dict) else None
+        if name:
+            names.append(str(name))
+    return names
+
+
+def _manifest_without_cli(manifest: dict | None, drop_names: set[str]) -> dict | None:
+    """Копия манифеста без уже поставленных (через uv tool) CLI — чтобы skillkit не
+    писал рукодельный shim поверх рабочей команды uv. MCP/runtime_deps сохраняются."""
+    if not manifest or not drop_names:
+        return manifest
+    clis = manifest.get("cli") or []
+    kept = [
+        t for t in clis
+        if not (isinstance(t, dict) and str(t.get("command_name") or "") in drop_names)
+    ]
+    out = dict(manifest)
+    out["cli"] = kept
+    return out
+
+
+def _report_cli_package(rep: dict, expected: list[str]) -> None:
+    """Человекочитаемая сводка установки CLI-пакета через uv tool + PATH-подсказка."""
+    status = rep.get("status")
+    if status == "installed":
+        cmds = ", ".join(c["name"] for c in rep.get("commands") or []) or "команда"
+        emit_message(f"CLI «{cmds}» установлен (uv tool) и доступен из любой директории.",
+                     level="info")
+        not_on_path = [c["name"] for c in rep.get("commands") or [] if not c.get("on_path")]
+        if not_on_path:
+            emit_message(
+                f"Команда {', '.join(not_on_path)} появится после обновления PATH "
+                "(uv tool bin). Откройте новый терминал или выполните `uv tool update-shell`.",
+                level="warn",
+            )
+    elif status == "error":
+        emit_message(
+            f"CLI навыка ({', '.join(expected) or '?'}) не установлен: {rep.get('reason', '')}",
+            level="warn",
+        )
+
+
 def _apply_tooling(result, manifest: dict | None, *, agent_target, project) -> None:
     """поставить CLI/MCP/runtime-deps навыка (если он tooling). Graceful.
 
-    Ошибка установки артефактов НЕ ломает установку самого навыка (warn,
-    продолжаем — degradation как в reverse-factory). Печатает короткую сводку
-    о поставленных CLI/MCP и подсказку про PATH, если bin-каталог добавлен.
+    Свой CLI-пакет навыка (pyproject в корне репо, сохранён в ``.pkgsrc``) ставим
+    ``uv tool install --force <корень>`` — ровно как install-скрипт навыка: чистый
+    изолированный tool-venv + команда на PATH. Остальное (MCP, runtime-deps, и CLI
+    без своего пакета) — через skillkit; из манифеста для него убираем уже
+    поставленные команды, чтобы не писать битый shim поверх рабочей uv-tool-команды.
+
+    Ошибка установки артефактов НЕ ломает установку самого навыка (warn, degradation).
     """
+    installed_cli: set[str] = set()
+    pkg_root = _cli_package_root(getattr(result, "store_dir", None))
+    cmd_names = _manifest_cli_command_names(manifest)
+    if pkg_root is not None and cmd_names:
+        try:
+            rep = cli_package_install.install_cli_package(
+                pkg_root, command_names=cmd_names
+            )
+        except Exception as exc:  # noqa: BLE001 — пакет не валит install навыка
+            rep = {"status": "error", "reason": str(exc), "package": None, "commands": []}
+        _report_cli_package(rep, cmd_names)
+        if rep.get("status") == "installed":
+            installed_cli = set(cmd_names)
+
+    kit_manifest = _manifest_without_cli(manifest, installed_cli)
     try:
         report = tooling_install.apply_tooling_artifacts(
-            result, agent_target=agent_target, project=project, manifest=manifest
+            result, agent_target=agent_target, project=project, manifest=kit_manifest
         )
     except Exception as exc:  # noqa: BLE001 — артефакты не валят install навыка
         emit_message(
@@ -2257,6 +2370,15 @@ def _revert_tooling(slug: str, *, agent_target, project, store_dir: Path) -> Non
         )
     except Exception as exc:  # noqa: BLE001 — откат артефактов не валит снятие
         emit_message(f"Не удалось снять CLI/MCP навыка «{slug}»: {exc}", level="warn")
+    # Свой CLI-пакет навыка ставился через `uv tool install` (не shim) — снимаем
+    # его симметрично `uv tool uninstall <project.name>`, иначе команда осталась бы.
+    try:
+        pkg_root = _cli_package_root(store_dir)
+        info = cli_package_install.read_pyproject_cli(pkg_root) if pkg_root else None
+        if info:
+            cli_package_install.uninstall_cli_package(info["name"])
+    except Exception as exc:  # noqa: BLE001 — снятие пакета best-effort
+        emit_message(f"Не удалось снять CLI-пакет навыка «{slug}»: {exc}", level="warn")
 
 
 async def _install_local_source(
@@ -2373,14 +2495,18 @@ async def _install_local_source(
 
 def _extract_snapshot_subdir(
     archive: Path, into: Path, skill_path: str
-) -> Optional[Path]:
-    """Распаковать снапшот и вернуть путь до подпапки навыка (``skill_path``).
+) -> Optional[tuple[Path, Path]]:
+    """Распаковать снапшот и вернуть ``(подпапка навыка, корень репо)``.
 
     Снапшот — tar.gz ВСЕГО репозитория (бэкенд снял его под своим токеном). Для
     монорепо-навыка нужный SKILL.md лежит в подпапке. Извлекаем архив, находим
     корень (у git-архива это единственная папка ``repo-<sha>/``), спускаемся в
     ``skill_path`` и проверяем, что там есть SKILL.md. ``None`` ⇒ подпапки/навыка
     в архиве нет → вызывающий откатится на git clone.
+
+    Возвращаем и КОРЕНЬ репо: для tooling-навыка в корне лежит его CLI-пакет
+    (``pyproject.toml``+``src/``), из которого ставится команда (``uv tool install
+    --force <корень>``, как install-скрипт навыка) — раньше корень выбрасывался.
 
     Защита от path traversal: имена членов архива с ``..``/абсолютные — отвергаем,
     и итоговый путь обязан оставаться внутри распакованного дерева.
@@ -2419,7 +2545,7 @@ def _extract_snapshot_subdir(
         return None
     if not sub.is_dir() or not (sub / "SKILL.md").exists():
         return None
-    return sub
+    return sub, root
 
 
 async def _materialize_from_bundle(
@@ -2478,9 +2604,10 @@ async def _materialize_from_bundle(
             try:
                 archive.write_bytes(snap)
                 if skill_path:
-                    sub = _extract_snapshot_subdir(archive, tmp_dir, skill_path)
-                    if sub is not None:
-                        return installer.install_from_path(
+                    extracted = _extract_snapshot_subdir(archive, tmp_dir, skill_path)
+                    if extracted is not None:
+                        sub, repo_root = extracted
+                        result = installer.install_from_path(
                             slug=dep_slug or None,
                             version=dep_version,
                             commit_sha=commit_sha,
@@ -2490,6 +2617,13 @@ async def _materialize_from_bundle(
                             force=force,
                             skill_id=dep_id,
                         )
+                        # Монорепо-навык: его CLI-пакет (pyproject+src) лежит в
+                        # КОРНЕ репо, а не в подпапке навыка. Сохраняем корень в
+                        # store/<slug>/.pkgsrc, чтобы _apply_tooling поставил из
+                        # него команду (`uv tool install --force <корень>`) — иначе
+                        # `tg`/`vk`/… падали ModuleNotFoundError (пакет не ставился).
+                        _persist_cli_package_source(repo_root, result)
+                        return result
                 else:
                     return installer.install_from_snapshot(
                         slug=dep_slug or None,
