@@ -107,8 +107,10 @@ def test_apply_tooling_installs_package_and_strips_cli_for_kit(
         seen["kit_manifest"] = manifest
         return {"cli": [], "mcp": [], "deps": {}}
 
+    removed: list[str] = []
     monkeypatch.setattr(m.cli_package_install, "install_cli_package", fake_install)
     monkeypatch.setattr(m.tooling_install, "apply_tooling_artifacts", fake_apply)
+    monkeypatch.setattr(m, "_remove_stale_shim", lambda name: removed.append(name))
 
     m._apply_tooling(result, manifest, agent_target=object(), project=None)
 
@@ -119,6 +121,8 @@ def test_apply_tooling_installs_package_and_strips_cli_for_kit(
     #    но mcp/runtime_deps сохранены
     assert seen["kit_manifest"]["cli"] == []
     assert seen["kit_manifest"]["mcp"] == [{"server_name": "srv"}]
+    # 3) устаревший skillery-shim прошлого install снят (не затеняет uv-команду)
+    assert removed == ["foo"]
 
 
 def test_apply_tooling_keeps_cli_for_kit_when_no_package(

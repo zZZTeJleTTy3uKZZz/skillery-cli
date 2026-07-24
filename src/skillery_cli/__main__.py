@@ -2251,6 +2251,25 @@ def _manifest_without_cli(manifest: dict | None, drop_names: set[str]) -> dict |
     return out
 
 
+def _remove_stale_shim(command_name: str) -> None:
+    """Убрать устаревший skillery-shim ``~/.skillery/bin/<cmd>.cmd``+sidecar.
+
+    После установки команды через ``uv tool`` рукодельный shim прошлого (битого)
+    install больше не нужен и, оставшись, мог бы затенять рабочую uv-команду в PATH
+    (uv-tool-bin у пользователя на PATH — там же лежит сам ``skillery``). Best-effort.
+    """
+    try:
+        from skillery_cli.core._kit_config import _cli_bin_dir
+
+        bin_dir = _cli_bin_dir()
+        for fn in (f"{command_name}.cmd", command_name, f"{command_name}.json"):
+            p = bin_dir / fn
+            if p.is_file():
+                p.unlink()
+    except Exception:  # noqa: BLE001 — чистка shim best-effort
+        pass
+
+
 def _report_cli_package(rep: dict, expected: list[str]) -> None:
     """Человекочитаемая сводка установки CLI-пакета через uv tool + PATH-подсказка."""
     status = rep.get("status")
@@ -2296,6 +2315,10 @@ def _apply_tooling(result, manifest: dict | None, *, agent_target, project) -> N
         _report_cli_package(rep, cmd_names)
         if rep.get("status") == "installed":
             installed_cli = set(cmd_names)
+            # Убрать устаревший skillery-shim прошлого (битого) install — он бы
+            # затенял рабочую uv-tool-команду в PATH.
+            for name in cmd_names:
+                _remove_stale_shim(name)
 
     kit_manifest = _manifest_without_cli(manifest, installed_cli)
     try:
