@@ -97,6 +97,8 @@ def _run(coro) -> None:  # noqa: ANN001
     text-режим: прежнее читабельное «Ошибка API: ...» (ApiError) /
     «RUNTIME: ...» (RuntimeError). В обоих случаях exit 1.
     """
+    from skillkit.errors import ScopeConflict
+
     try:
         asyncio.run(coro)
     except ApiError as e:
@@ -109,6 +111,27 @@ def _run(coro) -> None:  # noqa: ANN001
         # click.exceptions.Exit/Abort наследуют RuntimeError — это штатное
         # завершение команды (emit_error уже сделан), пропускаем насквозь.
         raise
+    except ScopeConflict as e:
+        # A3 (голос 07-24): ownership-гейт (ForeignPathError ⊂ ScopeConflict ⊂
+        # RuntimeError) — ловим ПЕРЕД generic RuntimeError и даём человекочитаемую
+        # подсказку с ГОТОВОЙ командой --force, а не сырой «RUNTIME: гейт…».
+        cmd = "skillery " + " ".join(sys.argv[1:])
+        if "--force" not in sys.argv:
+            cmd += " --force"
+        first = str(e).split("\n")[0].strip()
+        hint = (
+            f"{first}\n"
+            f"Если это тот же навык — перезаписать управляемой версией:\n"
+            f"  {cmd}   (УДАЛИТ содержимое каталога)\n"
+            f"Если это ваш другой навык — переименуйте/уберите каталог вручную."
+        )
+        if is_json():
+            emit_error("SCOPE_CONFLICT", hint)
+        else:
+            console.print(
+                f"[yellow]Каталог занят и не управляется Skillery.[/]\n{hint}"
+            )
+        sys.exit(1)
     except RuntimeError as e:
         # Например installer._clone_version: RuntimeError('git clone failed: ...')
         # — короткое сообщение вместо многоэкранного Rich-traceback.
