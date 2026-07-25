@@ -141,6 +141,9 @@ class HubClient:
     ) -> None:
         self._access_token = access_token
         self._on_refresh = on_token_refresh
+        # Храним для ДИАГНОСТИКИ сети: голый «ConnectError: » без хоста ничего не
+        # говорит о том, куда именно не достучались (см. ``_network_error``).
+        self._base_url = base_url or ""
         trust_env = bool(
             int(os.environ.get(_branding.env("USE_SYSTEM_PROXY"), "0") or "0")
         )
@@ -253,6 +256,47 @@ class HubClient:
             details=data.get("details", {}),
         )
 
+    def _describe_target(self, method: str, url: str) -> str:
+        """``METHOD scheme://host/path`` — БЕЗ query и без заголовков.
+
+        Диагностика сетевого сбоя без утечки секретов: query может нести токены/
+        коды, поэтому его отрезаем; путь и хост — то, чего не хватало в логах
+        («ConnectError: » без адреса не позволял понять, куда не достучались).
+        """
+        from urllib.parse import urlsplit
+
+        raw = url if "://" in url else f"{self._base_url.rstrip('/')}/{url.lstrip('/')}"
+        try:
+            parts = urlsplit(raw)
+        except Exception:  # noqa: BLE001 — диагностика не должна падать сама
+            return f"{method.upper()} {raw.split('?', 1)[0]}"
+        host = parts.netloc or "?"
+        scheme = parts.scheme or "https"
+        return f"{method.upper()} {scheme}://{host}{parts.path}"
+
+    def _network_error(
+        self, method: str, url: str, exc: BaseException
+    ) -> _LkTransportError:
+        """Внятная сетевая ошибка: куда шли, какой тип, какая причина.
+
+        Живой кейс: транспорт кита отдавал ``TransportError: ConnectError: `` —
+        текст httpx-исключения ПУСТОЙ, хоста нет, тип причины не виден. По такому
+        сообщению нельзя отличить «DNS не резолвится» от «TLS отвалился» и
+        непонятно, к какому хосту это относится. Собираем всё в одну строку.
+        """
+        detail = str(exc).strip()
+        # Пустой/обрубленный текст («ConnectError: ») → добавляем repr (он несёт
+        # имя класса) — иначе в логе остаётся строка вообще без содержания.
+        if not detail or detail.endswith(":"):
+            detail = f"{detail} {exc!r}".strip()
+        cause = exc.__cause__ or exc.__context__
+        if cause is not None and cause is not exc:
+            cause_text = str(cause).strip() or repr(cause)
+            detail = f"{detail} (причина: {type(cause).__name__}: {cause_text})"
+        return _LkTransportError(
+            f"сеть недоступна: {self._describe_target(method, url)} — {detail}"
+        )
+
     async def _send(
         self, method: str, url: str, headers: dict[str, str], **kwargs: Any
     ) -> httpx.Response:
@@ -275,15 +319,17 @@ class HubClient:
                 resp = await self._transport.request(
                     method, url, headers=headers, **kwargs
                 )
-            except _LkTransportError as exc:
+            except (_LkTransportError, httpx.TransportError) as exc:
                 # Сетевой сбой: транспорт кита обернул httpx-ошибку в доменный
-                # ``librarykit.errors.TransportError``. Идемпотентные методы
-                # повторяем (W1), иначе — пробрасываем доменную ошибку наверх.
+                # ``librarykit.errors.TransportError`` (голый httpx — если запрос
+                # ушёл мимо кита). Идемпотентные методы повторяем (W1), иначе —
+                # пробрасываем ОБОГАЩЁННУЮ доменную ошибку наверх: хост+путь+тип
+                # причины, иначе в логе оставался бесполезный «ConnectError: ».
                 if idempotent and policy.should_retry(attempt, None, exc):
                     await asyncio.sleep(policy.delay(attempt))
                     attempt += 1
                     continue
-                raise
+                raise self._network_error(method, url, exc) from exc
             last_resp = resp
             if (
                 idempotent

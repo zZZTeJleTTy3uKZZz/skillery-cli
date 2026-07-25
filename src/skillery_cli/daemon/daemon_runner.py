@@ -249,12 +249,19 @@ class DaemonRunner:
         if self._reconcile is not None:
             try:
                 await self._reconcile()
-            except Exception as exc:  # noqa: BLE001 — reconcile best-effort
+            except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):
+                raise
+            except BaseException as exc:  # noqa: BLE001 — reconcile best-effort
                 with suppress(Exception):
                     _log.error(
                         "daemon reconcile failed",
                         exc_info=exc,
-                        extra={"context": {"error": str(exc)}},
+                        # Пустой ``str(exc)`` (живой кейс ``ConnectError: ``) бесполезен
+                        # — тогда пишем repr + тип, чтобы причина была опознаваема.
+                        extra={"context": {
+                            "error": str(exc) or repr(exc),
+                            "error_type": type(exc).__name__,
+                        }},
                     )
         return self._state.last_send
 
@@ -275,12 +282,21 @@ class DaemonRunner:
                 last: dict[str, Any] = {}
                 try:
                     last = await self.cycle_once()
-                except Exception as exc:  # noqa: BLE001 — такт не валит демон
+                except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):
+                    raise  # штатная остановка — не наше дело её глушить
+                except BaseException as exc:  # noqa: BLE001 — такт не валит демон
+                    # BaseException, а не Exception: ExceptionGroup/BaseException-
+                    # ветки (TaskGroup, нестандартные транспорты) иначе пролетали бы
+                    # мимо и убивали демон насовсем — ровно это и наблюдалось.
                     with suppress(Exception):
                         _log.error(
                             "daemon cycle failed",
                             exc_info=exc,
-                            extra={"context": {"error": str(exc)}},
+                            extra={"context": {
+                                "error": str(exc) or repr(exc),
+                                "error_type": type(exc).__name__,
+                                "cycle": self._state.cycles + 1,
+                            }},
                         )
                 # Классификация исхода для backoff: «провал» = что-то слали, но
                 # всё ушло в requeue (network/5xx). Пустой цикл (sent=0) и успех

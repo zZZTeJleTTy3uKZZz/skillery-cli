@@ -33,6 +33,16 @@ __all__ = [
 _MUTEX_NAME = "Global\\SkilleryDaemonSingleton"
 _ERROR_ALREADY_EXISTS = 183
 
+#: env-оверрайд имени ядерного лока. Нужен ТЕСТАМ: мьютекс — объект ядра, он не
+#: живёт в HOME, поэтому изоляция HOME его не покрывает. Прогон, взявший боевое
+#: имя, заставлял НАСТОЯЩИЙ демон/апгрейдер считать «экземпляр уже работает».
+_MUTEX_ENV = "SKILLERY_DAEMON_MUTEX"
+
+
+def default_mutex_name() -> str:
+    """Имя ядерного мьютекса демона (env-оверрайд для изоляции тестов)."""
+    return os.environ.get(_MUTEX_ENV) or _MUTEX_NAME
+
 
 class DaemonLock:
     """Владение локом. Держится, пока жив объект (и процесс)."""
@@ -98,7 +108,9 @@ def acquire_daemon_lock(
             kernel32.CreateMutexW.argtypes = [
                 ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p
             ]
-            handle = kernel32.CreateMutexW(None, True, mutex_name or _MUTEX_NAME)
+            handle = kernel32.CreateMutexW(
+                None, True, mutex_name or default_mutex_name()
+            )
             last_error = ctypes.get_last_error()
             if not handle:
                 return DaemonLock(None, None)

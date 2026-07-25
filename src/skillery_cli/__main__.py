@@ -107,6 +107,22 @@ def _run(coro) -> None:  # noqa: ANN001
     try:
         asyncio.run(coro)
     except ApiError as e:
+        # 401 — это не «ошибка API», а протухшая сессия: показываем ЧТО делать.
+        # Раньше наружу летело сырое «[401/…] Signature has expired» — человек не
+        # понимал, что достаточно повторить login (а авто-refresh не сработал,
+        # потому что refresh-токена не было / сервер его отверг).
+        if e.status_code == 401:
+            reason = _REFRESH_FAILURE.get("reason")
+            hint = SESSION_EXPIRED_HINT + (f" Причина: {reason}." if reason else "")
+            if is_json():
+                emit_error(
+                    e.code or "SESSION_EXPIRED",
+                    f"{hint} Ответ сервера: {e.message or str(e)}",
+                    status_code=401,
+                )
+            else:
+                console.print(f"[red]{hint}[/]\n[dim]Ответ сервера: {e}[/]")
+            sys.exit(1)
         if is_json():
             emit_error(e.code or "API", e.message or str(e), status_code=e.status_code)
         else:
@@ -198,15 +214,68 @@ def _strip_invite_url(value: str) -> str:
     return value
 
 
+#: Минимальная форма почты: есть «@», непустые локальная часть и домен с точкой.
+#: Полную RFC-валидацию не делаем — задача отсечь МУСОР (в боевом профиле лежало
+#: ``user_email = "1"``: JWT-``sub`` это ЧИСЛОВОЙ user_id, а не почта).
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s.]+(?:\.[^@\s.]+)+$")
+
+#: Почему последний refresh не удался — чтобы 401 объяснялся человеку («сессия
+#: истекла, выполните login»), а не голым «Signature has expired» из бэкенда.
+_REFRESH_FAILURE: dict[str, str | None] = {"reason": None}
+
+SESSION_EXPIRED_HINT = (
+    f"Сессия истекла — выполните `{_branding.APP_NAME} login`."
+)
+
+
+def _is_valid_email(value: object) -> bool:
+    """Похоже ли значение на почту (есть «@» и домен). Мусор → False."""
+    return bool(isinstance(value, str) and _EMAIL_RE.match(value.strip()))
+
+
+def _resolve_login_email(cfg: ClientConfig, claims: dict | None) -> str:
+    """Валидная почта учётки для ключа токенов и конфига (или ``""``).
+
+    Порядок: то, что уже проставил ``hydrate_session_permissions`` из ``/me``
+    (авторитетный источник) → ``email`` из JWT → ``sub`` из JWT. ``sub`` в
+    JWT-slim — числовой ``user_id``, поэтому подходит только если это реально
+    почта; иначе в конфиг НЕ пишем ничего (раньше писали «1», и токены ложились
+    в keyring под ключом «1» — сессия «терялась» при следующем запуске).
+    """
+    claims = claims or {}
+    for candidate in (cfg.user_email, claims.get("email"), claims.get("sub")):
+        if _is_valid_email(candidate):
+            return str(candidate).strip()
+    return ""
+
+
+def _fail_invalid_login_email(raw: object) -> None:
+    """Единая ошибка «почта не определилась» — конфиг/keyring не трогаем."""
+    emit_error(
+        "VALIDATION",
+        "Не удалось определить e-mail учётной записи "
+        f"(получено: {raw!r}). Токены и конфиг НЕ сохранены — "
+        f"повторите вход: `{_branding.APP_NAME} login --email <ваша почта>`.",
+    )
+    raise typer.Exit(1)
+
+
 def _get_access_token() -> str:
     cfg = ClientConfig.load()
     if not cfg.user_email:
         console.print("[red]Не авторизован.[/] Сначала: skillery login <invite>")
         raise typer.Exit(1)
-    access, _ = load_tokens(cfg.user_email)
+    access, refresh = load_tokens(cfg.user_email)
     if not access:
         console.print("[red]Локальный access-токен не найден.[/] Сделайте login заново.")
         raise typer.Exit(1)
+    if not refresh:
+        # Access есть, refresh НЕТ: протухший access обновить нечем, и человек
+        # упирался в голое «401 Signature has expired» из бэкенда. Помечаем
+        # причину заранее — ``_run`` покажет её понятным текстом при 401.
+        _REFRESH_FAILURE["reason"] = (
+            f"refresh-токен для {cfg.user_email} не найден в хранилище"
+        )
     return access
 
 
@@ -215,20 +284,28 @@ def _make_refresh_callback(cfg: ClientConfig) -> object:
 
     При 401 HubClient вызывает callback → callback дёргает /auth/refresh
     с сохранённым refresh-токеном, получает новый pair, сохраняет в keyring,
-    возвращает (access, refresh). Если refresh не сработал — None и
-    пользователю показывается 401-ошибка как обычно.
+    возвращает (access, refresh). Если refresh не сработал — None, а ПРИЧИНА
+    запоминается в ``_REFRESH_FAILURE``: тогда пользователь видит «сессия
+    истекла, выполните login», а не сырое «Signature has expired».
     """
 
     async def _refresh() -> tuple[str, str] | None:
         if not cfg.user_email:
+            _REFRESH_FAILURE["reason"] = "в конфиге нет учётной записи"
             return None
         _, refresh = load_tokens(cfg.user_email)
         if not refresh:
+            _REFRESH_FAILURE["reason"] = (
+                f"refresh-токен для {cfg.user_email} не найден в хранилище"
+            )
             return None
         sub = HubClient(base_url=cfg.base_url, access_token=None)
         try:
             data = await sub.refresh(refresh)
-        except ApiError:
+        except ApiError as exc:
+            _REFRESH_FAILURE["reason"] = (
+                f"обновление сессии отклонено сервером ({exc.code})"
+            )
             return None
         finally:
             await sub.close()
@@ -237,6 +314,7 @@ def _make_refresh_callback(cfg: ClientConfig) -> object:
         save_tokens(cfg.user_email, new_access, new_refresh)
         populate_from_jwt(cfg, new_access)
         cfg.save()
+        _REFRESH_FAILURE["reason"] = None
         return (new_access, new_refresh)
 
     return _refresh
@@ -468,6 +546,15 @@ def _stop_daemon_for_upgrade() -> bool:
     открытыми: `uv tool install --force` спотыкается о `Scripts/` с «Отказано в
     доступе». После апгрейда демон вернётся сам — любая команда CLI поднимает
     его (см. `_heal_daemon_if_dead`).
+
+    ⚠️ САМОУБИЙСТВО ЗАПРЕЩЕНО (инцидент 2026-07-24). Апгрейд запускает и САМ
+    демон (push-задача ``cli_upgrade`` и старт-fallback ``_daemon_cli_self_upgrade``),
+    а PID-файл в этот момент указывает на НЕГО САМОГО. Раньше он тут же слал себе
+    SIGTERM/TerminateProcess — и умирал ДО ``subprocess.Popen`` worker'а: ни
+    апгрейда, ни демона (`daemon status` → stopped, `Cycles: 1`), очередь больше
+    никто не опрашивал. Гасить живой демон — работа worker'а
+    (``_upgrade_worker.stop_daemons``, он исключает собственный PID и делает это
+    НЕПОСРЕДСТВЕННО перед заменой файлов).
     """
     try:
         import os as _os
@@ -481,6 +568,8 @@ def _stop_daemon_for_upgrade() -> bool:
         pid = read_running_pid()
         if pid is None or not is_process_alive(pid):
             return False
+        if pid == _os.getpid():
+            return False  # это МЫ; себя не убиваем — см. docstring
         _os.kill(pid, _signal.SIGTERM)
         for _ in range(20):  # ждём до ~2с, пока отпустит файлы
             if not is_process_alive(pid):
@@ -502,12 +591,12 @@ def _upgrade_already_running() -> bool:
     своим именем — второй реализации единственности не заводим.
     """
     try:
-        from skillery_cli._upgrade_worker import MUTEX_NAME, lock_path
+        from skillery_cli._upgrade_worker import lock_path, mutex_name
         from skillery_cli.daemon.single_instance import acquire_daemon_lock
 
         # И имя мьютекса, и файл — те же, что берёт worker: иначе на POSIX
         # проверка смотрела бы в другой файл и не увидела бы идущий апгрейд.
-        lock = acquire_daemon_lock(mutex_name=MUTEX_NAME, lock_path=lock_path())
+        lock = acquire_daemon_lock(mutex_name=mutex_name(), lock_path=lock_path())
         if not lock.acquired:
             return True
         lock.release()
@@ -1029,6 +1118,9 @@ def cmd_login(
             email = "" if is_json() else Prompt.ask("Email")
         if name is None:
             name = "" if is_json() else Prompt.ask("Имя для отображения")
+        # Мусор в почте не должен доехать до keyring/конфига (ключ токенов = почта).
+        if not _is_valid_email(email):
+            _fail_invalid_login_email(email)
         token = _strip_invite_url(invite)
 
         async def _do_invite() -> None:
@@ -1131,9 +1223,14 @@ def _do_code_login(cfg: ClientConfig, *, code: str) -> None:
         finally:
             await client.close()
 
-        # Извлекаем email из JWT — единственный способ без extra round-trip.
+        # Почта учётки: сперва то, что уже пришло из /me (hydrate), иначе JWT.
+        # ⚠️ ``sub`` в JWT-slim — ЧИСЛОВОЙ user_id: писать его как почту нельзя
+        # (в боевом профиле так появилось `user_email = "1"`, и токены легли в
+        # keyring под ключом «1»).
         claims = decode_jwt_claims(data["access_token"])
-        user_email = claims.get("sub") if claims else ""
+        user_email = _resolve_login_email(cfg, claims)
+        if not user_email:
+            _fail_invalid_login_email((claims or {}).get("sub"))
 
         save_tokens(user_email, data["access_token"], data["refresh_token"])
         cfg.user_email = user_email
@@ -1244,9 +1341,12 @@ def _do_browser_login(cfg: ClientConfig) -> None:
             finally:
                 await client.close()
 
-            # Извлекаем email из JWT
+            # Почта учётки: /me (hydrate) → JWT ``email`` → JWT ``sub``, и только
+            # если это РЕАЛЬНО почта (``sub`` в JWT-slim — числовой user_id).
             claims = decode_jwt_claims(data["access_token"])
-            user_email = claims.get("sub") if claims else ""
+            user_email = _resolve_login_email(cfg, claims)
+            if not user_email:
+                _fail_invalid_login_email((claims or {}).get("sub"))
 
             save_tokens(user_email, data["access_token"], data["refresh_token"])
             cfg.user_email = user_email
@@ -1289,6 +1389,11 @@ def _do_browser_login(cfg: ClientConfig) -> None:
 
 
 def _do_password_login(cfg: ClientConfig, *, email: str, password: str) -> None:
+    # Ключ токенов в keyring — это почта; мусор туда писать нельзя (см.
+    # ``_fail_invalid_login_email``). Проверяем ДО сетевого вызова.
+    if not _is_valid_email(email):
+        _fail_invalid_login_email(email)
+
     async def _do() -> None:
         client = HubClient(base_url=cfg.base_url)
         try:
@@ -1730,6 +1835,8 @@ def cmd_set_tokens(
     cfg = ClientConfig.load()
     if base_url:
         cfg.base_url = base_url
+    if not _is_valid_email(email):
+        _fail_invalid_login_email(email)
     save_tokens(email, access, refresh)
     cfg.user_email = email
     populate_from_jwt(cfg, access)
@@ -3433,7 +3540,15 @@ async def _reconcile_device_queue(
     Успех рапортуем версией, которая РЕАЛЬНО легла в стор (перечитываем мету),
     а не той, что просили — иначе снова получим намерение вместо факта.
     """
-    from skillery_cli.core.logging_setup import access, get_logger, install_logger
+    # ⚠️ ИМЕНОВАНИЕ: помощник уровня ACCESS импортируем ПОД ПСЕВДОНИМОМ. Прямой
+    # `from ... import access` перекрывал ОДНОИМЁННЫЙ ПАРАМЕТР этой функции —
+    # access-токен подменялся функцией логирования, и в `HubClient(access_token=…)`
+    # и в `_install_chain(cfg, access, …)` уходил объект функции вместо токена.
+    # Наружу это выглядело как «очередь устройства всегда пуста» (401 → ApiError →
+    # `except Exception: return report`): device_tasks/cli_upgrade не применялись
+    # никогда, а задача вечно висела в `delivered`.
+    from skillery_cli.core.logging_setup import access as _access_log
+    from skillery_cli.core.logging_setup import get_logger, install_logger
 
     # Трейс опроса очереди — level-gated (ACCESS/DEBUG видны на debug/verbose);
     # провал установки — install_logger("daemon.log") пишет ВСЕГДА (как SK-5),
@@ -3475,7 +3590,7 @@ async def _reconcile_device_queue(
         # ACCESS: факт опроса очереди + её размер (heartbeat устройства). На
         # стандартном ERROR не пишется — только на debug/verbose (или ACCESS).
         with suppress(Exception):
-            access(_rlog, "опрошена очередь устройства", extra={"context": {
+            _access_log(_rlog, "опрошена очередь устройства", extra={"context": {
                 "queue": len(queue), "wait": wait, "initiator": "web-queue",
             }})
         if not queue:
@@ -3650,9 +3765,14 @@ async def _apply_cli_upgrade_task(
     ЗАПРЕТ произвольных пакетов: ставим ровно ``skillery-cli==<target>``
     (`_spawn_background_upgrade` пинует dist из `_upgrade_commands`). Даунгрейда
     не делаем: если текущая версия уже >= target — идемпотентно рапортуем applied.
+
+    ВИДИМОСТЬ: исход КАЖДОЙ device-задачи (запущен / уже на версии / отложен /
+    провал) пишется через ``ilog`` — ``install_logger`` держит СВОЙ INFO-хендлер и
+    пишет всегда. Раньше успех и пропуск шли уровнем ACCESS(15), а стандартный
+    уровень демона — ERROR, поэтому в ``daemon.log`` были видны ТОЛЬКО провалы:
+    задача «делалась», а следов не оставляла. ACCESS остаётся для шума long-poll.
     """
     from skillery_cli import __version__ as current
-    from skillery_cli.core.logging_setup import access as _access
 
     task_id = task.get("id")
     payload = task.get("payload") or {}
@@ -3673,7 +3793,7 @@ async def _apply_cli_upgrade_task(
     # идемпотентно закрываем задачу applied (и не даунгрейдим по ошибочному target).
     if not _is_newer(target, current):
         with suppress(Exception):
-            _access(rlog, "cli_upgrade: уже на целевой версии", extra={"context": {
+            ilog.info("cli_upgrade: уже на целевой версии", extra={"context": {
                 "task_id": task_id, "task_type": "cli_upgrade", "target": target,
                 "current": current, "status": "applied", "initiator": "web-queue"}})
         await _report_device_task_safe(
@@ -3682,17 +3802,22 @@ async def _apply_cli_upgrade_task(
         return
 
     # Дедуп: апгрейд уже идёт — два параллельных рвут trampoline. Не спавним и не
-    # рапортуем терминальный статус (backend переотдаст).
+    # рапортуем терминальный статус (backend переотдаст задачу на следующем такте).
+    # Запись ОБЯЗАНА быть заметной: раньше пропуск был тихим (ACCESS), и задача
+    # висела в `delivered` без единого следа о том, почему ничего не происходит.
     if _upgrade_already_running():
         with suppress(Exception):
-            _access(rlog, "cli_upgrade: апгрейд уже идёт — пропуск", extra={"context": {
-                "task_id": task_id, "task_type": "cli_upgrade", "target": target,
-                "initiator": "web-queue"}})
+            ilog.info(
+                "cli_upgrade отложен: апгрейд уже идёт, повторим на следующем такте",
+                extra={"context": {
+                    "task_id": task_id, "task_type": "cli_upgrade", "target": target,
+                    "status": "deferred", "initiator": "web-queue"}},
+            )
         return
 
     if _spawn_background_upgrade(version=target):
         with suppress(Exception):
-            _access(rlog, "cli_upgrade запущен", extra={"context": {
+            ilog.info("cli_upgrade запущен", extra={"context": {
                 "task_id": task_id, "task_type": "cli_upgrade", "target": target,
                 "from": current, "status": "applied", "initiator": "web-queue"}})
         await _report_device_task_safe(
@@ -3714,13 +3839,14 @@ async def _apply_device_tasks(client, tasks: list[dict], *, rlog, ilog) -> None:
 
     - ``cli_upgrade`` — запускаем self-upgrade до target и рапортуем факт
       (см. :func:`_apply_cli_upgrade_task`).
-    - ``skill_update`` / ``generic`` — ЗАДЕЛ: пока лог (ACCESS) + skip, терминальный
+    - ``skill_update`` / ``generic`` — ЗАДЕЛ: пока лог (INFO) + skip, терминальный
       статус НЕ шлём (backend переотдаст, когда научимся их применять).
 
     Каждая задача изолирована: сбой одной не валит остальные и не роняет демон.
+    Каждая задача ВИДНА: и успех, и пропуск идут в ``ilog`` (INFO пишется всегда),
+    а не уровнем ACCESS, который на стандартном ERROR-уровне демона молчал.
     """
     from skillery_cli.core.identity import device_uid
-    from skillery_cli.core.logging_setup import access as _access
 
     cdid = device_uid()
     for task in tasks:
@@ -3732,10 +3858,10 @@ async def _apply_device_tasks(client, tasks: list[dict], *, rlog, ilog) -> None:
             if ttype == "cli_upgrade":
                 await _apply_cli_upgrade_task(client, cdid, task, rlog=rlog, ilog=ilog)
             else:
-                # Задел под skill_update/generic: логируем на ACCESS (не пухнет на
-                # стандартном ERROR) и пропускаем без терминального рапорта.
+                # Задел под skill_update/generic: пропуск ВИДЕН (INFO), без
+                # терминального рапорта — backend переотдаст задачу позже.
                 with suppress(Exception):
-                    _access(rlog, "device-task пока не поддержана — пропуск", extra={
+                    ilog.info("device-task пока не поддержана — пропуск", extra={
                         "context": {"task_id": task_id, "task_type": ttype,
                                     "status": "skipped", "initiator": "web-queue"}})
         except Exception as exc:  # noqa: BLE001 — одна задача не валит остальные
@@ -3762,12 +3888,11 @@ async def _daemon_cli_self_upgrade(cfg: ClientConfig, *, force: bool) -> bool:
     Fail-silent: страховка не должна валить демон-цикл. initiator=daemon-auto.
     """
     from skillery_cli import __version__ as current
-    from skillery_cli.core.logging_setup import access as _access
-    from skillery_cli.core.logging_setup import get_logger, install_logger
+    from skillery_cli.core.logging_setup import install_logger
 
     if not cfg.cli_auto_upgrade:
         return False
-    _dlog = get_logger("reconcile")
+    _dlog = install_logger("daemon.log")
     try:
         latest, fresh = _check_cli_update_detailed(cfg)
     except Exception:  # noqa: BLE001 — проверка версии не повод валить демон
@@ -3781,17 +3906,21 @@ async def _daemon_cli_self_upgrade(cfg: ClientConfig, *, force: bool) -> bool:
     # Дедуп: апгрейд уже идёт — второй рвёт trampoline.
     if _upgrade_already_running():
         with suppress(Exception):
-            _access(_dlog, "cli self-upgrade: апгрейд уже идёт — пропуск", extra={
-                "context": {"target": latest, "initiator": "daemon-auto"}})
+            _dlog.info(
+                "cli self-upgrade отложен: апгрейд уже идёт, "
+                "повторим на следующем такте",
+                extra={"context": {"target": latest, "status": "deferred",
+                                   "initiator": "daemon-auto"}},
+            )
         return False
     if _spawn_background_upgrade(version=latest):
         with suppress(Exception):
-            _access(_dlog, "cli self-upgrade запущен", extra={"context": {
+            _dlog.info("cli self-upgrade запущен", extra={"context": {
                 "from": current, "target": latest, "force": force,
                 "status": "applied", "initiator": "daemon-auto"}})
         return True
     with suppress(Exception):
-        install_logger("daemon.log").error(
+        _dlog.error(
             "cli self-upgrade: не удалось запустить обновление",
             extra={"context": {"target": latest, "initiator": "daemon-auto"}},
         )

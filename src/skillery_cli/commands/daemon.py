@@ -14,6 +14,7 @@ import time
 import os
 import subprocess
 import sys
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -183,6 +184,66 @@ def _build_runner(
     )
 
 
+# ЖИВУЧЕСТЬ (инцидент 2026-07-24): любой сбой построения runner'а или самого
+# asyncio-цикла НЕ имеет права убить демон насовсем — секундный сетевой сбой
+# оставлял машину без опроса очереди до перезагрузки. Падение → ERROR в лог,
+# пауза с экспоненциальным ростом, новый заход.
+_SUPERVISOR_BASE_DELAY = 5.0
+_SUPERVISOR_MAX_DELAY = 300.0
+
+
+def _supervise_daemon(
+    interval: float,
+    *,
+    log: Any = None,
+    max_restarts: int | None = None,
+    sleep=time.sleep,  # noqa: ANN001 — точка подмены в тестах
+) -> int:
+    """Держать демон живым: перезапускать цикл при ЛЮБОМ сбое. Возвращает число рестартов.
+
+    Почему это нужно отдельным слоем: ``DaemonRunner.run_forever`` защищает такт,
+    но НЕ защищает ни ``_build_runner`` (чтение конфига/токенов), ни сам
+    ``asyncio.run`` (сбой на старте/остановке loop'а). Живой инцидент: демон
+    умирал после ПЕРВОГО такта с ``TransportError: ConnectError:`` и больше не
+    возвращался — очередь заданий не опрашивалась вообще.
+
+    ``max_restarts`` — предохранитель для тестов (в проде None = бесконечно).
+    """
+    delay = _SUPERVISOR_BASE_DELAY
+    restarts = 0
+    while True:
+        try:
+            runner = _build_runner(interval_seconds=interval)
+            asyncio.run(runner.run_forever())
+            return restarts  # штатная остановка: stop() / SIGTERM
+        except KeyboardInterrupt:
+            emit_message("daemon stopped (KeyboardInterrupt)", level="warn")
+            if log:
+                with suppress(Exception):
+                    log.warning("daemon stopped (KeyboardInterrupt)")
+            return restarts
+        except SystemExit:
+            raise
+        except BaseException as exc:  # noqa: BLE001 — демон не имеет права умереть
+            if log:
+                with suppress(Exception):
+                    log.error(
+                        "daemon цикл упал — перезапуск",
+                        exc_info=exc,
+                        extra={"context": {
+                            "error": str(exc) or repr(exc),
+                            "error_type": type(exc).__name__,
+                            "restarts": restarts + 1,
+                            "retry_in": delay,
+                        }},
+                    )
+        restarts += 1
+        if max_restarts is not None and restarts >= max_restarts:
+            return restarts
+        sleep(delay)
+        delay = min(delay * 2.0, _SUPERVISOR_MAX_DELAY)
+
+
 def cmd_daemon_run(
     interval: float = typer.Option(
         60.0, "--interval", min=1.0, max=3600.0, help="Секунд между циклами"
@@ -238,13 +299,9 @@ def cmd_daemon_run(
         except Exception:  # noqa: BLE001 — страховка не критична
             pass
     try:
-        runner = _build_runner(interval_seconds=interval)
-        try:
-            asyncio.run(runner.run_forever())
-        except KeyboardInterrupt:
-            emit_message("daemon stopped (KeyboardInterrupt)", level="warn")
-            if _log:
-                _log.warning("daemon stopped (KeyboardInterrupt)")
+        # Живучесть: сбой построения runner'а или самого цикла — не смерть демона,
+        # а ERROR + пауза + новый заход (см. :func:`_supervise_daemon`).
+        _supervise_daemon(interval, log=_log)
     finally:
         lock.release()
 
@@ -405,8 +462,6 @@ def cmd_daemon_stop() -> None:
     окно, а остальные продолжали работать. Поэтому здесь честная зачистка:
     PID-файл + поиск живых процессов демона по командной строке.
     """
-    from contextlib import suppress
-
     targets: list[int] = []
     pid = read_running_pid()
     if pid is not None and is_process_alive(pid):

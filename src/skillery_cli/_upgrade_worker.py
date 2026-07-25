@@ -36,7 +36,17 @@ _ERROR_ALREADY_EXISTS = 183
 MUTEX_NAME = "Global\\SkilleryUpgradeSingleton"
 LOCK_FILENAME = "upgrade.lock"  # POSIX-плечо лока; путь считает lock_path()
 
+#: env-оверрайд имени мьютекса — ТОЛЬКО для изоляции тестов. Мьютекс живёт в
+#: ядре, а не в HOME: прогон pytest, взявший боевое имя, заставлял НАСТОЯЩИЙ
+#: демон считать «апгрейд уже идёт» и молча пропускать задачу ``cli_upgrade``.
+MUTEX_ENV = "SKILLERY_UPGRADE_MUTEX"
+
 IS_WIN = sys.platform == "win32"
+
+
+def mutex_name() -> str:
+    """Имя ядерного мьютекса апгрейда (env-оверрайд для изоляции тестов)."""
+    return os.environ.get(MUTEX_ENV) or MUTEX_NAME
 
 
 def lock_path() -> Path:
@@ -131,7 +141,7 @@ def acquire_lock():
             kernel32.CreateMutexW.argtypes = [
                 ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p
             ]
-            handle = kernel32.CreateMutexW(None, True, MUTEX_NAME)
+            handle = kernel32.CreateMutexW(None, True, mutex_name())
             if not handle or ctypes.get_last_error() == _ERROR_ALREADY_EXISTS:
                 return None
             return handle

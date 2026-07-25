@@ -497,7 +497,15 @@ def _secret_store() -> _HubSecretStore:
 
 
 def save_tokens(user_email: str, access: str, refresh: str) -> None:
-    """Сохранить пару токенов через ``librarykit.SecretStore``.
+    """Сохранить ПАРУ токенов через ``librarykit.SecretStore``.
+
+    ⚠️ ПАРУ — а не «что дали». Половинчатая запись (access без refresh) даёт
+    сессию, которая молча умирает через TTL access-токена: обновить её нечем, и
+    наружу летит голое «401 Signature has expired». Такой вызов — ошибка кода
+    (сервер не вернул ``refresh_token`` / вызывающий его потерял), поэтому бьём
+    ``RuntimeError`` сразу, а не пишем битую половину в keyring. Пустая почта
+    запрещена по той же причине: она — КЛЮЧ записи (в проде так появился
+    ключ «1» из JWT-``sub``).
 
     SecretStore сам делает: keyring → при ЛЮБОЙ ошибке записи (вкл. CredWrite
     WinError 1783 на длинных JWT) file-fallback обоих токенов + best-effort
@@ -506,6 +514,18 @@ def save_tokens(user_email: str, access: str, refresh: str) -> None:
     stderr (контракт config.py — у generic-стора его нет): если после save
     keyring пуст, а файл появился, значит запись ушла в file-fallback.
     """
+    missing = [
+        name
+        for name, value in (
+            ("user_email", user_email), ("access", access), ("refresh", refresh)
+        )
+        if not (value or "").strip()
+    ]
+    if missing:
+        raise RuntimeError(
+            "Сессию нельзя сохранить наполовину: не заданы "
+            f"{', '.join(missing)}. Повторите вход."
+        )
     kr = _try_keyring()
     store = _secret_store()
     if kr is None:
