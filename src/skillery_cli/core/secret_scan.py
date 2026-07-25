@@ -106,11 +106,13 @@ def mask_secret(value: str, *, keep: int = 4) -> str:
     return f"{value[:keep]}…{value[-keep:]}"
 
 
-def _mask_line(line: str, *, max_len: int = 120) -> str:
+def mask_line(line: str, *, max_len: int = 120) -> str:
     """Маскирует длинные «секретоподобные» подстроки внутри строки.
 
-    Используется для fallback-snippet: показываем строку, но прячем
-    длинные base64/hex/quoted-значения.
+    Используется для fallback-snippet publish-гейта (показываем строку, но
+    прячем длинные base64/hex/quoted-значения) И для лог-синка (C3): там
+    маскируются ТОЛЬКО те строки, которые пометил сканер — иначе агрессивный
+    regex съел бы обычные slug'и/пути/версии.
     """
     def _repl(m: re.Match[str]) -> str:
         return mask_secret(m.group(0))
@@ -121,6 +123,10 @@ def _mask_line(line: str, *, max_len: int = 120) -> str:
     if len(masked) > max_len:
         masked = masked[:max_len] + "…"
     return masked
+
+
+# Исторический приватный алиас (использовался внутри модуля до C3).
+_mask_line = mask_line
 
 
 # ---------------------------------------------------------------------------

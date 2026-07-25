@@ -381,20 +381,32 @@ class HubClient:
 
         Best-effort: телеметрия не должна ломать команду. Actor резолвится
         бэкендом из Bearer — действие привязывается к пользователю в вебе.
+
+        Исторический ОДИНОЧНЫЙ контракт (level/message/logger/context) не
+        меняется — старые вызовы работают как раньше; батч-канал C3 живёт в
+        :meth:`report_cli_logs`.
         """
-        await self._request(
-            "POST",
-            "/cli-logs",
-            json={
-                "items": [
-                    {
-                        "level": level,
-                        "message": message,
-                        "logger": logger,
-                        "context": context or {},
-                    }
-                ]
-            },
+        await self.report_cli_logs([
+            {
+                "level": level,
+                "message": message,
+                "logger": logger,
+                "context": context or {},
+            }
+        ])
+
+    async def report_cli_logs(self, items: list[dict]) -> dict:
+        """C3 (#1099): батч-отправка буферизованных логов CLI (``POST /cli-logs``).
+
+        Один запрос на пачку записей (уровни/инициатор/контекст уже собраны
+        ``core.log_sync``). Бэкенд принимает до 200 элементов; лимит батча
+        держит клиент (``log_sync.BATCH_LIMIT``). Элемент может нести
+        клиентский ``ts`` — время СОБЫТИЯ, а не приёма (важно для записей,
+        пролежавших в офлайн-буфере). Старый бэкенд, не знающий ``ts``,
+        просто игнорирует лишнее поле.
+        """
+        return await self._request(
+            "POST", "/cli-logs", json={"items": list(items)}
         )
 
     # --- P1 account ---

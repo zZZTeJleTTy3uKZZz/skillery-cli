@@ -2857,6 +2857,15 @@ async def _install_chain(
             }})
         raise
     finally:
+        # C3 (#1099): аудит установки (шаги + причина провала) уезжает на бэк,
+        # чтобы разбирать устройство из веба. Best-effort с жёстким таймаутом —
+        # синк НЕ имеет права держать установку; при офлайне запись остаётся в
+        # дисковом буфере и уедет следующим циклом демона. Это ЕДИНСТВЕННАЯ
+        # точка синка foreground-install (раньше он не синкался вовсе).
+        with suppress(Exception):
+            from skillery_cli.core.log_sync import flush_log_sync_safe
+
+            await flush_log_sync_safe(client)
         await client.close()
 
 
@@ -3602,6 +3611,13 @@ async def _reconcile_device_queue(
                     client, device_tasks, rlog=_rlog, ilog=_ilog
                 )
     finally:
+        # C3 (#1099): ДОСЫЛКА буфера логов — каждый цикл демона, ``force`` (в
+        # обход процессного троттла). Именно тут «догоняют» записи, накопленные
+        # офлайн: провалы install/device-task/демона с уровнем и инициатором.
+        with suppress(Exception):
+            from skillery_cli.core.log_sync import flush_log_sync_safe
+
+            await flush_log_sync_safe(client, force=True)
         await client.close()
     return report
 
@@ -5283,6 +5299,15 @@ def build_app() -> typer.Typer:
             from skillery_cli.core.logging_setup import configure_logging
 
             configure_logging(ClientConfig.load().log_level)
+        # C3 (#1099): автосинк логов на бэк — подключаем ОДИН handler поверх
+        # дерева ``skillery`` (WARNING+ отовсюду, INFO+ из аудита установки).
+        # Он лишь кладёт запись в дисковый буфер; сеть — в flush (install /
+        # цикл демона), поэтому команда не платит за синк ни временем, ни
+        # падением при офлайне.
+        with suppress(Exception):
+            from skillery_cli.core.log_sync import attach_log_sync
+
+            attach_log_sync()
         _heal_daemon_if_dead()
 
     # === Always-on ===

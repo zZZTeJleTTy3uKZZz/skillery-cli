@@ -85,6 +85,15 @@ async def hydrate_session_permissions(
         )
     except Exception:  # noqa: BLE001 — телеметрия не ломает логин
         pass
+    # C3 (#1099): login — первый момент со свежим токеном, поэтому здесь же
+    # досылаем всё, что накопилось в офлайн-буфере (в т.ч. ошибки, случившиеся
+    # у разлогиненного/офлайн CLI). Best-effort, с таймаутом.
+    try:
+        from skillery_cli.core.log_sync import flush_log_sync_safe
+
+        await flush_log_sync_safe(client, force=True)
+    except Exception:  # noqa: BLE001 — синк не ломает логин
+        pass
 
 
 def local_device_identity() -> tuple[str, str, str]:

@@ -213,6 +213,13 @@ def cmd_daemon_run(
         from skillery_cli.core.logging_setup import configure_logging, get_logger
 
         configure_logging(ClientConfig.load().log_level, filename="daemon.log")
+        # C3 (#1099): автосинк логов демона на бэк. Handler только буферизует
+        # (WARNING+ отовсюду, INFO+ из аудита установки); отправка — раз в цикл
+        # в ``_reconcile_device_queue`` (force-flush), поэтому офлайн-периоды
+        # ничего не теряют, а онлайн разбирается из веба.
+        from skillery_cli.core.log_sync import attach_log_sync
+
+        attach_log_sync()
         _log = get_logger("daemon")
         _log.info("daemon started", extra={"context": {"pid": os.getpid()}})
     except Exception:  # noqa: BLE001 — логи не критичны
