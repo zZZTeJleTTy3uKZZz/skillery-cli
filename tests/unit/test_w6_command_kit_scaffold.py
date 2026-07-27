@@ -57,7 +57,12 @@ def test_no_text_plain_flag_output_contract_preserved(
     """``--text``/``--plain`` из build_root_app наружу НЕ торчат (исторический
     контракт: дефолт text, ``--json`` переключает)."""
     app = _build(monkeypatch, None)
-    result = CliRunner().invoke(app, ["--help"])
+    # Ширина терминала фиксируется явно: Rich/Typer переносят длинные строки
+    # помощи по фактической ширине, и на узком терминале CI флаг `--json`
+    # разрывался переносом — тест падал не на контракте, а на окружении.
+    result = CliRunner().invoke(
+        app, ["--help"], env={"COLUMNS": "200", "TERM": "dumb", "NO_COLOR": "1"}
+    )
     assert result.exit_code == 0
     assert "--text" not in result.stdout
     assert "--plain" not in result.stdout
