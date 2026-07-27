@@ -12,13 +12,13 @@ from __future__ import annotations
 import asyncio
 import time
 import os
-import subprocess
 import sys
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
 import typer
+from librarykit.proc import popen as proc_popen
 from rich.console import Console
 
 from skillery_cli.commands import _common
@@ -333,20 +333,17 @@ def _spawn_detached_daemon(interval: float) -> int:
             # CLI не на PATH (dev-окружение) — запускаем пакет как модуль.
             args = [sys.executable, "-m", pkg, "daemon", "run", "--interval", str(interval)]
     if sys.platform == "win32":
-        DETACHED_PROCESS = 0x00000008
-        CREATE_NEW_PROCESS_GROUP = 0x00000200
-        # CREATE_NO_WINDOW обязателен: без него консольный exe может получить
-        # собственное окно (и пользователь видит болтающуюся вкладку терминала).
-        # Демон — фоновый процесс, окна у него быть не должно.
-        CREATE_NO_WINDOW = 0x08000000
-        proc = subprocess.Popen(  # noqa: S603
+        # Флаги считает librarykit.proc (#1144): detached=True даёт
+        # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP, а CREATE_NO_WINDOW кит
+        # ставит на win32 всегда. Второй копии «как правильно на Windows» в
+        # CLI больше нет — политика одна и живёт в ките.
+        import subprocess as _sp  # локально: нужны только константы DEVNULL
+
+        proc = proc_popen(
             args,
-            creationflags=(
-                DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
-            ),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            detached=True,
+            stdout=_sp.DEVNULL,
+            stderr=_sp.DEVNULL,
             close_fds=True,
         )
         return proc.pid

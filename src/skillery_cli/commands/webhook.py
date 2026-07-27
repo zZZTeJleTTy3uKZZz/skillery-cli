@@ -23,7 +23,6 @@
 """
 from __future__ import annotations
 
-import subprocess
 from typing import Any
 
 import typer
@@ -32,6 +31,7 @@ from rich.console import Console
 from skillery_cli.commands import _common
 from skillery_cli.config import ClientConfig
 from skillery_cli.core import repo_connect, webhook_setup
+from skillery_cli.core.proc_runner import run_command
 from skillery_cli.core.transport import HubClient
 from skillery_cli.output import emit_data, is_json
 
@@ -40,7 +40,7 @@ console = Console()
 # Раннер провайдерских CLI (gh/glab). Модульный атрибут — точка инъекции для
 # тестов: ``monkeypatch.setattr(webhook_mod, "RUNNER", fake)``; сети и
 # подпроцессов в тестах нет.
-RUNNER: Any = subprocess.run
+RUNNER: Any = run_command
 
 
 async def _load_skill(client: HubClient, id_or_slug: str) -> tuple[str, str | None]:

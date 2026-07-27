@@ -155,7 +155,8 @@ class TestAutostartActivation:
         def _boom(*a, **k):  # type: ignore[no-untyped-def]
             raise OSError("нет прав")
 
-        monkeypatch.setattr(autostart.subprocess, "run", _boom)
+        # Сейм запуска — модульный алиас `proc_run` (librarykit.proc.run, #1144).
+        monkeypatch.setattr(autostart, "proc_run", _boom)
         result = autostart.activate_autostart(artifact)
         assert result["activated"] is False
 
@@ -315,15 +316,30 @@ class TestNoConsoleWindow:
         assert not legacy.exists(), "две записи автозагрузки = два демона и окно"
         assert (startup / "skillery-daemon.vbs").exists()
 
-    def test_spawn_uses_no_window_flag(self) -> None:
-        """Сам спавн демона тоже должен запрещать окно (CREATE_NO_WINDOW)."""
-        import inspect
+    def test_spawn_uses_no_window_flag(self, monkeypatch) -> None:
+        """Сам спавн демона тоже обязан запрещать окно.
 
+        Раньше это проверялось ГРЕПОМ по исходнику (``"0x08000000" in src``) —
+        проверка текста, а не поведения. После #1144 раскладка флагов живёт в
+        ``librarykit.proc`` (win32 → CREATE_NO_WINDOW всегда, ``detached=True``
+        добавляет DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP), и грепать в CLI
+        уже нечего. Проверяем НАМЕРЕНИЕ, которое CLI передаёт киту.
+        """
         from skillery_cli.commands import daemon as daemon_cmd
 
-        src = inspect.getsource(daemon_cmd._spawn_detached_daemon)
-        assert "CREATE_NO_WINDOW" in src
-        assert "0x08000000" in src
+        seen: dict = {}
+        monkeypatch.setattr(daemon_cmd.sys, "platform", "win32")
+        monkeypatch.setattr(
+            daemon_cmd,
+            "proc_popen",
+            lambda args, **kw: seen.update(args=args, kw=kw)
+            or type("P", (), {"pid": 4321})(),
+        )
+
+        assert daemon_cmd._spawn_detached_daemon(60.0) == 4321
+        assert seen["kw"]["detached"] is True
+        # Своих creationflags CLI не подмешивает — политика окон одна, в ките.
+        assert "creationflags" not in seen["kw"]
 
     def test_vbs_quotes_path_with_spaces(self, tmp_path, monkeypatch) -> None:
         """Путь с пробелами (Program Files) не должен ломать запуск."""
@@ -420,13 +436,15 @@ class TestUpgradeStopsDaemon:
             m, "_detect_upgrade_command", lambda *a, **k: ["echo", "ok"]
         )
 
-        import subprocess as _sp
+        # Спавн worker'а идёт через librarykit.proc.popen (#1144) — политика
+        # флагов win32 живёт в ките, а не в CLI. Патчим ЕГО, а не subprocess.
+        import librarykit.proc as _proc
 
         class _P:
             def __init__(self, *a, **k):
                 order.append("spawn")
 
-        monkeypatch.setattr(_sp, "Popen", _P)
+        monkeypatch.setattr(_proc, "popen", _P)
 
         m._spawn_background_upgrade(delay=0.0)
         assert order[:2] == ["stop", "spawn"]
@@ -448,11 +466,12 @@ class TestWatchdogWindowless:
             autostart, "_resolve_cli_binary", lambda: r"C:\bin\skillery.exe"
         )
         calls: dict = {}
+        # `stderr` теперь строка: librarykit.proc.run по умолчанию text=True.
         monkeypatch.setattr(
-            autostart.subprocess,
-            "run",
+            autostart,
+            "proc_run",
             lambda cmd, **kw: calls.update(cmd=cmd, kw=kw)
-            or type("R", (), {"returncode": 0, "stderr": b""})(),
+            or type("R", (), {"returncode": 0, "stderr": ""})(),
         )
         return autostart, calls
 

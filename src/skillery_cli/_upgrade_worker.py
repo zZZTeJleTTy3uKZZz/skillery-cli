@@ -12,6 +12,15 @@
 в ``daemon/single_instance.py``): импортировать её здесь нельзя по той же
 причине. Дубль намеренный и локальный — держим его минимальным.
 
+ПО ТОЙ ЖЕ ПРИЧИНЕ ЭТОТ МОДУЛЬ — ЕДИНСТВЕННОЕ ИСКЛЮЧЕНИЕ ИЗ ``librarykit.proc``
+(#1144, см. allowlist в ``tests/test_no_raw_subprocess.py``). Запускает нас
+БАЗОВЫЙ интерпретатор (``sys.base_prefix``, см. ``_upgrade_launcher`` в
+``__main__``), а не python tool-venv — ``librarykit`` там просто не установлен,
+``from librarykit.proc import run`` упал бы ``ModuleNotFoundError`` и апгрейд
+перестал бы работать вовсе. Поэтому политику «без окна» модуль несёт сам:
+:func:`_no_window_kwargs` (``CREATE_NO_WINDOW`` + ``DEVNULL`` на все три потока),
+и КАЖДЫЙ ``subprocess.run`` здесь обязан идти с явным ``timeout``.
+
 Порядок работы (всё best-effort, апгрейд важнее аккуратности):
 1. взять single-flight лок — два одновременных апгрейда рвут trampoline;
 2. подождать, пока выйдет породивший нас launcher;

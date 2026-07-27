@@ -190,7 +190,12 @@ def _capture_spawn(monkeypatch, home=None) -> dict:
     calls: dict[str, Any] = {}
     tmp_home = Path(home or tempfile.mkdtemp())
     monkeypatch.setattr(main_mod.Path, "home", classmethod(lambda cls: tmp_home))
-    monkeypatch.setattr("subprocess.Popen", lambda cmd, **kw: calls.update(cmd=cmd, kw=kw))
+    # Спавн worker'а идёт через librarykit.proc.popen (#1144): политика флагов
+    # win32 (DETACHED + CREATE_NEW_PROCESS_GROUP + CREATE_NO_WINDOW) считается
+    # в ките, поэтому сейм для двойника — именно он, а не голый subprocess.
+    monkeypatch.setattr(
+        "librarykit.proc.popen", lambda cmd, **kw: calls.update(cmd=cmd, kw=kw)
+    )
     monkeypatch.setattr(main_mod, "_stop_daemon_for_upgrade", lambda: None)
     monkeypatch.setattr(main_mod, "_upgrade_already_running", lambda: False)
 
@@ -389,18 +394,28 @@ class TestNoVisibleConsoleWindows:
     держим инварианты СПАВНА worker'а из CLI.
     """
 
-    def test_outer_does_not_mix_exclusive_flags(self, monkeypatch) -> None:
-        """CREATE_NO_WINDOW ИГНОРИРУЕТСЯ вместе с DETACHED_PROCESS (док Win32).
+    def test_outer_spawn_delegates_window_policy_to_kit(self, monkeypatch) -> None:
+        """CLI не считает creationflags сам — их считает ``librarykit.proc`` (#1144).
 
-        Комбинация создавала ложное ощущение, будто окно подавлено именно ею.
+        Раньше здесь фиксировалось ровно ``DETACHED_PROCESS``: рассуждение было
+        «CREATE_NO_WINDOW при DETACHED всё равно игнорируется, значит его тут
+        быть не должно». Это верно про Win32, но привело к тому, что у КАЖДОГО
+        вызова был свой набор флагов, и на девяти вызовах из десяти
+        CREATE_NO_WINDOW просто забыли — отсюда чёрные окна ``uv.EXE``.
+
+        Инвариант теперь другой и проверяем именно он: CLI передаёт НАМЕРЕНИЕ
+        (``detached=True``), а раскладку флагов держит кит одним местом.
         """
         cap = _capture_spawn(monkeypatch)
         monkeypatch.setattr(main_mod.sys, "platform", "win32")
         monkeypatch.setattr(main_mod.Path, "exists", lambda self: True)
 
         main_mod._spawn_background_upgrade(delay=0, version="1.2.3")
-        flags = cap["read"]()["kw"]["creationflags"]
-        assert flags == 0x00000008, hex(flags)
+        kw = cap["read"]()["kw"]
+        assert kw["detached"] is True
+        # Своих creationflags CLI не подмешивает — иначе вернулась бы вторая,
+        # расходящаяся политика окон.
+        assert "creationflags" not in kw
 
     def test_launcher_prefers_windowless_python(self, monkeypatch) -> None:
         monkeypatch.setattr(main_mod.sys, "platform", "win32")
@@ -435,7 +450,8 @@ def test_cmd_upgrade_windows_spawns_background(monkeypatch: pytest.MonkeyPatch) 
         lambda *a, **k: (spawned.__setitem__("n", spawned["n"] + 1) or True),
     )
     ran_sync = {"n": 0}
-    monkeypatch.setattr("subprocess.run", lambda *a, **k: ran_sync.__setitem__("n", 1))
+    # Синхронная ветка `upgrade` теперь зовёт librarykit.proc.run (#1144).
+    monkeypatch.setattr("librarykit.proc.run", lambda *a, **k: ran_sync.__setitem__("n", 1))
 
     main_mod.cmd_upgrade(check=False)
     assert spawned["n"] == 1  # ушло в фон

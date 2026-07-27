@@ -87,21 +87,29 @@ def test_install_rejects_symlink_escape(tmp_path: Path) -> None:
 
 
 def test_antigravity_layout_paths(tmp_path: Path) -> None:
-    t = AntigravityTarget(root=tmp_path / ".antigravity")
-    assert t.name == "antigravity"
-    # Кит 0.3.0: навыки лежат в `config/skills` — путь, который агент реально
-    # читает (прежний `.antigravity/skills` он игнорировал).
-    assert t.base_dir() == tmp_path / ".antigravity" / "config" / "skills"
-    assert (
-        t.slug_dir("foo") == tmp_path / ".antigravity" / "config" / "skills" / "foo"
-    )
-    # Кит 0.3.0: у antigravity ТОЛЬКО глобальная раскладка — проектный scope
-    # осознанно запрещён (агент не читает навыки из рабочего каталога), поэтому
-    # вместо тихой установки «в никуда» летит явная ошибка.
-    from skillkit.errors import ScopeUnsupported
+    """Раскладка agy = ``.agents/skills`` (единый источник правды — кит, #1148).
 
-    with pytest.raises(ScopeUnsupported):
-        t.slug_dir("foo", project=tmp_path / "p")
+    Тест ОТСТАЛ от кита: он фиксировал раскладку кита 0.3.0
+    (``.antigravity/config/skills`` + запрет project-scope). С кита 0.3.1
+    (коммит ``b6ff6a8``, решение владельца 2026-07-22) навыки agy сведены в
+    ОБЩИЙ агентский каталог ``.agents/skills`` — тот же, что у Codex/OpenCode, —
+    и project-scope у agy РАЗРЕШЁН. ``~/.gemini/config`` остался домом КОНФИГА
+    agy (mcp_config.json/plugins), но не каталогом навыков.
+
+    Правим тест, а не код: карта путей агентов централизована в ките
+    (``skillkit.targets.*`` + ``skillkit.agent_skill_dir``), CLI её только
+    реэкспортирует — заводить в CLI вторую, расходящуюся правду нельзя.
+    Два корня («дом конфига» vs «каталог навыков») здесь и проверяются:
+    ``root=`` задаёт дом конфига, а навыки лежат у него в СОСЕДЯХ.
+    """
+    t = AntigravityTarget(root=tmp_path / ".gemini")
+    assert t.name == "antigravity"
+    # Каталог навыков — сосед дома конфига, а не подпапка в нём.
+    assert t.base_dir() == tmp_path / ".agents" / "skills"
+    assert t.slug_dir("foo") == tmp_path / ".agents" / "skills" / "foo"
+    # project-scope у agy теперь поддержан: <project>/.agents/skills/<slug>.
+    project = tmp_path / "p"
+    assert t.slug_dir("foo", project=project) == project / ".agents" / "skills" / "foo"
     assert "_local/" in t.preserved_paths()
 
 

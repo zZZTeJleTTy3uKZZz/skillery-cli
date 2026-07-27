@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "skillery-cli"
-version = "0.5.68"
+version = "0.5.69"
 description = "Skillery CLI — клиент маркетплейса AI-навыков для агентов (Claude Code, Codex)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -28,9 +28,15 @@ dependencies = [
     "keyring>=25.0",
     "pydantic>=2.9",
     "pathspec>=0.12.0",
-    "s-librarykit>=0.1.4",
+    # >=0.7.1 — модуль librarykit.proc (единая политика запуска подпроцессов:
+    # на win32 ВСЕГДА CREATE_NO_WINDOW, обязательный timeout, stdin=DEVNULL).
+    # Без него всплывали консольные окна uv/powershell при фоновой установке (#1144).
+    "s-librarykit>=0.7.1",
     "s-clikit>=0.1.4",
-    "s-skillkit>=0.2.2",
+    # >=0.3.3 — кит переведён на librarykit.proc (свои subprocess без окон),
+    # .pkgsrc не течёт в зону агента, снапшот-установка помечается source="hub"
+    # (без этого навык молча выпадал из автообновления, см. миграцию меты #1145).
+    "s-skillkit>=0.3.3",
     "s-skillgate>=0.1.2",  # единый secret-scan (G5): regex-fallback publish-гейта на skillgate
 ]
 

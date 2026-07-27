@@ -19,12 +19,12 @@ from __future__ import annotations
 import json
 import re
 import shutil
-import subprocess
 import tempfile
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
+from librarykit.proc import run as proc_run
 from skillgate.rules import load_allowlist, load_rules
 from skillgate.scanner import scan_text as _skillgate_scan_text
 
@@ -279,13 +279,13 @@ def gitleaks_scan_dir(root: Path) -> list[Finding]:
             "1",
             "--no-banner",
         ]
-        # Фиксированный argv, без shell — безопасно.
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-        )
+        # Фиксированный argv, без shell — безопасно. Таймаут 300s: скан
+        # дерева навыка укладывается в секунды, но на крупном репо с большими
+        # бинарями бывает дольше; раньше таймаута не было вовсе и зависший
+        # gitleaks вешал publish намертво.
+        proc = proc_run(cmd, timeout=300)
         # 0 = clean, 1 = leaks found. Прочее = реальная ошибка gitleaks.
+        # Таймаут (returncode=-1) сюда же — деградируем на regex, а не молчим.
         if proc.returncode not in (0, 1):
             raise RuntimeError(
                 f"gitleaks завершился с кодом {proc.returncode}: "

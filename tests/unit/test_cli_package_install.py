@@ -120,3 +120,60 @@ class TestUninstall:
             cpi.uninstall_cli_package("x", which=lambda n: None, runner=lambda c: 0)
             is False
         )
+
+
+class TestNoConsoleWindow:
+    """#1144: именно этот модуль всплывал чёрными окнами ``uv.EXE``.
+
+    Демон стартует DETACHED (своей консоли нет), поэтому консольный ``uv`` без
+    ``CREATE_NO_WINDOW`` получает от Windows СВОЮ — владелец видел окна поверх
+    браузера, пока навык ставился в фоне. ``capture_output=True`` окно НЕ
+    подавляет: перенаправление stdio и аллокация консоли — независимые вещи.
+
+    Инвариант проверяем НЕ грепом по исходнику, а по факту делегирования:
+    дефолтный раннер обязан уходить в ``librarykit.proc.run`` (там политика
+    win32 и обязательный таймаут живут одним местом).
+    """
+
+    def test_default_runner_delegates_to_librarykit_proc(self, monkeypatch) -> None:
+        seen: dict = {}
+
+        def _fake_run(cmd, **kw):  # noqa: ANN001
+            seen.update(cmd=cmd, kw=kw)
+            return type("R", (), {"returncode": 0})()
+
+        monkeypatch.setattr(cpi, "proc_run", _fake_run)
+
+        assert cpi._default_runner(["uv", "--version"]) == 0
+        assert seen["cmd"] == ["uv", "--version"]
+        # Таймаут обязателен контрактом кита: зависший uv в фоне некому прервать.
+        assert seen["kw"]["timeout"] == cpi._INSTALL_TIMEOUT_S
+        # Окно НЕ разрешаем — это и есть весь смысл правки.
+        assert seen["kw"].get("allow_console") in (None, False)
+
+    def test_install_uses_long_timeout_and_check_uses_short(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Таймауты по природе операции: сборка пакета ≫ ``<cmd> --version``."""
+        _mkpkg(tmp_path)
+        timeouts: list[float] = []
+
+        def _fake_run(cmd, **kw):  # noqa: ANN001
+            timeouts.append(kw["timeout"])
+            return type("R", (), {"returncode": 0})()
+
+        monkeypatch.setattr(cpi, "proc_run", _fake_run)
+        cpi.install_cli_package(tmp_path, uv_path="uv", which=lambda n: "/bin/" + n)
+
+        assert timeouts[0] == cpi._INSTALL_TIMEOUT_S
+        assert timeouts[1] == cpi._CHECK_TIMEOUT_S
+        assert cpi._CHECK_TIMEOUT_S < cpi._INSTALL_TIMEOUT_S
+
+    def test_runner_failure_is_not_fatal(self, monkeypatch) -> None:
+        """Сбой запуска = rc 1, а не исключение наружу (установку не валим)."""
+
+        def _boom(cmd, **kw):  # noqa: ANN001
+            raise OSError("нет uv")
+
+        monkeypatch.setattr(cpi, "proc_run", _boom)
+        assert cpi._default_runner(["uv"]) == 1

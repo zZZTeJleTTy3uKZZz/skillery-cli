@@ -11,15 +11,22 @@
 на PATH. Рукодельный shim при этом не нужен — uv создаёт настоящий entry-point из
 ``[project.scripts]`` пакета. Снятие — ``uv tool uninstall <project.name>``.
 
-Модуль без побочных зависимостей: subprocess-раннер инъектируется (тесты), а вся
+Модуль без побочных зависимостей: раннер подпроцесса инъектируется (тесты), а вся
 логика (парс pyproject, сборка команды, классификация результата) — чистая.
+
+⚠️ Запуск идёт ТОЛЬКО через :func:`librarykit.proc.run` (#1144). Именно этот
+модуль всплывал чёрными окнами ``uv.EXE`` поверх браузера: демон стартует
+DETACHED (своей консоли нет), а консольный ребёнок без ``CREATE_NO_WINDOW``
+получает от Windows СВОЮ. ``capture_output=True`` окно НЕ подавляет —
+перенаправление stdio и аллокация консоли в Win32 независимы.
 """
 from __future__ import annotations
 
 import shutil
-import subprocess
 from collections.abc import Callable
 from pathlib import Path
+
+from librarykit.proc import run as proc_run
 
 try:  # py>=3.11 (requires-python >=3.11) — есть всегда; guard на всякий случай
     import tomllib
@@ -68,13 +75,34 @@ def read_pyproject_cli(pkg_root: Path) -> dict | None:
     }
 
 
+#: Таймауты по природе операции, а не «одно число на всё».
+#: Установка тянет колёса и собирает пакет — минуты (сетевой канал бывает узким).
+_INSTALL_TIMEOUT_S = 900.0
+#: Self-check — это ``<cmd> --version``: секунды. Отдельный таймаут нужен, чтобы
+#: зависшая на PATH чужая одноимённая команда не держала установку 15 минут.
+_CHECK_TIMEOUT_S = 60.0
+
+
+def _make_runner(timeout: float) -> Runner:
+    """Раннер «argv → returncode» поверх :func:`librarykit.proc.run`.
+
+    ``proc.run`` на win32 ВСЕГДА ставит ``CREATE_NO_WINDOW`` — ровно этого не
+    хватало здесь, когда демон ставил навык в фоне (#1144). Таймаут обязателен
+    контрактом кита: фоновому демону некому нажать Ctrl-C у зависшего ``uv``.
+    """
+
+    def _run(cmd: list[str]) -> int:
+        try:
+            return proc_run(cmd, timeout=timeout).returncode
+        except Exception:  # noqa: BLE001 — установка не падает из-за запуска
+            return 1
+
+    return _run
+
+
 def _default_runner(cmd: list[str]) -> int:
-    try:
-        return subprocess.run(  # noqa: S603
-            cmd, capture_output=True, timeout=900
-        ).returncode
-    except Exception:  # noqa: BLE001
-        return 1
+    """Дефолтный раннер установки (сохранён как имя — его патчат снаружи)."""
+    return _make_runner(_INSTALL_TIMEOUT_S)(cmd)
 
 
 def install_cli_package(
@@ -114,7 +142,9 @@ def install_cli_package(
         report["reason"] = "не найден uv — нужен для установки CLI-пакета навыка"
         return report
 
-    run = runner or _default_runner
+    run = runner or _make_runner(_INSTALL_TIMEOUT_S)
+    # Self-check короче установки; при инъекции раннера (тесты) — тот же объект.
+    check_run = runner or _make_runner(_CHECK_TIMEOUT_S)
     # Ровно как install/install.py навыка: из корня распакованного снапшота.
     rc = run([uv, "tool", "install", "--force", str(pkg_root)])
     _debug("uv tool install", step="cli_package_uv", package=info["name"], rc=rc)
@@ -130,7 +160,9 @@ def install_cli_package(
         on_path = exe is not None
         # Проверяем запуск ТОЛЬКО если бинарь уже на PATH — иначе PATH просто не
         # обновился в текущем процессе (не провал установки).
-        ok = bool(on_path) and (run([exe, "--version"]) == 0 or run([exe, "--help"]) == 0)
+        ok = bool(on_path) and (
+            check_run([exe, "--version"]) == 0 or check_run([exe, "--help"]) == 0
+        )
         _debug("cli command self-check", step="cli_package_check",
                command=name, on_path=on_path, ok=ok)
         report["commands"].append({"name": name, "on_path": on_path, "ok": ok})
@@ -150,5 +182,6 @@ def uninstall_cli_package(
     uv = uv_path or which("uv")
     if not uv:
         return False
-    run = runner or _default_runner
+    # Снятие быстрое (удаление tool-venv) — таймаут self-check'а, не установки.
+    run = runner or _make_runner(_CHECK_TIMEOUT_S)
     return run([uv, "tool", "uninstall", package_name]) == 0

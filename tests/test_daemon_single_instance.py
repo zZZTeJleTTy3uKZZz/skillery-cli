@@ -78,12 +78,11 @@ class TestProcessDiscoverySafety:
         """Себя в список на убийство не добавляем."""
         import os
 
-        fake = f"{os.getpid()}\n999999\n".encode()
-
+        # librarykit.proc.run отдаёт text=True → stdout строкой, не bytes.
         class _R:
-            stdout = fake
+            stdout = f"{os.getpid()}\n999999\n"
 
-        monkeypatch.setattr(si.subprocess, "run", lambda *a, **k: _R())
+        monkeypatch.setattr(si, "proc_run", lambda *a, **k: _R())
         pids = si.find_daemon_pids()
         assert os.getpid() not in pids
 
@@ -91,7 +90,7 @@ class TestProcessDiscoverySafety:
         def _boom(*a, **k):  # type: ignore[no-untyped-def]
             raise FileNotFoundError("нет powershell/pgrep")
 
-        monkeypatch.setattr(si.subprocess, "run", _boom)
+        monkeypatch.setattr(si, "proc_run", _boom)
         assert si.find_daemon_pids() == []
 
 

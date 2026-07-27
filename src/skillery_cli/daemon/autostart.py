@@ -11,15 +11,20 @@
 вызывает sudo и не модифицирует system-wide settings — это безопасно
 для CI / shared dev-окружения. Тоже самое означает, что эта функция
 тестируется на mock filesystem.
+
+Все внешние команды (``schtasks``, ``systemctl``, ``launchctl``) идут через
+:func:`librarykit.proc.run` (#1144): флаг «без консольного окна» стоял здесь
+ровно в ОДНОМ месте из трёх (watchdog), а активация автозапуска мигала окном.
 """
 from __future__ import annotations
 
 import os
 import shutil
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+from librarykit.proc import run as proc_run
 
 from skillery_cli import _branding
 
@@ -400,14 +405,12 @@ def activate_autostart(artifact: AutostartArtifact) -> dict[str, object]:
     try:
         # systemd требует перечитать юниты перед enable.
         if artifact.platform == "linux":
-            subprocess.run(
-                ["systemctl", "--user", "daemon-reload"],
-                check=False, capture_output=True, timeout=30,
-            )
-        proc = subprocess.run(cmd, check=False, capture_output=True, timeout=60)
+            proc_run(["systemctl", "--user", "daemon-reload"], timeout=30)
+        # 60s: schtasks/launchctl отвечают за секунды; больше — уже вис.
+        proc = proc_run(cmd, timeout=60)
         if proc.returncode == 0:
             return {"activated": True, "command": " ".join(cmd), "error": None}
-        err = (proc.stderr or b"").decode("utf-8", "ignore").strip()
+        err = (proc.stderr or "").strip()
         return {"activated": False, "command": " ".join(cmd), "error": err[:300]}
     except Exception as exc:  # автозапуск — не повод валить вход
         return {"activated": False, "command": " ".join(cmd), "error": str(exc)}
@@ -522,11 +525,12 @@ def install_watchdog(
         vbs = _write_watchdog_vbs(home_dir or Path.home())
         # /TR = wscript //B (batch, без диалогов) на безоконный .vbs.
         tr = f'wscript.exe //B //Nologo "{vbs}"'
-        proc = subprocess.run(
+        # creationflags тут больше не задаются вручную: «без вспышки» —
+        # инвариант librarykit.proc.run на win32, а не свойство этого вызова.
+        proc = proc_run(
             ["schtasks", "/Create", "/F", "/SC", "MINUTE", "/MO", str(interval_min),
              "/TN", task, "/TR", tr],
-            capture_output=True, timeout=30, check=False,
-            creationflags=0x08000000,  # без вспышки у самой команды создания
+            timeout=30,
         )
         ok = proc.returncode == 0
         return {
@@ -534,7 +538,7 @@ def install_watchdog(
             "task": task,
             "interval_min": interval_min,
             "launcher": str(vbs),
-            "error": None if ok else (proc.stderr or b"").decode("utf-8", "ignore")[:200],
+            "error": None if ok else (proc.stderr or "")[:200],
         }
     except Exception as exc:  # noqa: BLE001 — watchdog не критичен
         return {"installed": False, "error": str(exc)}

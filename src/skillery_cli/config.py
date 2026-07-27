@@ -125,6 +125,7 @@ class _HubAppConfig(AppConfig):
     cli_latest_version: str | None = None
     cli_auto_upgrade: bool = True
     log_level: str = "error"
+    store_meta_migrated: bool = False
 
 
 @dataclass
@@ -180,6 +181,12 @@ class ClientConfig:
     cli_auto_upgrade: bool = True
     """Само-обновление CLI: при обнаружении новой версии тихо обновиться в фоне
     (uv tool / pipx / pip). False → только уведомление + ручной `skillery upgrade`."""
+    store_meta_migrated: bool = False
+    """Маркер одноразовой починки меты стора (#1145, `core.store_migrations`).
+
+    До s-skillkit 0.3.3 снапшот-установки из хаба помечались source="local-path"
+    и молча выпадали из автообновления. Флаг ставится после первого прохода —
+    повторные запуски CLI/демона миграцию не гоняют."""
 
     def __post_init__(self) -> None:
         if not self.base_url:
@@ -264,6 +271,7 @@ class ClientConfig:
             cli_latest_version=ac.cli_latest_version,
             cli_auto_upgrade=bool(ac.cli_auto_upgrade),
             log_level=str(ac.log_level or "error"),
+            store_meta_migrated=bool(ac.store_meta_migrated),
         )
 
     def save(self, path: Path | None = None) -> None:
@@ -310,6 +318,8 @@ class ClientConfig:
         if self.cli_latest_version:
             data["cli_latest_version"] = self.cli_latest_version
         data["cli_auto_upgrade"] = self.cli_auto_upgrade
+        if self.store_meta_migrated:
+            data["store_meta_migrated"] = True
         _atomic_write_text(actual_path, tomli_w.dumps(data))
 
     def has_permission(self, permission_key: str) -> bool:

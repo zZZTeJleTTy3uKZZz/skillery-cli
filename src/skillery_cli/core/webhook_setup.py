@@ -48,11 +48,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import subprocess
+import subprocess  # noqa: F401 — только тип SubprocessError; запуск через proc
 import urllib.parse
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from skillery_cli.core.proc_runner import run_command
 from skillery_cli.core.repo_connect import CommandRunner, RepoSlug
 
 # Провайдер → локальный CLI, которым ходим в его API.
@@ -373,7 +374,7 @@ def ensure_provider_hook(
     callback_url: str,
     skill_id: str | int,
     secret: str,
-    runner: CommandRunner = subprocess.run,
+    runner: CommandRunner = run_command,
 ) -> HookOutcome:
     """Создать ИЛИ обновить hook ЭТОГО навыка у провайдера (идемпотентно).
 
@@ -459,7 +460,7 @@ def probe_provider_hook(
     repo: RepoSlug,
     callback_url: str,
     skill_id: str | int,
-    runner: CommandRunner = subprocess.run,
+    runner: CommandRunner = run_command,
 ) -> HookState:
     """Посмотреть глазами провайдера: есть ли hook ЭТОГО навыка и была ли доставка.
 
@@ -526,7 +527,7 @@ def delete_provider_hook(
     repo: RepoSlug,
     callback_url: str,
     skill_id: str | int,
-    runner: CommandRunner = subprocess.run,
+    runner: CommandRunner = run_command,
 ) -> HookOutcome:
     """Снять hook ЭТОГО навыка у провайдера (best-effort, идемпотентно).
 

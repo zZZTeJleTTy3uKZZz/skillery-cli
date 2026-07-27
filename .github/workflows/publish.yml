@@ -45,13 +45,10 @@ jobs:
       - name: Sync deps
         run: uv sync --all-extras --dev
 
-      # Два падения известны и не связаны с релизом (task #1148) — сняты точечно,
-      # чтобы гейт не был вечно красным. Убрать deselect вместе с их починкой.
+      # Исключений НЕТ (#1148 закрыт: раскладка agy приведена к киту .agents/skills,
+      # тест-двойник _install_chain принимает текущую сигнатуру). Гейт — весь набор.
       - name: Tests
-        run: >
-          uv run pytest tests/ -q
-          --deselect tests/unit/test_e48_install_layout.py::test_antigravity_layout_paths
-          --deselect tests/unit/test_ed_personal_sync.py::test_roundtrip_push_then_pull_syncs_set
+        run: uv run pytest tests/ -q
 
       # Только фатальные правила (синтаксис/undefined names). Полный ruff в этом
       # репозитории даёт ~2300 стилистических замечаний (кириллица в комментариях) —

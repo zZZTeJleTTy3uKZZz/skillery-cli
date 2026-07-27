@@ -159,7 +159,7 @@ def test_scan_dir_clean_regex(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 def test_scan_dir_uses_gitleaks_when_available(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """gitleaks доступен → subprocess замокан, отчёт распарсен."""
+    """gitleaks доступен → запуск (librarykit.proc.run) замокан, отчёт распарсен."""
     monkeypatch.setattr(secret_scan, "gitleaks_available", lambda: True)
 
     gitleaks_report = [
@@ -177,13 +177,13 @@ def test_scan_dir_uses_gitleaks_when_available(
         stdout = ""
         stderr = ""
 
-    def _fake_run(cmd, capture_output, text):
+    def _fake_run(cmd, **_kw):
         # Эмулируем gitleaks: пишем JSON-отчёт в --report-path.
         idx = cmd.index("--report-path")
         Path(cmd[idx + 1]).write_text(json.dumps(gitleaks_report), encoding="utf-8")
         return _FakeProc()
 
-    monkeypatch.setattr(secret_scan.subprocess, "run", _fake_run)
+    monkeypatch.setattr(secret_scan, "proc_run", _fake_run)
 
     result = scan_dir(tmp_path)
     assert result.backend == "gitleaks"
@@ -208,12 +208,12 @@ def test_scan_dir_gitleaks_clean_report(
         stdout = ""
         stderr = ""
 
-    def _fake_run(cmd, capture_output, text):
+    def _fake_run(cmd, **_kw):
         idx = cmd.index("--report-path")
         Path(cmd[idx + 1]).write_text("[]", encoding="utf-8")
         return _FakeProc()
 
-    monkeypatch.setattr(secret_scan.subprocess, "run", _fake_run)
+    monkeypatch.setattr(secret_scan, "proc_run", _fake_run)
     result = scan_dir(tmp_path)
     assert result.backend == "gitleaks"
     assert result.findings == []
@@ -231,9 +231,7 @@ def test_scan_dir_gitleaks_crash_falls_back_to_regex(
         stdout = ""
         stderr = "boom"
 
-    monkeypatch.setattr(
-        secret_scan.subprocess, "run", lambda *a, **k: _FakeProc()
-    )
+    monkeypatch.setattr(secret_scan, "proc_run", lambda *a, **k: _FakeProc())
     result = scan_dir(tmp_path)
     assert result.backend == "regex"
     assert result.gitleaks_available is True  # был доступен, но упал

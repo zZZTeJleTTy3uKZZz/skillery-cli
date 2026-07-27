@@ -15,13 +15,18 @@
 
 Оба механизма отпускаются вместе с процессом — «залипшего» состояния, из-за
 которого демон потом не смог бы стартовать, не остаётся.
+
+Перечисление процессов (``powershell Get-CimInstance`` / ``pgrep``) идёт через
+:func:`librarykit.proc.run` (#1144): опрос зовётся ПЕРИОДИЧЕСКИ, и без
+``CREATE_NO_WINDOW`` каждый тик мигал бы консольным окном powershell.
 """
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 from pathlib import Path
+
+from librarykit.proc import run as proc_run
 
 __all__ = [
     "DaemonLock",
@@ -165,15 +170,15 @@ def _windows_daemon_pids() -> list[int]:
         "Select-Object -ExpandProperty ProcessId"
     )
     try:
-        proc = subprocess.run(
+        # 30s — powershell стартует медленно (загрузка CLR), но CIM-запрос
+        # локальный: дольше этого он уже висит, а не работает.
+        proc = proc_run(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
-            capture_output=True,
             timeout=30,
-            check=False,
         )
     except Exception:
         return []
-    out = (proc.stdout or b"").decode("utf-8", "ignore")
+    out = proc.stdout or ""
     pids: list[int] = []
     for line in out.splitlines():
         line = line.strip()
@@ -186,15 +191,10 @@ def _posix_daemon_pids() -> list[int]:
     try:
         # Тот же принцип, что и на Windows: только НАШ процесс, а не любой,
         # где в аргументах попались эти слова.
-        proc = subprocess.run(
-            ["pgrep", "-f", r"skillery.*daemon run"],
-            capture_output=True,
-            timeout=30,
-            check=False,
-        )
+        proc = proc_run(["pgrep", "-f", r"skillery.*daemon run"], timeout=30)
     except Exception:
         return []
-    out = (proc.stdout or b"").decode("utf-8", "ignore")
+    out = proc.stdout or ""
     return [
         int(line.strip())
         for line in out.splitlines()

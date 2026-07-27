@@ -24,11 +24,11 @@ from __future__ import annotations
 
 import importlib.util
 import shutil
-import subprocess
 import sys
 from dataclasses import dataclass
 
 import typer
+from librarykit.proc import run as proc_run
 from rich.console import Console
 from rich.table import Table
 
@@ -82,12 +82,10 @@ def _probe_python() -> Result:
 
 def _pip_available() -> bool:
     try:
-        proc = subprocess.run(
-            [sys.executable, "-m", "pip", "--version"],
-            capture_output=True,
-            check=False,
-        )
-        return proc.returncode == 0
+        # `pip --version` — локальная проверка, секунды; 30s с запасом на
+        # холодный импорт. Раньше таймаута не было вовсе: подвисший pip
+        # (сетевой индекс в конфиге) вешал бы весь `doctor` навсегда.
+        return proc_run([sys.executable, "-m", "pip", "--version"], timeout=30).ok
     except OSError:
         return False
 

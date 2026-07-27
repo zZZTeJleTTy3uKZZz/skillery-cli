@@ -182,8 +182,11 @@ def test_roundtrip_push_then_pull_syncs_set(
     )
     pulled: list[str] = []
 
-    async def _spy_chain(cfg_, access, *, slug, channel, scope, project_path,
-                         force, agent_target, source=None):
+    # Двойник принимает ЛЮБЫЕ keyword-аргументы: у `_install_chain` они
+    # прибавлялись со временем (`headless`, `initiator`), и жёсткая сигнатура
+    # спая роняла тест TypeError'ом на каждом расширении контракта (#1148).
+    # Смысл теста — НАБОР подтянутых slug'ов, а не форма вызова.
+    async def _spy_chain(cfg_, access, *, slug, **_kwargs):
         pulled.append(slug)
         return [{"slug": slug, "version": "1.0.0"}]
 

@@ -15,12 +15,14 @@
 from __future__ import annotations
 
 import json
-import subprocess
+import subprocess  # noqa: F401 — только тип исключения SubprocessError; запуск через proc
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 from urllib import request as _urlrequest
 from urllib.error import HTTPError, URLError
+
+from skillery_cli.core.proc_runner import run_command
 
 # Имя создаваемого GitLab project-токена (видно в настройках проекта).
 _GITLAB_TOKEN_NAME = "skillery-sync"
@@ -131,14 +133,18 @@ def github_repo_is_public(
     return None
 
 
-# Раннер подпроцесса (subprocess.run-совместимый) — инъекция для тестов.
-CommandRunner = Callable[..., subprocess.CompletedProcess]
+# Раннер подпроцесса (``subprocess.run``-совместимый по форме) — инъекция для
+# тестов. Дефолт — адаптер поверх ``librarykit.proc`` (#1144): на win32 всегда
+# CREATE_NO_WINDOW (``glab`` не мигает окном из фонового демона) и обязательный
+# таймаут. Тип оставлен широким (``Callable[..., Any]``), потому что двойники в
+# тестах возвращают свои объекты с полями returncode/stdout/stderr.
+CommandRunner = Callable[..., Any]
 
 
 def create_gitlab_project_token(
     slug: RepoSlug,
     *,
-    runner: CommandRunner = subprocess.run,
+    runner: CommandRunner = run_command,
     now: Optional[datetime] = None,
 ) -> Optional[str]:
     """Создать GitLab project access token (scope ``read_api``) через ``glab``.

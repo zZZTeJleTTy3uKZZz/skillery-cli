@@ -18,7 +18,7 @@ import time
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import typer
 from clikit.command_kit import build_root_app, gated
@@ -691,22 +691,22 @@ def _spawn_background_upgrade(
         )
     except Exception:
         return False
+    from librarykit.proc import popen as proc_popen
+
     popen_kw: dict = {
         "stdout": subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,
-        "stdin": subprocess.DEVNULL,
     }
-    if sys.platform == "win32":
-        # ⚠ Только DETACHED_PROCESS: по документации Win32 CREATE_NO_WINDOW
-        # ИГНОРИРУЕТСЯ, если задан DETACHED_PROCESS (флаги взаимоисключающие).
-        # Консоли у процесса не будет и так; комбинация лишь вводила в
-        # заблуждение, будто окно подавлено именно ею.
-        popen_kw["creationflags"] = 0x00000008  # DETACHED_PROCESS
-    else:
+    if sys.platform != "win32":
         popen_kw["start_new_session"] = True
     try:
-        subprocess.Popen(  # noqa: S603
-            [_upgrade_launcher(), str(worker_py), str(config_json)], **popen_kw
+        # detached=True → DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP (+ кит
+        # доставляет CREATE_NO_WINDOW; при DETACHED система его игнорирует, но
+        # политика флагов должна быть ОДНА — она живёт в librarykit.proc, #1144).
+        proc_popen(
+            [_upgrade_launcher(), str(worker_py), str(config_json)],
+            detached=True,
+            **popen_kw,
         )
         return True
     except Exception:
@@ -928,12 +928,22 @@ def cmd_upgrade(
     # Unix: перезапись запущенного бинаря разрешена → синхронно; на ошибке —
     # фолбэк на фоновый апгрейд.
     console.print(f"[dim]$ {' '.join(cmd)}[/]")
-    import subprocess
+    from librarykit.proc import run as proc_run
 
     # То же, что и на Windows: демон держит файлы окружения.
     _stop_daemon_for_upgrade()
     try:
-        subprocess.run(cmd, check=True)
+        # allow_console=True — ЕДИНСТВЕННОЕ осознанное исключение из политики
+        # «без окна» (#1144): это интерактивный foreground-`upgrade`, вывод
+        # uv/pip адресован пользователю. ⚠️ Контракт `proc.run` захватывает
+        # потоки ВСЕГДА, поэтому вывод не стримится, а печатается по завершении
+        # (стрима стоила бы отдельная реализация Popen+чтение — заводить вторую
+        # политику запуска ради прогресс-бара не стали). Таймаут 900s — как у
+        # установки CLI-пакета навыка (сборка колёс на узком канале).
+        result = proc_run(cmd, timeout=900, allow_console=True, check=True)
+        tail = (result.stdout or "").strip()
+        if tail:
+            console.print(f"[dim]{tail}[/]")
     except Exception as e:
         if _spawn_background_upgrade(version=latest):
             console.print(
@@ -3495,6 +3505,11 @@ _MAX_INSTALL_ATTEMPTS = 3
 
 
 def _install_attempts_path() -> Path:
+    # Локальный импорт: `_default_config_dir` — приватная деталь config-модуля,
+    # в шапке __main__ её нет. Раньше имя звалось «из воздуха» — любой вызов
+    # счётчика попыток падал бы NameError (ruff F821 это и показывал).
+    from skillery_cli.config import _default_config_dir
+
     return _default_config_dir() / "install_attempts.json"
 
 
@@ -3960,6 +3975,16 @@ async def _auto_update_hub_installs(
     Возвращает report ``{updated, skipped, failed}`` (списки ref).
     """
     report: dict[str, list] = {"updated": [], "skipped": [], "failed": []}
+    # #1145: чиним меты, испорченные китом <0.3.3 (снапшот из хаба помечался
+    # source="local-path"), ДО любых гейтов ниже. Отбор кандидатов идёт строго
+    # по source == "hub", поэтому такой навык молча выпадал именно отсюда и
+    # застывал на своей версии навсегда. Одноразово и идемпотентно: маркер в
+    # конфиге, повторный проход стоит одну проверку флага. Выше гейтов — чтобы
+    # выключённое автообновление или ещё не истёкший cooldown не откладывали
+    # починку меты на неопределённый срок.
+    from skillery_cli.core.store_migrations import ensure_store_meta_migrated
+
+    ensure_store_meta_migrated(cfg)
     if not cfg.auto_update:
         # Автообновление выключено пользователем — оставляем device-sync как есть,
         # до latest ничего не поднимаем.
@@ -4651,6 +4676,25 @@ def cmd_remove(
         manifest_removed = project_manifest.remove(project_path, slug)
 
     if not result.removed:
+        # #1146: «ничего не сняли» ≠ «навыка нет». Чаще всего он ЕСТЬ, просто
+        # лежит в другом scope: демон ставит в global, а remove без --scope
+        # идёт в project (`cfg.default_install_scope`). Раньше в этом случае
+        # печаталось голое «Не установлен» — и пользователь оставался с навыком
+        # на диске и без единой подсказки, что делать.
+        in_store = (cfg.effective_store_dir() / slug).is_dir()
+        hint = ""
+        if in_store:
+            hint = (
+                " — но он есть в сторе: снять глобально `--scope global`, "
+                "удалить совсем `--purge`"
+            )
+
+        def _render_missing(_: dict) -> None:
+            console.print(
+                f"[yellow]Не установлен[/] ({result.scope}): {slug} "
+                f"(нет папки {result.target_dir}){hint}"
+            )
+
         emit_data(
             {
                 "slug": slug,
@@ -4659,12 +4703,10 @@ def cmd_remove(
                 "kept_local": False,
                 "purged": result.purged,
                 "manifest_removed": manifest_removed,
+                "in_store": in_store,
                 "path": str(result.target_dir),
             },
-            text_renderer=lambda _: console.print(
-                f"[yellow]Не установлен[/] ({result.scope}): {slug} "
-                f"(нет папки {result.target_dir})"
-            ),
+            text_renderer=_render_missing,
         )
         return
 
@@ -4684,8 +4726,20 @@ def cmd_remove(
             extra={"kept_local": result.kept_local},
         )
 
+    # #1146: терминология — ПО ФАКТУ содеянного, а не по названию команды.
+    # Кит без --purge снимает из project-scope ТОЛЬКО ссылку; стор цел, навык
+    # никуда не делся. Функция это уже знала (аналитика выше шлёт skill.disable),
+    # но печатала «Удалён» — противоречие внутри одного вызова, из-за которого
+    # следующий `installed` «необъяснимо» показывал якобы удалённый навык.
+    disabled_only = result.scope == "project" and not result.purged
+
     def _render(_: dict) -> None:
-        if result.kept_local:
+        if disabled_only:
+            console.print(
+                f"[green]✓[/] Отключён (project): {slug} — остаётся в сторе, "
+                "полное удаление: --purge"
+            )
+        elif result.kept_local:
             console.print(
                 f"[green]✓[/] Удалён ({result.scope}): {slug} "
                 f"[dim](preserved_paths сохранены в {result.target_dir})[/]"
@@ -4700,6 +4754,9 @@ def cmd_remove(
             "slug": slug,
             "scope": result.scope,
             "removed": True,
+            # Машинному потребителю тоже нужна разница «отключён» vs «удалён»:
+            # по одному removed=True он её не восстановит.
+            "disabled_only": disabled_only,
             "kept_local": result.kept_local,
             "purged": result.purged,
             "manifest_removed": manifest_removed,
