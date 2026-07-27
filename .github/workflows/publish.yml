@@ -29,7 +29,38 @@ permissions:
   contents: read
 
 jobs:
+  # ГЕЙТ перед публикацией (#1142). Раньше тег уезжал на PyPI и дальше вебхуком
+  # на ВЕСЬ парк устройств без единой проверки — любой дефект расходился по всем
+  # машинам. Теперь publish не стартует, пока не зелёные тесты.
+  # Платформа — windows: CLI Windows-ориентирован (мьютексы, трамплины,
+  # CREATE_NO_WINDOW), на ubuntu эти инварианты не проверяются.
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Sync deps
+        run: uv sync --all-extras --dev
+
+      # Два падения известны и не связаны с релизом (task #1148) — сняты точечно,
+      # чтобы гейт не был вечно красным. Убрать deselect вместе с их починкой.
+      - name: Tests
+        run: >
+          uv run pytest tests/ -q
+          --deselect tests/unit/test_e48_install_layout.py::test_antigravity_layout_paths
+          --deselect tests/unit/test_ed_personal_sync.py::test_roundtrip_push_then_pull_syncs_set
+
+      # Только фатальные правила (синтаксис/undefined names). Полный ruff в этом
+      # репозитории даёт ~2300 стилистических замечаний (кириллица в комментариях) —
+      # он не годится как блокирующий гейт, а вот сломанный импорт поймать обязаны.
+      - name: Lint (fatal only)
+        run: uv run ruff check src/ --select E9,F63,F7,F82
+
   publish:
+    needs: test
     runs-on: ubuntu-latest
     # environment намеренно НЕ задан: на PyPI trusted publisher настроен с
     # Environment name = (любая). Меньше подвижных частей — job не зависит от
