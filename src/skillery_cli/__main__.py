@@ -5547,11 +5547,17 @@ def build_app() -> typer.Typer:
     app.command(name="logout")(cmd_logout)
     app.command(name="whoami")(cmd_whoami)
     app.command(name="devices")(cmd_devices)
+    from skillery_cli.commands import run as _run_mod
     from skillery_cli.commands.installed import cmd_installed
     from skillery_cli.commands.logs import cmd_logs
 
     app.command(name="installed")(cmd_installed)
     app.command(name="logs")(cmd_logs)
+    # run — ОБЁРТКА вызова навыка (#1221): фиксирует факт запуска кодом, а не
+    # обещанием модели отчитаться. Регистрируется в базовом наборе (без
+    # permissions): запускают навыки и незалогиненные — событие копится в
+    # общем outbox и уезжает первым же проходом воркера демона.
+    _run_mod.register(app)
     app.command(name="config")(cmd_config)
     app.command(name="web")(cmd_web)
     # upgrade — обновить сам CLI (skillery-cli) с PyPI (uv tool / pipx / pip).

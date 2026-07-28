@@ -9,7 +9,11 @@
 
 - ``render_skill_md`` — ``SKILL.md`` с валидным frontmatter (name/description/
   version) + телом по AK-канону (router + 5 секций, double-quoted description,
-  ``Respond in the user's language.``). Тело адаптируется под kind.
+  ``Respond in the user's language.``). Тело адаптируется под kind. #1221: во
+  всех kind'ах инструкция ведёт вызов через обёртку ``skillery run <slug>`` —
+  учёт использования делает КОД обёртки, а не обещание модели отчитаться
+  (просить LLM «сообщить о вызове» ненадёжно: отчёт зависит от того, вспомнит
+  ли она).
 - ``render_readme`` — короткий README навыка.
 - ``render_references_stub`` — заглушка ``references/`` для comprehensive.
 - ``render_skill_meta_toml`` — ``_skill_meta.toml`` по схеме
@@ -134,10 +138,11 @@ def _intro_for_kind(kind: str, title: str) -> str:
     return f"Промпт-навык «{title}»: чистая инструкция для ИИ-агента."
 
 
-def _router_rows_for_kind(kind: str) -> str:
+def _router_rows_for_kind(kind: str, slug: str) -> str:
     rows = [
         "| Понять, когда применять | секция «When activated» |",
         "| Пошаговое выполнение | секция «Instructions» |",
+        f"| Запустить навык | `skillery run {slug} …` (обёртка учёта) |",
     ]
     if kind == "comprehensive":
         rows.append("| Детали и кейсы | `references/` |")
@@ -156,25 +161,29 @@ def _when_bullets_for_kind(kind: str, title: str) -> str:
     return "\n".join(bullets)
 
 
-def _instructions_for_kind(kind: str) -> str:
+def _instructions_for_kind(kind: str, slug: str) -> str:
     if kind == "tooling":
         return (
             "1. Поставь навык в агента: `python scripts/install_skill.py --agent claude-code`.\n"
             "2. Проверь окружение: `python scripts/self_check.py`.\n"
             "3. Установи зависимости (если есть CLI): `python scripts/install_skill.py "
             "--agent claude-code --with-deps` (uv→pip).\n"
-            "4. Запусти инструмент навыка (см. README / `_skill_meta.toml`)."
+            f"4. Запускай инструмент навыка ЧЕРЕЗ обёртку: `skillery run {slug} "
+            "<аргументы>` — аргументы и код возврата проходят насквозь, а факт "
+            "вызова фиксируется автоматически."
         )
     if kind == "comprehensive":
         return (
             "1. Определи подзадачу и сверься с router-таблицей выше.\n"
             "2. При необходимости открой нужный файл из `references/`.\n"
-            "3. Следуй пошаговому процессу секции и примерам ниже."
+            f"3. Отметь применение навыка: `skillery run {slug}`.\n"
+            "4. Следуй пошаговому процессу секции и примерам ниже."
         )
     return (
         "1. Определи подзадачу и сверься с router-таблицей выше.\n"
-        "2. Следуй процессу и примерам ниже.\n"
-        "3. Сформулируй результат на языке пользователя."
+        f"2. Отметь применение навыка: `skillery run {slug}`.\n"
+        "3. Следуй процессу и примерам ниже.\n"
+        "4. Сформулируй результат на языке пользователя."
     )
 
 
@@ -191,10 +200,12 @@ def _examples_for_kind(kind: str, title: str) -> str:
     )
 
 
-def _rules_for_kind(kind: str) -> str:
+def _rules_for_kind(kind: str, slug: str) -> str:
     rules = [
         "- Отвечай на языке пользователя; тело навыка не переводи дословно.",
         "- Не выходи за границы домена навыка — для смежных задач выбери другой навык.",
+        f"- Вызывай навык через `skillery run {slug}` — учёт использования делает "
+        "обёртка, отчитываться о вызове текстом не нужно.",
     ]
     if kind == "tooling":
         rules.append("- Все скрипты/CLI остаются внутри папки навыка (переносимость).")
@@ -259,11 +270,11 @@ def render_skill_md(
         {
             "{{title}}": display_title,
             "{{intro}}": _intro_for_kind(kind, display_title),
-            "{{router_rows}}": _router_rows_for_kind(kind),
+            "{{router_rows}}": _router_rows_for_kind(kind, slug),
             "{{when_bullets}}": _when_bullets_for_kind(kind, display_title),
-            "{{instructions}}": _instructions_for_kind(kind),
+            "{{instructions}}": _instructions_for_kind(kind, slug),
             "{{examples}}": _examples_for_kind(kind, display_title),
-            "{{rules}}": _rules_for_kind(kind),
+            "{{rules}}": _rules_for_kind(kind, slug),
             "{{extra_sections}}": _extra_sections_for_kind(kind),
         },
     )
@@ -306,6 +317,15 @@ def render_readme(*, slug: str, kind: str, description: str) -> str:
         "```bash",
         "python scripts/install_skill.py --agent claude-code",
         "python scripts/self_check.py",
+        "```",
+        "",
+        "## Вызов навыка",
+        "",
+        "Навык вызывается через обёртку CLI — она фиксирует факт запуска",
+        "(аргументы и код возврата проходят насквозь):",
+        "",
+        "```bash",
+        f"skillery run {slug} [аргументы]",
         "```",
         "",
         "## Публикация в Skillery",
