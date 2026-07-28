@@ -63,3 +63,20 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv(DAEMON_MUTEX_ENV, f"Local\\SkilleryDaemonTest-{_RUN_ID}")
     monkeypatch.setenv(UPGRADE_MUTEX_ENV, f"Local\\SkilleryUpgradeTest-{_RUN_ID}")
     return home
+
+
+@pytest.fixture(autouse=True)
+def _reset_outbox_throttle():
+    """Троттл/backoff воркера общего outbox'а — ПРОЦЕССНОЕ состояние.
+
+    Оно живёт в модуле (окно «не чаще раза в N секунд» общее на процесс), а
+    значит протекает между тестами: тест, сходивший по сети, глушил бы соседа
+    троттлом или backoff'ом. Сбрасываем до и после каждого теста — иначе порядок
+    прогона начинает влиять на результат (ровно тот класс флейков, который тут
+    уже ловили с ``matchMedia``).
+    """
+    from skillery_cli.core import outbox_worker
+
+    outbox_worker.reset_throttle()
+    yield
+    outbox_worker.reset_throttle()

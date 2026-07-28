@@ -1,16 +1,21 @@
-"""``skillery event track`` — добавить event в очередь.
+"""``skillery event track / queue / flush`` — аналитика в ОБЩЕЙ очереди.
 
-Команда НЕ отправляет event напрямую в backend — пишет в локальную
-очередь ``~/.skillery/events.queue.json``. Daemon (``skillery
-daemon start``) периодически снимает batch и шлёт на /events.
+Команда НЕ отправляет event напрямую в backend: пишет конверт
+``kind="analytics_event"`` в общий outbox (``~/.skillery/outbox.jsonl``, см.
+:mod:`skillery_cli.core.analytics_sync`). Доставку делает единый воркер
+(:mod:`skillery_cli.core.outbox_worker`) в цикле демона — тем же проходом, что
+везёт запуски навыков и логи CLI.
 
-Если daemon не запущен — events накапливаются; при первом старте daemon
-их подтянет (опционально команда ``event flush`` шлёт сразу синхронно).
+#1180: своей очереди (``events.queue.json``) у аналитики больше нет. Очередь на
+машине ОДНА; ``event queue --clear`` поэтому трогает ТОЛЬКО аналитические
+конверты — выбрасывать чужие (логи, запуски навыков) он права не имеет.
+
+Если демон не запущен — события накапливаются; первый же его старт их подтянет,
+а ``event flush`` шлёт синхронно и прямо сейчас (в т.ч. АНОНИМНО, без логина).
 """
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any
 
 import typer
@@ -19,9 +24,8 @@ from rich.table import Table
 
 from skillery_cli.commands import _common
 from skillery_cli.config import ClientConfig
-from skillery_cli.daemon.daemon_runner import default_queue_path
-from skillery_cli.daemon.event_collector import EventCollector
-from skillery_cli.daemon.event_sender import EventSender
+from skillery_cli.core import analytics_sync
+from skillery_cli.daemon.event_sender import OutboxSender
 from skillery_cli.output import emit_data, emit_error
 
 console = Console()
@@ -54,24 +58,29 @@ def cmd_event_track(
         None, "--metadata", help="JSON-объект с метаданными"
     ),
 ) -> None:
-    """Положить event в локальную очередь (daemon отправит batch'ем)."""
+    """Положить event в общую исходящую очередь (демон отправит батчем)."""
     if len(event_type) < 3 or len(event_type) > 64:
         emit_error("VALIDATION", "event_type должен быть 3..64 chars")
         raise typer.Exit(1)
     pl = _parse_json_dict(payload, field="payload")
     md = _parse_json_dict(metadata, field="metadata")
-    collector = EventCollector(default_queue_path())
-    ev = collector.append(
+    item = analytics_sync.track(
         event_type,
         resource_type=resource_type,
         resource_id=resource_id,
         payload=pl,
         metadata=md,
     )
+    if item is None:
+        emit_error(
+            "QUEUE_UNAVAILABLE",
+            "очередь недоступна (outbox выключен или каталог не пишется)",
+        )
+        raise typer.Exit(1)
     out: dict[str, Any] = {
         "event": "queued",
-        "queued_event": ev.to_ingest_dto(),
-        "queue_size": collector.size(),
+        "queued_event": item,
+        "queue_size": analytics_sync.pending_count(),
     }
 
     def _render(p: dict[str, Any]) -> None:
@@ -91,23 +100,22 @@ def cmd_event_queue(
         False, "--clear", help="Очистить очередь (опасно!)"
     ),
 ) -> None:
-    """Inspect / clear локальную очередь events."""
-    collector = EventCollector(default_queue_path())
+    """Inspect / clear аналитические события в общей исходящей очереди."""
     if clear:
-        size = collector.size()
-        collector.clear()
+        removed = analytics_sync.clear_pending()
         emit_data(
-            {"event": "queue_cleared", "removed": size},
+            {"event": "queue_cleared", "removed": removed},
             text_renderer=lambda p: console.print(
                 f"[yellow]Очистил очередь: удалено {p['removed']} events[/]"
             ),
         )
         return
-    events = collector.peek()
+    events = analytics_sync.pending()
+    queue_path = analytics_sync.outbox_path()
     payload = {
-        "queue_path": str(collector.path),
+        "queue_path": str(queue_path) if queue_path else "—",
         "size": len(events),
-        "events": [e.to_ingest_dto() for e in events] if show else [],
+        "events": events if show else [],
     }
 
     def _render(p: dict[str, Any]) -> None:
@@ -130,12 +138,12 @@ def cmd_event_queue(
 
 
 def cmd_event_flush() -> None:
-    """Синхронно отправить накопленные events (один цикл sender'а).
+    """Синхронно отправить накопленное (один проход воркера, минуя троттл).
 
-    POST /events анонимен (backend ``_optional_claims``): отсутствие или
-    протухание токена НЕ должно ронять flush — события уходят как anonymous.
+    ``POST /events`` анонимен (backend ``_optional_claims``): отсутствие или
+    протухание токена НЕ должно ронять flush — аналитика уходит как anonymous.
     Поэтому токен берётся best-effort (без exit(1) при NOT_LOGGED_IN/NO_TOKEN),
-    а factory умеет строить anonymous client (``anonymous=True`` → без Bearer).
+    а фабрика умеет строить anonymous-клиент (``anonymous=True`` → без Bearer).
     """
     from skillery_cli.config import load_tokens
 
@@ -145,7 +153,6 @@ def cmd_event_flush() -> None:
     if cfg.user_email:
         access, _ = load_tokens(cfg.user_email)
         access = access or ""
-    collector = EventCollector(default_queue_path())
 
     def _factory(anonymous: bool = False):  # type: ignore[no-untyped-def]
         if anonymous:
@@ -155,10 +162,10 @@ def cmd_event_flush() -> None:
             return _common.make_client(cfg, "")
         return _common.make_client(cfg, access)
 
-    sender = EventSender(collector, _factory)
+    sender = OutboxSender(_factory)
 
     async def _do() -> None:
-        result = await sender.send_once()
+        result = await sender.send_once(force=True)
         payload = {
             "event": "flushed",
             "sent": result.sent,

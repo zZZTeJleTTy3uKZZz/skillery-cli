@@ -1,22 +1,27 @@
-"""Skill-side instrumentation: silent event push в очередь.
+"""Skill-side instrumentation: silent event push в ОБЩУЮ исходящую очередь.
 
-Когда CLI делает ``install`` / ``update`` / ``uninstall`` / ``run``, мы
-кладём в очередь соответствующий event (``skill.install`` /
-``skill.update`` / etc.). Daemon позже отправит batch.
+Когда CLI делает ``install`` / ``update`` / ``uninstall`` / ``run``, мы кладём
+соответствующий event (``skill.install`` / ``skill.update`` / etc.) в общий
+outbox конвертом ``kind="analytics_event"``
+(:mod:`skillery_cli.core.analytics_sync`); доставку делает единый воркер в цикле
+демона. #1180: собственной очереди (``~/.skillery/events.queue.json``) у
+аналитики больше НЕТ — очередь на машине одна.
 
-Эта функция НЕ создаёт offending dependencies между __main__ и daemon:
-если очередь не пишется (permission denied, missing dir) — всё
-silently ignored. Telemetry никогда не ломает основную команду.
+Анти-спам (``EventGuard``) остался ЗДЕСЬ, перед публикацией: дедуп и throttle —
+свойство продюсера (не класть одинаковое дважды), а не транспортной очереди.
+Его sidecar ``events.guard.json`` — не очередь: там скользящее окно отпечатков,
+из которого ничего не «доставляется».
+
+Эта функция НЕ создаёт offending dependencies между __main__ и daemon: если
+запись не удалась (permission denied, outbox выключен) — всё silently ignored.
+Telemetry никогда не ломает основную команду.
 """
 from __future__ import annotations
 
 from typing import Any
 
-from skillery_cli.daemon.daemon_runner import (
-    default_guard_path,
-    default_queue_path,
-)
-from skillery_cli.daemon.event_collector import EventCollector
+from skillery_cli.core import analytics_sync
+from skillery_cli.daemon.daemon_runner import default_guard_path
 from skillery_cli.daemon.event_guard import EventGuard
 
 
@@ -91,8 +96,7 @@ def track_skill_event(
                 return
         except Exception:
             pass
-        collector = EventCollector(default_queue_path())
-        collector.append(
+        analytics_sync.track(
             event_type,
             resource_type="skill",
             resource_id=ref,

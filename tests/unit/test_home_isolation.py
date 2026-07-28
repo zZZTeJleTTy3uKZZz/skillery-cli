@@ -22,14 +22,17 @@ def test_path_home_points_into_tmp(isolated_home: Path) -> None:
 
 
 def test_all_state_resolvers_live_under_tmp_home(isolated_home: Path) -> None:
-    """config / logs / локи демона и апгрейда — всё внутри временного HOME."""
+    """config / logs / очередь / локи демона и апгрейда — всё внутри временного HOME."""
+    from telemetrykit import outbox
+
     from skillery_cli import _upgrade_worker
     from skillery_cli.config import _default_config_dir, _default_store_dir
+    from skillery_cli.core.analytics_sync import legacy_queue_path
     from skillery_cli.core.logging_setup import log_dir
     from skillery_cli.daemon import single_instance
     from skillery_cli.daemon.daemon_runner import (
+        default_guard_path,
         default_pid_path,
-        default_queue_path,
         default_state_path,
     )
 
@@ -42,7 +45,11 @@ def test_all_state_resolvers_live_under_tmp_home(isolated_home: Path) -> None:
         _upgrade_worker.result_path(),
         default_pid_path(),
         default_state_path(),
-        default_queue_path(),
+        default_guard_path(),
+        # ОБЩАЯ исходящая очередь (#1174/#1180) — единственная на машине.
+        outbox.path(),
+        # Наследство третьей очереди: путь миграции тоже обязан быть в tmp.
+        legacy_queue_path(),
     ]
     # ⚠️ tmp_path на Windows сам лежит внутри профиля пользователя, поэтому
     # сверяемся не с REAL_HOME, а с БОЕВЫМ каталогом состояния ``~/.skillery``.

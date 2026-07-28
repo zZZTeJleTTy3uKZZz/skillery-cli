@@ -19,8 +19,8 @@ from skillery_cli import output as out_mod
 from skillery_cli.commands import analytics as an_mod
 from skillery_cli.config import ClientConfig
 from skillery_cli.core.agents import CodexTarget
+from skillery_cli.core import analytics_sync
 from skillery_cli.core.installer import SkillInstaller
-from skillery_cli.daemon.event_collector import EventCollector
 
 
 def _make_skill_dir(tmp_path: Path, name: str, version: str) -> Path:
@@ -48,8 +48,8 @@ def _wire(
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
     monkeypatch.setattr(ClientConfig, "save", lambda self: None)
     monkeypatch.setattr(an_mod, "get_target", lambda name: target)
-    queue = tmp_path / "events.queue.json"
-    monkeypatch.setattr(an_mod, "default_queue_path", lambda: queue)
+    # #1180: очередь аналитики — ОБЩИЙ outbox; HOME изолирован conftest'ом,
+    # поэтому подменять путь не нужно (и тест не завязан на env-имена кита).
     return cfg, target, project
 
 
@@ -113,13 +113,12 @@ def test_analytics_local_reports_queue_breakdown(
 ) -> None:
     monkeypatch.setattr(out_mod, "_mode", "json")
     cfg, target, project = _wire(tmp_path, monkeypatch)
-    queue = EventCollector(an_mod.default_queue_path())
-    queue.append("skill.install", resource_type="skill", resource_id="1",
-                 payload={"agent": "codex"})
-    queue.append("skill.enable", resource_type="skill", resource_id="1",
-                 payload={"agent": "codex"})
-    queue.append("skill.enable", resource_type="skill", resource_id="2",
-                 payload={"agent": "claude_code"})
+    analytics_sync.track("skill.install", resource_type="skill", resource_id="1",
+                         payload={"agent": "codex"})
+    analytics_sync.track("skill.enable", resource_type="skill", resource_id="1",
+                         payload={"agent": "codex"})
+    analytics_sync.track("skill.enable", resource_type="skill", resource_id="2",
+                         payload={"agent": "claude_code"})
 
     an_mod.cmd_analytics_local(project=None)
     data = _capsys_json(capsys)
@@ -142,15 +141,14 @@ def test_analytics_local_is_read_only(
     """Команда ничего не пишет: размер очереди и стор не меняются."""
     monkeypatch.setattr(out_mod, "_mode", "json")
     cfg, target, project = _wire(tmp_path, monkeypatch)
-    queue = EventCollector(an_mod.default_queue_path())
-    queue.append("skill.install", resource_type="skill", resource_id="1")
-    before = queue.size()
+    analytics_sync.track("skill.install", resource_type="skill", resource_id="1")
+    before = analytics_sync.pending_count()
 
     an_mod.cmd_analytics_local(project=None)
     capsys.readouterr()
 
     # очередь не тронута (read-only)
-    assert EventCollector(an_mod.default_queue_path()).size() == before
+    assert analytics_sync.pending_count() == before
 
 
 def test_analytics_local_empty_state_ok(

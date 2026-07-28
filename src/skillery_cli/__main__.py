@@ -5493,6 +5493,14 @@ def build_app() -> typer.Typer:
             from skillery_cli.core.log_sync import attach_log_sync
 
             attach_log_sync()
+        # #1180: та же логика для ТРЕТЬЕЙ очереди — аналитики. Продюсер теперь
+        # пишет в общий outbox (``kind="analytics_event"``), а неотправленное из
+        # ``~/.skillery/events.queue.json`` переливаем при первом же старте:
+        # это установки/включения, на которых стоит метрика адопции.
+        with suppress(Exception):
+            from skillery_cli.core.analytics_sync import migrate_legacy_queue
+
+            migrate_legacy_queue()
         _heal_daemon_if_dead()
 
     # === Always-on ===

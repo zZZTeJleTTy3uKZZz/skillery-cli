@@ -37,15 +37,13 @@ from skillery_cli.daemon.autostart import (
 from skillery_cli.daemon.daemon_runner import (
     DaemonRunner,
     default_pid_path,
-    default_queue_path,
     default_state_path,
     is_process_alive,
     kill_process,
     read_running_pid,
     read_state,
 )
-from skillery_cli.daemon.event_collector import EventCollector
-from skillery_cli.daemon.event_sender import EventSender
+from skillery_cli.daemon.event_sender import OutboxSender
 from skillery_cli.output import emit_data, emit_error, emit_message
 
 console = Console()
@@ -81,36 +79,10 @@ _HEAVY_RECONCILE_SEC = 180.0
 # `_check_cli_update_detailed`, поэтому реальный опрос — максимум раз в сутки).
 _SELF_UPGRADE_CHECK_SEC = 3600.0
 
-# #1174: каденс доставки ОБЩЕГО outbox'а (запуски навыков от telemetrykit +
-# логи CLI). Не каждый long-poll-такт (их ~раз в 2с): это фон, а не мгновенная
-# доставка задания. Backoff при сетевых сбоях воркер ведёт сам.
+# #1174/#1180: каденс доставки ОБЩЕГО outbox'а (запуски навыков + логи CLI +
+# аналитика установок). Не каждый long-poll-такт (их ~раз в 2с): это фон, а не
+# мгновенная доставка задания. Backoff при сетевых сбоях воркер ведёт сам.
 _OUTBOX_FLUSH_MIN_INTERVAL_SEC = 30.0
-
-
-async def _deliver_outbox(client_factory) -> None:  # noqa: ANN001 — () -> HubClient|None
-    """#1174: один проход воркера доставки общего outbox'а. Никогда не бросает.
-
-    Живёт отдельной функцией, а не строкой в ``_reconcile``, чтобы клиент точно
-    закрывался (``finally``) и чтобы проход был вызываем из теста напрямую.
-    """
-    from skillery_cli.core import outbox_worker
-
-    if not outbox_worker.is_due(min_interval=_OUTBOX_FLUSH_MIN_INTERVAL_SEC):
-        return
-    client = None
-    try:
-        client = client_factory()
-    except Exception:  # noqa: BLE001 — нет клиента → просто не в этот раз
-        return
-    if client is None:
-        return
-    try:
-        await outbox_worker.flush_outbox_safe(
-            client, min_interval=_OUTBOX_FLUSH_MIN_INTERVAL_SEC
-        )
-    finally:
-        with suppress(Exception):
-            await client.close()
 
 
 def _build_runner(
@@ -141,15 +113,21 @@ def _build_runner(
         # callback может его обновить).
         access = _current_access()
         if anonymous:
-            # POST /events анонимен: при 401 (токен протух) sender ретраит
-            # batch без Bearer. Деградировать некуда, если токена и не было.
+            # POST /events анонимен: при 401 (токен протух) воркер ретраит
+            # батч аналитики без Bearer. Деградировать некуда, если токена и
+            # не было — тогда None, и повтор не делается.
             if not access:
                 return None
             return _common.make_client(cfg, "")
         return _common.make_client(cfg, access or "")
 
-    collector = EventCollector(default_queue_path())
-    sender = EventSender(collector, _factory)
+    # #1180: такт демона = один проход доставки ОБЩЕГО outbox'а (запуски
+    # навыков `skill_run`, логи `log`, аналитика `analytics_event`). Именно в
+    # ТАКТЕ, а не в reconcile-хуке: reconcile подключается только у
+    # залогиненного, а анонимная аналитика обязана уезжать и без логина.
+    sender = OutboxSender(
+        _factory, min_interval=_OUTBOX_FLUSH_MIN_INTERVAL_SEC
+    )
 
     reconcile = None
     loop_interval = interval_seconds
@@ -186,13 +164,11 @@ def _build_runner(
                 cfg, access, channel="published", agent_target=target,
                 wait=_LONGPOLL_WAIT_SEC,
             )
-            # 0.5) #1174: доставка ЕДИНОЙ исходящей очереди — запуски навыков
-            #    (telemetrykit пишет kind="skill_run") и логи CLI (kind="log").
-            #    Батч → POST /telemetry/batch → ack удалением. Троттл/backoff
-            #    внутри воркера; сеть тут не имеет права уронить цикл, поэтому
-            #    ..._safe. Гейт `is_due` ДО построения клиента: незачем поднимать
-            #    HTTP-клиент на каждый двухсекундный такт, чтобы тут же закрыть.
-            await _deliver_outbox(_factory)
+            # 0.5) #1174/#1180: доставку ЕДИНОЙ исходящей очереди делает ТАКТ
+            #    демона (`OutboxSender.send_once` в `cycle_once`) — он идёт до
+            #    reconcile и работает даже без логина. Дублировать её здесь
+            #    нельзя: два вызова на такт = лишний HTTP-клиент и мутный
+            #    источник backoff-классификации.
             # 1-2) device-sync НАБОРА + auto-update до latest — РЕЖЕ (не каждый
             #    long-poll-цикл; это фон, не мгновенная доставка).
             now = _time.monotonic()
@@ -327,6 +303,12 @@ def cmd_daemon_run(
         from skillery_cli.core.log_sync import attach_log_sync
 
         attach_log_sync()
+        # #1180: наследство третьей очереди (аналитика, ``events.queue.json``)
+        # переливаем в общий outbox тем же стартом. Идемпотентно и тихо.
+        with suppress(Exception):
+            from skillery_cli.core.analytics_sync import migrate_legacy_queue
+
+            migrate_legacy_queue()
         _log = get_logger("daemon")
         _log.info("daemon started", extra={"context": {"pid": os.getpid()}})
     except Exception:  # noqa: BLE001 — логи не критичны
@@ -545,22 +527,44 @@ def cmd_daemon_stop() -> None:
     )
 
 
+def _outbox_snapshot() -> tuple[str, int, dict[str, int]]:
+    """(путь, размер, разбивка по ``kind``) ОБЩЕЙ исходящей очереди.
+
+    #1180: очередь на машине одна, поэтому ``daemon status`` показывает именно
+    её — не только аналитику. Разбивка по ``kind`` отвечает на вопрос «что
+    именно застряло»: запуски навыков, логи или аналитика установок.
+    Диагностика не имеет права падать — недоступная очередь читается как пустая.
+    """
+    try:
+        from telemetrykit import outbox
+
+        path = str(outbox.path())
+        envelopes = outbox.read_batch(10_000)
+    except Exception:  # noqa: BLE001 — status обязан работать всегда
+        return "—", 0, {}
+    by_kind: dict[str, int] = {}
+    for env in envelopes:
+        kind = str(env.get("kind") or "?")
+        by_kind[kind] = by_kind.get(kind, 0) + 1
+    return path, len(envelopes), by_kind
+
+
 def cmd_daemon_status() -> None:
-    """Status: alive + last_cycle + queue size."""
+    """Status: alive + last_cycle + размер ОБЩЕЙ исходящей очереди."""
     pid = read_running_pid()
     alive = pid is not None and is_process_alive(pid)
     state = read_state()
-    queue = EventCollector(default_queue_path())
-    queue_size = queue.size()
+    queue_path, queue_size, queue_by_kind = _outbox_snapshot()
     payload: dict[str, Any] = {
         "alive": alive,
         "pid": pid,
         "pid_path": str(default_pid_path()),
-        "queue_path": str(queue.path),
+        "queue_path": queue_path,
         "queue_size": queue_size,
+        "queue_by_kind": queue_by_kind,
         "state": state,
     }
-    # Демон мёртв, а в очереди копятся события → телеметрия не уходит.
+    # Демон мёртв, а в очереди копятся конверты → ничего не уходит.
     # Явное предупреждение + машинно-читаемое поле (для автоматики/CI).
     if not alive and queue_size > 0:
         payload["stalled_events"] = queue_size
@@ -575,6 +579,11 @@ def cmd_daemon_status() -> None:
         console.print(f"Daemon:      {status}  pid={p['pid'] or '—'}")
         console.print(f"PID file:    {p['pid_path']}")
         console.print(f"Queue:       {p['queue_path']}  size={p['queue_size']}")
+        if p.get("queue_by_kind"):
+            parts = ", ".join(
+                f"{k}={v}" for k, v in sorted(p["queue_by_kind"].items())
+            )
+            console.print(f"  по виду:   {parts}")
         st = p["state"] or {}
         if st:
             console.print(f"Cycles:      {st.get('cycles', 0)}")

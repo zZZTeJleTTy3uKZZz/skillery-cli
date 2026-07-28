@@ -1,30 +1,31 @@
-"""Event tracking daemon.
+"""Демон CLI: доставка ОБЩЕЙ исходящей очереди + опрос очереди устройства.
 
-Состоит из трёх компонентов:
+Состав:
 
-- :mod:`event_collector` — append-only очередь events в
-  ``~/.skillery/events.queue.json``.
-- :mod:`event_sender` — batch sender, раз в N секунд снимает chunk из
-  очереди и POST'ит на ``/events``.
-- :mod:`daemon_runner` — long-running orchestrator.
+- :mod:`instrumentation` — продюсер аналитики (``track_skill_event``): кладёт
+  событие в ОБЩИЙ outbox конвертом ``kind="analytics_event"``
+  (:mod:`skillery_cli.core.analytics_sync`). Своей очереди у аналитики больше
+  нет — #1180 убрал третью (``~/.skillery/events.queue.json``).
+- :mod:`event_guard` — анти-спам (дедуп + throttle) ПЕРЕД публикацией. Это
+  свойство продюсера, а не очереди, поэтому переезд его не затронул.
+- :mod:`event_sender` — такт доставки: обёртка над единым воркером
+  :mod:`skillery_cli.core.outbox_worker`.
+- :mod:`daemon_runner` — long-running orchestrator (такт + backoff + state).
 
-И четыре autostart-installer'а (systemd / launchd / Task Scheduler) —
-см. :mod:`autostart`.
-
-Daemon НЕ требует чтобы реально стоял autostart: ``skillery daemon
-install`` только генерирует unit-file + печатает инструкцию что с ним
-делать. Это даёт возможность тестировать pipeline на чистой VM без
-sudo.
+И autostart-installer'ы (systemd / launchd / Task Scheduler) — см.
+:mod:`autostart`. Демон НЕ требует, чтобы реально стоял autostart: ``skillery
+daemon install`` только генерирует unit-file и печатает инструкцию, что с ним
+делать. Это даёт возможность тестировать pipeline на чистой VM без sudo.
 """
-from skillery_cli.daemon.event_collector import EventCollector, QueuedEvent
-from skillery_cli.daemon.event_sender import EventSender
 from skillery_cli.daemon.daemon_runner import DaemonRunner
+from skillery_cli.daemon.event_guard import EventGuard
+from skillery_cli.daemon.event_sender import OutboxSender, SendResult
 from skillery_cli.daemon.instrumentation import track_skill_event
 
 __all__ = [
-    "EventCollector",
-    "QueuedEvent",
-    "EventSender",
     "DaemonRunner",
+    "EventGuard",
+    "OutboxSender",
+    "SendResult",
     "track_skill_event",
 ]

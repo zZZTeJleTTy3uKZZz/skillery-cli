@@ -13,8 +13,6 @@ from pathlib import Path
 import pytest
 
 from skillery_cli.daemon.daemon_runner import DaemonRunner
-from skillery_cli.daemon.event_collector import EventCollector
-from skillery_cli.daemon.event_sender import EventSender
 
 
 class _ScriptedSender:

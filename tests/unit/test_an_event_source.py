@@ -11,14 +11,20 @@ from pathlib import Path
 
 import pytest
 
+from skillery_cli.core import analytics_sync
 from skillery_cli.daemon import instrumentation as instr
-from skillery_cli.daemon.event_collector import EventCollector
 
 
-def _capture(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> EventCollector:
-    queue = tmp_path / "events.queue.json"
-    monkeypatch.setattr(instr, "default_queue_path", lambda: queue)
-    return EventCollector(queue)
+class _Queue:
+    """Аналитика читается из ОБЩЕГО outbox'а (#1180: третьей очереди нет)."""
+
+    @staticmethod
+    def peek() -> list[dict]:
+        return analytics_sync.pending()
+
+
+def _capture(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> _Queue:
+    return _Queue()
 
 
 def test_track_skill_event_puts_source_in_payload(
@@ -29,11 +35,11 @@ def test_track_skill_event_puts_source_in_payload(
         "skill.install", slug="bitrix24", scope="project", source="hub"
     )
     ev = coll.peek()[0]
-    assert ev.event_type == "skill.install"
-    assert ev.payload["scope"] == "project"
-    assert ev.payload["source"] == "hub"
+    assert ev["event_type"] == "skill.install"
+    assert ev["payload"]["scope"] == "project"
+    assert ev["payload"]["source"] == "hub"
     # metadata.source — транспорт (cli), НЕ источник установки.
-    assert ev.metadata == {"source": "cli"}
+    assert ev["metadata"] == {"source": "cli"}
 
 
 def test_track_skill_event_source_none_omitted(
@@ -43,7 +49,7 @@ def test_track_skill_event_source_none_omitted(
     coll = _capture(monkeypatch, tmp_path)
     instr.track_skill_event("skill.uninstall", slug="x", scope="global")
     ev = coll.peek()[0]
-    assert "source" not in ev.payload
+    assert "source" not in ev["payload"]
 
 
 @pytest.mark.parametrize("source", ["hub", "local-path", "git-url"])
@@ -54,4 +60,4 @@ def test_track_skill_event_all_source_variants(
     instr.track_skill_event(
         "skill.enable", slug="s", scope="project", source=source
     )
-    assert coll.peek()[0].payload["source"] == source
+    assert coll.peek()[0]["payload"]["source"] == source

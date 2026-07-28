@@ -43,7 +43,7 @@ dependencies = [
     # декоратором @track_skill(), CLI — kind="log"; доставку на /telemetry/batch
     # делает воркер демона (core/outbox_worker, #1174). Кит stdlib-only — веса
     # в зависимости CLI не добавляет.
-    "s-telemetrykit>=0.1.2",
+    "s-telemetrykit>=0.2.0",
 ]
 
 # Все киты (s-librarykit/s-clikit/s-skillkit) тянутся с PyPI — CLI распространяем

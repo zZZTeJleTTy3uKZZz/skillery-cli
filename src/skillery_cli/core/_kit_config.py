@@ -64,6 +64,21 @@ def ensure_configured() -> None:
             bin_dir_provider=_cli_bin_dir,
         )
     )
+    # Телеметрия: s-telemetrykit НЕЙТРАЛЕН (дефолт ~/.telemetrykit, env
+    # TELEMETRYKIT_*), а skillery-настройки живут в ките ПРОДУКТА. Импорт
+    # `skillkit.telemetry` — и есть их применение (home=~/.skillery,
+    # env_prefix=SKILLERY, kind=skill_run).
+    #
+    # Почему это ОБЯЗАТЕЛЬНО здесь: навыки пишут события через
+    # `skillkit.telemetry`, то есть в ~/.skillery/outbox.jsonl. Если CLI не
+    # применит ту же конфигурацию, его воркер-доставщик будет читать
+    # нейтральный ~/.telemetrykit/outbox.jsonl — очередей снова станет ДВЕ,
+    # и события навыков не уедут на сервер вообще (молча).
+    #
+    # Импортируем адаптер, а не зовём telemetrykit.configure() своими руками:
+    # иначе настройки Skillery задавались бы в двух местах и разъехались бы.
+    from skillkit import telemetry as _telemetry  # noqa: F401
+
     _CONFIGURED = True
 
 

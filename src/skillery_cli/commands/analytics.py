@@ -22,11 +22,9 @@ from rich.console import Console
 from rich.table import Table
 
 from skillery_cli.config import ClientConfig
-from skillery_cli.core import linker
+from skillery_cli.core import analytics_sync, linker
 from skillery_cli.core.agents import get_target
 from skillery_cli.core.installer import read_meta
-from skillery_cli.daemon.daemon_runner import default_queue_path
-from skillery_cli.daemon.event_collector import EventCollector
 from skillery_cli.output import emit_data
 
 console = Console()
@@ -83,21 +81,26 @@ def _scan_project(target, project: Path) -> list[dict[str, Any]]:  # noqa: ANN00
     return items
 
 
-def _queue_stats(queue_path: Path) -> dict[str, Any]:
-    """Размер очереди + разбивка по типу события и по агенту (read-only)."""
-    coll = EventCollector(queue_path)
-    events = coll.peek()
+def _queue_stats() -> dict[str, Any]:
+    """Аналитика в ОБЩЕЙ очереди + разбивка по типу и агенту (read-only).
+
+    #1180: своей очереди у аналитики нет — считаем конверты
+    ``kind="analytics_event"`` в общем outbox'е. Чужие конверты (логи, запуски
+    навыков) сюда не попадают: команда про адопцию навыков, а не про транспорт.
+    """
+    events = analytics_sync.pending()
     by_type: dict[str, int] = {}
     by_agent: dict[str, int] = {}
     for e in events:
-        by_type[e.event_type] = by_type.get(e.event_type, 0) + 1
-        agent = ""
-        if isinstance(e.payload, dict):
-            agent = str(e.payload.get("agent") or "")
+        etype = str(e.get("event_type") or "")
+        by_type[etype] = by_type.get(etype, 0) + 1
+        payload = e.get("payload")
+        agent = str(payload.get("agent") or "") if isinstance(payload, dict) else ""
         key = agent or "(unknown)"
         by_agent[key] = by_agent.get(key, 0) + 1
+    path = analytics_sync.outbox_path()
     return {
-        "path": str(queue_path),
+        "path": str(path) if path else "—",
         "size": len(events),
         "by_type": by_type,
         "by_agent": by_agent,
@@ -119,7 +122,7 @@ def cmd_analytics_local(
     )
     store_items = _scan_store(cfg.effective_store_dir())
     project_items = _scan_project(target, actual_project)
-    queue = _queue_stats(default_queue_path())
+    queue = _queue_stats()
 
     payload: dict[str, Any] = {
         "agent": target.name,

@@ -729,11 +729,11 @@ wheels = [
 
 [[package]]
 name = "s-telemetrykit"
-version = "0.1.2"
+version = "0.2.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/69/c2/d31aef1a2b9095bcd6f871263528b4370704c27f4b3570b25ba278b31e4d/s_telemetrykit-0.1.2.tar.gz", hash = "sha256:12c11a2810def99c3d25962ae4af5ec3f1a262b420244bceabf968e98c274ea9", size = 43747, upload-time = "2026-07-28T11:38:42.498Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ef/bb/b94167ec1bb53ecddf06638085d29504b0894d7c493c793d5d1cd3676484/s_telemetrykit-0.2.0.tar.gz", hash = "sha256:1eecc0cca068d1e07b38fe0f265bb29f09c0887cb2991a88bbb06ec215092062", size = 55381, upload-time = "2026-07-28T13:24:03.369Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/cf/38/c9f95abbc207390bf332bf51acde879e290c4e3483225904ca00ee058125/s_telemetrykit-0.1.2-py3-none-any.whl", hash = "sha256:e5beb29f2196e4a1c2b6ac6213433ca186146d41a501bd0fd077e9ba78d7d974", size = 37387, upload-time = "2026-07-28T11:38:41.281Z" },
+    { url = "https://files.pythonhosted.org/packages/28/86/7d3bb8f0ca17d9470d6ba8c0aa814478b32ea43bc2ea50dee04f8fb72259/s_telemetrykit-0.2.0-py3-none-any.whl", hash = "sha256:447a8446837d4454d7ee253e32a43638b9d64a078405cab3cab30fbe40575f53", size = 45525, upload-time = "2026-07-28T13:24:02.405Z" },
 ]
 
 [[package]]
@@ -800,7 +800,7 @@ requires-dist = [
     { name = "s-librarykit", specifier = ">=0.7.1" },
     { name = "s-skillgate", specifier = ">=0.1.2" },
     { name = "s-skillkit", specifier = ">=0.3.3" },
-    { name = "s-telemetrykit", specifier = ">=0.1.2" },
+    { name = "s-telemetrykit", specifier = ">=0.2.0" },
     { name = "tomli-w", specifier = ">=1.0" },
     { name = "typer", specifier = ">=0.15" },
 ]

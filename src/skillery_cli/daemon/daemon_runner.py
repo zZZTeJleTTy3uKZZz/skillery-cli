@@ -1,4 +1,4 @@
-"""Long-running daemon process: периодически зовёт ``EventSender.send_once``.
+"""Long-running daemon process: периодически зовёт ``sender.send_once``.
 
 CLI поднимает daemon как detached background process:
 - POSIX — ``os.fork`` + ``setsid`` + redirect stdio to /dev/null.
@@ -31,8 +31,6 @@ ReconcileCallback = Callable[[], Awaitable[None]]
 чтобы НЕ ломать event-цикл. None ⇒ демон только шлёт события (как раньше)."""
 
 from skillery_cli.daemon.backoff import BackoffPolicy
-from skillery_cli.daemon.event_collector import EventCollector
-from skillery_cli.daemon.event_sender import EventSender
 
 # Логгер демон-цикла. Пишет в тот файл, что настроил процесс (``daemon.log`` в
 # демоне, ``cli.log`` в foreground). На стандартном ERROR молчит про такты
@@ -67,10 +65,6 @@ def _default_data_dir() -> Path:
     from skillery_cli.config import _default_config_dir
 
     return _default_config_dir()
-
-
-def default_queue_path() -> Path:
-    return _default_data_dir() / "events.queue.json"
 
 
 def default_guard_path() -> Path:
@@ -163,7 +157,7 @@ class DaemonRunner:
 
     def __init__(
         self,
-        sender: EventSender,
+        sender: Any,
         *,
         interval_seconds: float = 60.0,
         pid_path: Path | None = None,

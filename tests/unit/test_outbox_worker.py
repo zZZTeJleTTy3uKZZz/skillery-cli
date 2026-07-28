@@ -119,6 +119,7 @@ class _FakeClient:
         reject: tuple[str, ...] = (),
     ) -> None:
         self.batches: list[list[dict]] = []
+        self.ingested: list[list[dict]] = []
         self._offline = offline
         self._hang = hang
         self._raises = raises
@@ -139,6 +140,16 @@ class _FakeClient:
             if e["id"] in self._reject
         ]
         return {"accepted": accepted, "rejected": rejected}
+
+    async def ingest_events(self, events: list[dict], *, idempotency_key: str) -> dict:
+        if self._hang:
+            await asyncio.sleep(60)
+        if self._raises is not None:
+            raise self._raises
+        if self._offline:
+            raise RuntimeError("connection refused")
+        self.ingested.append([dict(e) for e in events])
+        return {"accepted": len(events)}
 
     async def close(self) -> None:
         return None
@@ -540,7 +551,12 @@ class TestTransportContract:
 
 # ══════════════════════ воркер встроен в цикл демона ════════════════════════
 async def test_daemon_loop_flushes_outbox_with_throttle(monkeypatch) -> None:
-    """Проход доставки живёт в цикле демона и троттлится (а не бьёт каждый такт)."""
+    """Проход доставки живёт в ТАКТЕ демона и троттлится (а не бьёт каждый такт).
+
+    #1180: доставка переехала из reconcile-хука в сам такт (``cycle_once``) —
+    reconcile подключается только у залогиненного, а анонимная аналитика обязана
+    уезжать и без логина. Инвариант «воркер едет в цикле демона + троттл» тот же.
+    """
     import skillery_cli.commands.daemon as daemon_mod
     import skillery_cli.config as config_mod
     import skillery_cli.core.agents as agents_mod
@@ -573,15 +589,15 @@ async def test_daemon_loop_flushes_outbox_with_throttle(monkeypatch) -> None:
     assert runner._reconcile is not None
 
     outbox.append("skill_run", {"n": 1})
-    await runner._reconcile()
+    await runner.cycle_once()
     assert len(client.batches) == 1, "воркер обязан ехать в цикле демона"
     assert envelopes() == []
 
     outbox.append("skill_run", {"n": 2})
-    await runner._reconcile()
+    await runner.cycle_once()
     assert len(client.batches) == 1, "второй такт подряд — троттл, сети нет"
 
     clock["t"] += daemon_mod._OUTBOX_FLUSH_MIN_INTERVAL_SEC + 1
-    await runner._reconcile()
+    await runner.cycle_once()
     assert len(client.batches) == 2
     assert envelopes() == []

@@ -2,8 +2,8 @@
 
 Silent-телеметрия (``track_skill_event``) — главный источник спама: быстрый
 повтор install/enable/sync кладёт одинаковые события. Перед append'ом
-инструментация сверяется с персистентным ``EventGuard`` (sidecar рядом с
-очередью). Дубль в окне дедупа → событие НЕ попадает в очередь.
+инструментация сверяется с персистентным ``EventGuard`` (sidecar ``events.guard.json``).
+Дубль в окне дедупа → конверт НЕ попадает в общий outbox.
 
 Guard НИКОГДА не роняет команду: при ошибке guard'а событие всё равно
 обрабатывается (телеметрия — best-effort).
@@ -14,16 +14,26 @@ from pathlib import Path
 
 import pytest
 
+from skillery_cli.core import analytics_sync
 from skillery_cli.daemon import instrumentation as instr
-from skillery_cli.daemon.event_collector import EventCollector
 
 
-def _wire(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> EventCollector:
-    queue = tmp_path / "events.queue.json"
+class _Queue:
+    """Аналитика читается из ОБЩЕГО outbox'а (#1180: третьей очереди нет).
+
+    Guard остался ПРОДЮСЕРСКИМ: он решает ДО публикации конверта, поэтому
+    переезд хранилища его семантику не меняет — ровно это тут и проверяется.
+    """
+
+    @staticmethod
+    def size() -> int:
+        return analytics_sync.pending_count()
+
+
+def _wire(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> _Queue:
     guard = tmp_path / "events.guard.json"
-    monkeypatch.setattr(instr, "default_queue_path", lambda: queue)
     monkeypatch.setattr(instr, "default_guard_path", lambda: guard)
-    return EventCollector(queue)
+    return _Queue()
 
 
 def test_duplicate_enable_within_window_dropped(
