@@ -25,13 +25,13 @@ def _skill(tmp_path: Path, code: str) -> Path:
 
 
 def test_denylist_gate_blocks_windows_user_path(tmp_path: Path) -> None:
-    d = _skill(tmp_path, 'LOG_DIR = "C:/Users/79288/Documents/secret"')
+    d = _skill(tmp_path, 'LOG_DIR = "C:/Users/10001/Documents/secret"')  # leak-gate-allow
     with pytest.raises(typer.Exit):
         _run_publish_denylist_gate(d, force=False)
 
 
 def test_denylist_gate_force_overrides(tmp_path: Path) -> None:
-    d = _skill(tmp_path, 'LOG_DIR = "C:/Users/79288/Documents/secret"')
+    d = _skill(tmp_path, 'LOG_DIR = "C:/Users/10001/Documents/secret"')  # leak-gate-allow
     # --force → предупреждение, но НЕ abort.
     _run_publish_denylist_gate(d, force=True)
 

@@ -25,7 +25,7 @@ import tomli_w
 
 from skillery_cli import config as config_module
 
-EMAIL = "cemon345rus@gmail.com"
+EMAIL = "user@example.com"
 LONG_ACCESS = "eyJ." + "a" * 1600
 LONG_REFRESH = "eyJ." + "r" * 1500
 

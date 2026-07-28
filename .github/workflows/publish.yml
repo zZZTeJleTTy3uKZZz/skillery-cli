@@ -80,6 +80,14 @@ jobs:
       - name: Build
         run: uv build
 
+      # Последний рубеж перед необратимым шагом. Утечка уже случалась: реальный
+      # email и домашний путь разработчика уехали в публичный PyPI из тестовых
+      # фикстур. Релиз с PyPI не удаляется (только yank; окно удаления — 72 часа),
+      # поэтому проверка стоит здесь, ПОСЛЕ сборки и ДО публикации: проверяем то,
+      # что реально поедет, а не то, что лежит в дереве.
+      - name: Гейт утечек личных данных в артефактах
+        run: python scripts/check_dist_leaks.py dist/
+
       - name: Publish to PyPI (Trusted Publishing)
         uses: pypa/gh-action-pypi-publish@release/v1
         # OIDC: без токена; PyPI доверяет по связке owner/repo/workflow.

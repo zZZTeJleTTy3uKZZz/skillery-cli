@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "skillery-cli"
-version = "0.5.69"
+version = "0.5.70"
 description = "Skillery CLI — клиент маркетплейса AI-навыков для агентов (Claude Code, Codex)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -36,7 +36,11 @@ dependencies = [
     # >=0.3.3 — кит переведён на librarykit.proc (свои subprocess без окон),
     # .pkgsrc не течёт в зону агента, снапшот-установка помечается source="hub"
     # (без этого навык молча выпадал из автообновления, см. миграцию меты #1145).
-    "s-skillkit>=0.3.3",
+    # >=0.3.4 обязательно: `core/_kit_config` импортирует `skillkit.telemetry`
+    # (адаптер продукта над нейтральным s-telemetrykit), а в 0.3.3 модуля ещё
+    # нет — на чистой установке резолвер взял бы 0.3.3 и CLI упал бы
+    # ImportError'ом при первом же импорте.
+    "s-skillkit>=0.3.4",
     "s-skillgate>=0.1.2",  # единый secret-scan (G5): regex-fallback publish-гейта на skillgate
     # >=0.1.2 — модуль telemetrykit.outbox: ОБЩИЙ локальный транспорт исходящих
     # сущностей (~/.skillery/outbox.jsonl). Навыки пишут туда kind="skill_run"

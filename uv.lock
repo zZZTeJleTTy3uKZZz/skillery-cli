@@ -714,17 +714,18 @@ wheels = [
 
 [[package]]
 name = "s-skillkit"
-version = "0.3.3"
+version = "0.3.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pathspec" },
     { name = "platformdirs" },
     { name = "s-librarykit" },
+    { name = "s-telemetrykit" },
     { name = "tomli-w" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b3/8a/a33734a25aa9cf929878ce45c39c3ddc76c5bcd6d17647f8fcb7b8e1b072/s_skillkit-0.3.3.tar.gz", hash = "sha256:f90d3100300f7bb6d781050b6caff7be120f44fc76e4f8162adfafe81e9eb46d", size = 208049, upload-time = "2026-07-27T15:08:19.743Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/aa/77/2f1e3b1b7fcc1b854e029ec6e4e87b9d68d8ea07ec1bec35390e2907543c/s_skillkit-0.3.4.tar.gz", hash = "sha256:27cb48e8337f69ec3d292886befd58971d652e5309f12b2524f706ef9e46342b", size = 213237, upload-time = "2026-07-28T13:34:23.346Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ef/5c/cffe59b7e522f85ac7748dcf57b377c04455f438004d05ad95a49da3aae4/s_skillkit-0.3.3-py3-none-any.whl", hash = "sha256:7d82c37148335bb04735f1ca243e6cc185e98b87953b546bb28d80e5a1de3699", size = 127775, upload-time = "2026-07-27T15:08:18.759Z" },
+    { url = "https://files.pythonhosted.org/packages/b7/cc/8e0a9c2d35b465fa6d18b1a8872a2c2a6244c6993756481212674f640269/s_skillkit-0.3.4-py3-none-any.whl", hash = "sha256:36cb4b276fe53043137f17d6bf776c573ca1c39b2b9be78ca5e80334381dd9e2", size = 130721, upload-time = "2026-07-28T13:34:22.331Z" },
 ]
 
 [[package]]
@@ -760,7 +761,7 @@ wheels = [
 
 [[package]]
 name = "skillery-cli"
-version = "0.5.69"
+version = "0.5.70"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
@@ -799,7 +800,7 @@ requires-dist = [
     { name = "s-clikit", specifier = ">=0.1.4" },
     { name = "s-librarykit", specifier = ">=0.7.1" },
     { name = "s-skillgate", specifier = ">=0.1.2" },
-    { name = "s-skillkit", specifier = ">=0.3.3" },
+    { name = "s-skillkit", specifier = ">=0.3.4" },
     { name = "s-telemetrykit", specifier = ">=0.2.0" },
     { name = "tomli-w", specifier = ">=1.0" },
     { name = "typer", specifier = ">=0.15" },
