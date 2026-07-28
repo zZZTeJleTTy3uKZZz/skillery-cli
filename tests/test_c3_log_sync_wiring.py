@@ -4,6 +4,11 @@
 install/uninstall из веб-очереди), всегда ``level=info`` и только на УСПЕХ:
 провалы, ради которых логи и смотрят, до веба не доезжали, а foreground-install
 не синкался вовсе. Здесь закреплено обратное.
+
+#1174: транспорт сменился — записи ложатся конвертом ``kind="log"`` в ОБЩИЙ
+outbox, а доставку делает воркер (``POST /telemetry/batch``). Поэтому проверяем
+две вещи: (1) провал реально попадает в очередь с инициатором и причиной,
+(2) доставка/её отсутствие не меняет исход install и не теряет запись.
 """
 from __future__ import annotations
 
@@ -12,15 +17,20 @@ from contextlib import suppress
 from pathlib import Path
 
 import pytest
+from telemetrykit import outbox
 
 from skillery_cli import __main__ as m
 from skillery_cli.core import log_sync as ls
+from skillery_cli.core import outbox_worker as ow
 
-_LOGGER_NAMES = ("skillery", "skillery.install", "skillery.reconcile")
+_LOGGER_NAMES = ("skillery", "skillery.install", "skillery.reconcile", "skillery.outbox")
 
 
 @pytest.fixture(autouse=True)
-def _clean_loggers():
+def _clean_loggers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("SKILLERY_OUTBOX_PATH", str(tmp_path / "outbox.jsonl"))
+    monkeypatch.delenv("SKILLERY_OUTBOX_DISABLED", raising=False)
+
     def _clear() -> None:
         for name in _LOGGER_NAMES:
             lg = logging.getLogger(name)
@@ -30,35 +40,43 @@ def _clean_loggers():
                     h.close()
 
     _clear()
-    ls.reset_flush_throttle()
+    ow.reset_throttle()
     yield
     _clear()
-    ls.reset_flush_throttle()
+    ow.reset_throttle()
 
 
 @pytest.fixture
-def sync_queue(tmp_path: Path, monkeypatch):  # type: ignore[no-untyped-def]
-    """Буфер синка в tmp + подключённый handler (как делает точка входа CLI)."""
+def sync_on(tmp_path: Path, monkeypatch):  # type: ignore[no-untyped-def]
+    """Синк подключён — как это делает точка входа CLI/демона."""
     monkeypatch.setattr(
         "skillery_cli.core.logging_setup.log_dir", lambda: tmp_path
     )
-    q = ls.LogSyncQueue(tmp_path / "sync.queue.jsonl")
-    ls.attach_log_sync(queue=q)
-    return q
+    ls.attach_log_sync()
 
 
-class _LogCapturingClient:
-    """Фейковый HubClient, принимающий батчи /cli-logs."""
+def queued_logs() -> list[dict]:
+    return [
+        e["payload"] for e in outbox.read_batch(10_000) if e["kind"] == ls.KIND_LOG
+    ]
+
+
+class _CapturingClient:
+    """Фейковый HubClient: принимает батчи общего outbox'а и очередь устройства."""
 
     def __init__(self, *, queue: list[dict] | None = None) -> None:
-        self.log_batches: list[list[dict]] = []
+        self.batches: list[list[dict]] = []
         self.reports: list[dict] = []
         self._queue = queue or []
         self.closed = False
 
-    # --- /cli-logs ---
+    # --- /telemetry/batch ---
+    async def send_telemetry_batch(self, envelopes: list[dict]) -> dict:
+        self.batches.append([dict(e) for e in envelopes])
+        return {"accepted": [e["id"] for e in envelopes], "rejected": []}
+
+    # --- /cli-logs (исторический одиночный контракт, не трогаем) ---
     async def report_cli_logs(self, items: list[dict]) -> dict:
-        self.log_batches.append([dict(i) for i in items])
         return {"accepted": len(items)}
 
     async def report_cli_log(self, **kw) -> None:  # type: ignore[no-untyped-def]
@@ -79,8 +97,11 @@ class _LogCapturingClient:
     async def close(self) -> None:
         self.closed = True
 
-    def synced_items(self) -> list[dict]:
-        return [item for batch in self.log_batches for item in batch]
+    def delivered(self) -> list[dict]:
+        return [
+            e["payload"] for batch in self.batches for e in batch
+            if e["kind"] == ls.KIND_LOG
+        ]
 
 
 @pytest.fixture
@@ -99,9 +120,9 @@ class TestForegroundInstallSync:
     """Foreground-install (initiator=cli) теперь синкается — и успех, и провал."""
 
     async def test_install_failure_syncs_reason_and_initiator(
-        self, cfg, sync_queue, monkeypatch
+        self, cfg, sync_on, monkeypatch
     ) -> None:
-        client = _LogCapturingClient()
+        client = _CapturingClient()
         monkeypatch.setattr(m, "HubClient", lambda **kw: client)
         monkeypatch.setattr(m, "_make_refresh_callback", lambda cfg: None)
 
@@ -112,8 +133,7 @@ class TestForegroundInstallSync:
                 initiator="cli",
             )
 
-        items = client.synced_items()
-        errors = [i for i in items if i.get("level") == "error"]
+        errors = [i for i in client.delivered() if i.get("level") == "error"]
         assert errors, "провал install ОБЯЗАН уехать на бэк (раньше не уезжал)"
         ctx = errors[0]["context"]
         assert ctx["initiator"] == "cli"
@@ -124,12 +144,12 @@ class TestForegroundInstallSync:
         assert client.closed is True
 
     async def test_offline_backend_does_not_break_install(
-        self, cfg, sync_queue, monkeypatch
+        self, cfg, sync_on, monkeypatch
     ) -> None:
-        """Сбой синка не меняет исход install и не теряет запись."""
+        """Сбой доставки не меняет исход install и не теряет запись."""
 
-        class _Offline(_LogCapturingClient):
-            async def report_cli_logs(self, items):  # type: ignore[no-untyped-def]
+        class _Offline(_CapturingClient):
+            async def send_telemetry_batch(self, envelopes):  # type: ignore[no-untyped-def]
                 raise RuntimeError("network unreachable")
 
         client = _Offline()
@@ -142,16 +162,16 @@ class TestForegroundInstallSync:
                 project_path=None, force=False, agent_target=object(),
                 initiator="cli",
             )
-        assert sync_queue.size() >= 1, "офлайн → запись ждёт следующего цикла"
+        assert len(queued_logs()) >= 1, "офлайн → запись ждёт следующего цикла"
 
 
 class TestDaemonQueueSync:
-    """Демон-путь: провал веб-задания и досылка буфера каждым циклом."""
+    """Демон-путь: провал веб-задания виден, а доставка не держит цикл."""
 
-    async def test_web_queue_failure_syncs_with_initiator(
-        self, cfg, sync_queue, monkeypatch
+    async def test_web_queue_failure_is_queued_with_initiator(
+        self, cfg, sync_on, monkeypatch
     ) -> None:
-        client = _LogCapturingClient(
+        client = _CapturingClient(
             queue=[{"slug": "atlas", "desired_version": "0.4.0"}]
         )
         monkeypatch.setattr(m, "HubClient", lambda **kw: client)
@@ -168,46 +188,41 @@ class TestDaemonQueueSync:
         )
         assert rep["failed"] == ["atlas"]
 
-        errors = [i for i in client.synced_items() if i.get("level") == "error"]
+        errors = [i for i in queued_logs() if i.get("level") == "error"]
         assert errors, "провал веб-задания обязан быть виден в вебе"
         ctx = errors[0]["context"]
         assert ctx["initiator"] == "web-queue"
         assert ctx["skill"] == "atlas"
         assert "disk full" in ctx["error"]
 
-    async def test_cycle_delivers_buffered_backlog(
-        self, cfg, sync_queue, monkeypatch
+    async def test_daemon_cycle_delivers_buffered_backlog(
+        self, cfg, sync_on, monkeypatch
     ) -> None:
-        """Записи, накопленные офлайн, догоняют бэк следующим циклом демона."""
-        sync_queue.append({
+        """Записи, накопленные офлайн, догоняют бэк проходом воркера в цикле."""
+        ls.publish({
             "ts": "2026-07-24T10:00:00+00:00",
             "level": "error",
             "logger": "skillery.install",
             "message": "накоплено офлайн",
             "context": {"initiator": "daemon-auto"},
         })
-        client = _LogCapturingClient(queue=[])
-        monkeypatch.setattr(m, "HubClient", lambda **kw: client)
-        monkeypatch.setattr(m, "_make_refresh_callback", lambda cfg: None)
+        client = _CapturingClient(queue=[])
 
-        await m._reconcile_device_queue(
-            cfg, "tok", channel="published", agent_target=object()
-        )
+        await ow.flush_outbox(client, force=True)
 
-        messages = [i["message"] for i in client.synced_items()]
-        assert "накоплено офлайн" in messages
-        assert sync_queue.size() == 0
+        assert "накоплено офлайн" in [i["message"] for i in client.delivered()]
+        assert queued_logs() == []
 
-    async def test_daemon_cycle_is_not_blocked_by_log_sync(
-        self, cfg, sync_queue, monkeypatch
+    async def test_daemon_cycle_is_not_blocked_by_delivery(
+        self, cfg, sync_on, monkeypatch
     ) -> None:
-        """Синк не валит и не держит цикл демона, если бэк отвечает ошибкой."""
+        """Сбой доставки не валит и не держит цикл демона, запись остаётся."""
 
-        class _Offline(_LogCapturingClient):
-            async def report_cli_logs(self, items):  # type: ignore[no-untyped-def]
+        class _Offline(_CapturingClient):
+            async def send_telemetry_batch(self, envelopes):  # type: ignore[no-untyped-def]
                 raise RuntimeError("502")
 
-        sync_queue.append({
+        ls.publish({
             "level": "error", "logger": "skillery.install",
             "message": "офлайн", "context": {},
         })
@@ -219,12 +234,15 @@ class TestDaemonQueueSync:
             cfg, "tok", channel="published", agent_target=object()
         )
         assert rep == {"applied": [], "failed": [], "skipped": []}
-        assert sync_queue.size() == 1
         assert client.closed is True
+
+        res = await ow.flush_outbox_safe(client, force=True)
+        assert res.error
+        assert len(queued_logs()) == 1, "офлайн НЕ теряет запись"
 
 
 class TestLegacyContract:
-    """Старый одиночный контракт ``report_cli_log`` не меняется."""
+    """Старый одиночный контракт ``report_cli_log`` не меняется (старые CLI)."""
 
     async def test_single_report_still_posts_old_payload(self) -> None:
         from skillery_cli.core.transport import HubClient

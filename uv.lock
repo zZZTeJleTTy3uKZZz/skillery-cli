@@ -728,6 +728,15 @@ wheels = [
 ]
 
 [[package]]
+name = "s-telemetrykit"
+version = "0.1.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/69/c2/d31aef1a2b9095bcd6f871263528b4370704c27f4b3570b25ba278b31e4d/s_telemetrykit-0.1.2.tar.gz", hash = "sha256:12c11a2810def99c3d25962ae4af5ec3f1a262b420244bceabf968e98c274ea9", size = 43747, upload-time = "2026-07-28T11:38:42.498Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cf/38/c9f95abbc207390bf332bf51acde879e290c4e3483225904ca00ee058125/s_telemetrykit-0.1.2-py3-none-any.whl", hash = "sha256:e5beb29f2196e4a1c2b6ac6213433ca186146d41a501bd0fd077e9ba78d7d974", size = 37387, upload-time = "2026-07-28T11:38:41.281Z" },
+]
+
+[[package]]
 name = "secretstorage"
 version = "3.5.0"
 source = { registry = "https://pypi.org/simple" }
@@ -763,6 +772,7 @@ dependencies = [
     { name = "s-librarykit" },
     { name = "s-skillgate" },
     { name = "s-skillkit" },
+    { name = "s-telemetrykit" },
     { name = "tomli-w" },
     { name = "typer" },
 ]
@@ -790,6 +800,7 @@ requires-dist = [
     { name = "s-librarykit", specifier = ">=0.7.1" },
     { name = "s-skillgate", specifier = ">=0.1.2" },
     { name = "s-skillkit", specifier = ">=0.3.3" },
+    { name = "s-telemetrykit", specifier = ">=0.1.2" },
     { name = "tomli-w", specifier = ">=1.0" },
     { name = "typer", specifier = ">=0.15" },
 ]

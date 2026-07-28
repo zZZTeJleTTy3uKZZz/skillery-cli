@@ -16,15 +16,24 @@
 покрывает КАЖДУЮ точку, которая уже пишет в ``cli.log``/``daemon.log``:
 провал install, провал device-task, ошибку демона/reconcile, autostart/heal.
 
-- :class:`LogSyncHandler` — кладёт запись в дисковую очередь (не в сеть!).
-  Порог: WARNING на корне ``skillery`` (ошибки отовсюду) и INFO на
-  ``skillery.install`` (аудит установки — в т.ч. foreground).
-- :class:`LogSyncQueue` — ``~/.skillery/logs/sync.queue.jsonl``: append-only
-  JSONL (append = O(1), в отличие от event-очереди с перезаписью всего файла),
-  ОГРАНИЧЕННАЯ по размеру и числу записей. Офлайн ⇒ ничего не теряем.
-- :func:`flush_log_sync` — best-effort досылка батчем: жёсткий таймаут (синк
-  НЕ имеет права держать install/демон), при сбое запись возвращается в
-  очередь и уедет следующим циклом демона.
+- :class:`LogSyncHandler` — кладёт запись в ОБЩИЙ outbox (не в сеть!) конвертом
+  ``kind="log"``. Порог: WARNING на корне ``skillery`` (ошибки отовсюду) и INFO
+  на ``skillery.install`` (аудит установки — в т.ч. foreground).
+- Доставку делает ОДИН воркер — :mod:`skillery_cli.core.outbox_worker` в цикле
+  демона. Здесь сети нет и не будет.
+
+#1174: очередь ровно ОДНА
+-------------------------
+До #1174 у синка была СВОЯ очередь ``~/.skillery/logs/sync.queue.jsonl`` и своя
+отправка на ``POST /cli-logs``, параллельно общему ``telemetrykit.outbox``, куда
+навыки пишут ``kind="skill_run"``. Две очереди — это две разные гарантии
+доставки и два места, где записи теряются. Теперь запись идёт в общий outbox, а
+наследство перекладывается :func:`migrate_legacy_queue` при первом же старте
+(идемпотентно, без потерь). Заводить вторую очередь — нельзя.
+
+⚠️ Одиночный контракт ``HubClient.report_cli_log`` (``POST /cli-logs``) НЕ
+тронут: на нём сидят старые CLI, и ломать их обратную совместимость эта задача
+не имеет права.
 
 Инварианты
 ----------
@@ -38,10 +47,8 @@
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
-import os
 import time
 from contextlib import suppress
 from pathlib import Path
@@ -55,19 +62,12 @@ MAX_STACK_LEN = 16_000
 MAX_CONTEXT_VALUE_LEN = 500
 MAX_CONTEXT_KEYS = 40
 
-QUEUE_FILENAME = "sync.queue.jsonl"
-#: Потолок дискового буфера. Переполнение выкидывает САМЫЕ СТАРЫЕ записи —
-#: свежая причина сбоя важнее позавчерашней.
-MAX_QUEUE_RECORDS = 500
-MAX_QUEUE_BYTES = 512_000
+#: ``kind`` конверта общего outbox'а для лог-записи CLI.
+KIND_LOG = "log"
 
-#: Сколько записей уходит одним POST /cli-logs (backend принимает до 200).
-BATCH_LIMIT = 50
-#: Жёсткий таймаут одной отправки — синк не держит install/демон.
-FLUSH_TIMEOUT_SEC = 5.0
-#: Минимальная пауза между сетевыми попытками в ОДНОМ процессе (анти-спам).
-#: Цикл демона пробивает её через ``force=True``.
-MIN_FLUSH_INTERVAL_SEC = 20.0
+#: Имя СТАРОЙ (до #1174) собственной очереди синка. Осталось только ради
+#: миграции: файл может лежать на машинах пользователей с прежней версией.
+LEGACY_QUEUE_FILENAME = "sync.queue.jsonl"
 
 #: Анти-спам на ЗАПИСЬ: не больше N записей за окно (шторм ошибок в цикле
 #: демона не должен вымыть буфер и завалить бэк).
@@ -100,11 +100,11 @@ def wire_level(name: str | None) -> str:
     return _WIRE_LEVEL.get((name or "").strip().upper(), "info")
 
 
-def default_queue_path() -> Path:
-    """``~/.skillery/logs/sync.queue.jsonl`` (рядом с cli.log/daemon.log)."""
+def legacy_queue_path() -> Path:
+    """``~/.skillery/logs/sync.queue.jsonl`` — очередь ДО #1174 (только миграция)."""
     from skillery_cli.core.logging_setup import log_dir
 
-    return log_dir() / QUEUE_FILENAME
+    return log_dir() / LEGACY_QUEUE_FILENAME
 
 
 # ─────────────────────────── маскирование ───────────────────────────────
@@ -192,134 +192,70 @@ def _device_context() -> dict[str, Any]:
     return ctx
 
 
-# ─────────────────────────── дисковая очередь ───────────────────────────
-class LogSyncQueue:
-    """Ограниченная append-only JSONL-очередь логов, ждущих отправки.
+# ─────────────────────────── запись в общий outbox ──────────────────────
+def publish(item: dict[str, Any]) -> str | None:
+    """Положить готовую лог-запись в ОБЩИЙ outbox конвертом ``kind="log"``.
 
-    Почему не :class:`~skillery_cli.daemon.event_collector.EventCollector`:
-    у него другая форма записи (analytics-event) и другой эндпоинт, а главное —
-    он перезаписывает ВЕСЬ файл на каждый append (O(n)). Здесь append зовётся
-    из logging-handler'а на каждой ошибке, поэтому нужен O(1)-дозапись JSONL.
+    Никогда не бросает: кит недоступен / диск полон / outbox выключен ⇒ ``None``.
     """
+    try:
+        from telemetrykit import outbox
 
-    def __init__(
-        self,
-        path: Path | None = None,
-        *,
-        max_records: int = MAX_QUEUE_RECORDS,
-        max_bytes: int = MAX_QUEUE_BYTES,
-    ) -> None:
-        self._path = Path(path) if path is not None else None
-        self._max_records = max(1, int(max_records))
-        self._max_bytes = max(1024, int(max_bytes))
-        # Счётчик записей в файле — чтобы держать лимит ТОЧНО, но платить
-        # полным чтением только когда очередь реально переполнилась.
-        self._count: int | None = None
+        return outbox.append(KIND_LOG, item)
+    except Exception:  # noqa: BLE001 — телеметрия не валит команду
+        return None
 
-    @property
-    def path(self) -> Path:
-        if self._path is None:
-            self._path = default_queue_path()
-        return self._path
 
-    # --- запись -------------------------------------------------------
-    def append(self, item: dict[str, Any]) -> bool:
-        """Дописать запись. Никогда не бросает — синк тише команды."""
+def migrate_legacy_queue(path: Path | None = None) -> int:
+    """Перелить СТАРУЮ очередь синка в общий outbox. Возвращает число записей.
+
+    Зачем: на машинах, обновившихся с версии до #1174, в
+    ``~/.skillery/logs/sync.queue.jsonl`` могли остаться неотправленные записи —
+    ровно те причины сбоев, ради которых логи и смотрят. Выбросить их вместе со
+    старым механизмом было бы потерей пользовательских данных.
+
+    Идемпотентно: после успешного переноса файл удаляется, повторный вызов
+    возвращает 0. Битые строки пропускаются (одна не должна блокировать
+    остальные). Ничего не бросает: миграция тише команды.
+    """
+    target = path
+    try:
+        target = target or legacy_queue_path()
+        if not target.is_file():
+            return 0
+        raw = target.read_text(encoding="utf-8", errors="ignore")
+    except Exception:  # noqa: BLE001 — нет доступа → просто не мигрируем
+        return 0
+
+    moved = 0
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
         try:
-            line = json.dumps(item, ensure_ascii=False, default=str)
-        except Exception:  # noqa: BLE001 — неупаковываемая запись не нужна
-            return False
-        try:
-            path = self.path
-            path.parent.mkdir(parents=True, exist_ok=True)
-            if self._count is None:
-                self._count = len(self.read_all())
-            with path.open("a", encoding="utf-8") as fh:
-                fh.write(line + "\n")
-            self._count += 1
-            if (
-                self._count > self._max_records
-                or path.stat().st_size > self._max_bytes
-            ):
-                self._write_bounded(self.read_all())
-            return True
-        except Exception:  # noqa: BLE001 — RO-FS/гонка не валят процесс
-            return False
+            item = json.loads(line)
+        except Exception:  # noqa: BLE001 — обрыв записи/мусор
+            continue
+        if not isinstance(item, dict):
+            continue
+        if publish(item) is not None:
+            moved += 1
 
-    def _write_bounded(self, items: list[dict[str, Any]]) -> None:
-        """Перезаписать очередь, оставив САМЫЕ СВЕЖИЕ записи в пределах лимитов."""
-        kept: list[str] = []
-        total = 0
-        for item in reversed(items[-self._max_records:]):
-            try:
-                line = json.dumps(item, ensure_ascii=False, default=str)
-            except Exception:  # noqa: BLE001
-                continue
-            size = len(line.encode("utf-8")) + 1
-            if kept and total + size > self._max_bytes:
-                break
-            kept.append(line)
-            total += size
-        kept.reverse()
-        path = self.path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(
-            ("\n".join(kept) + "\n") if kept else "", encoding="utf-8"
-        )
-        os.replace(tmp, path)
-        self._count = len(kept)
-
-    # --- чтение -------------------------------------------------------
-    def read_all(self) -> list[dict[str, Any]]:
-        """Все записи (битые строки пропускаем — очередь не должна «залипать»)."""
-        try:
-            path = self.path
-            if not path.is_file():
-                return []
-            raw = path.read_text(encoding="utf-8", errors="ignore")
-        except Exception:  # noqa: BLE001
-            return []
-        items: list[dict[str, Any]] = []
-        for line in raw.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                data = json.loads(line)
-            except Exception:  # noqa: BLE001 — обрыв записи/мусор
-                continue
-            if isinstance(data, dict):
-                items.append(data)
-        return items
-
-    def size(self) -> int:
-        return len(self.read_all())
-
-    def drain(self, limit: int = BATCH_LIMIT) -> list[dict[str, Any]]:
-        """Снять до ``limit`` записей с ГОЛОВЫ (старые первыми), остаток оставить."""
-        if limit <= 0:
-            return []
-        items = self.read_all()
-        if not items:
-            return []
-        head, tail = items[:limit], items[limit:]
-        try:
-            self._write_bounded(tail)
-        except Exception:  # noqa: BLE001 — не смогли усечь → отдадим копию,
-            return head  # дубль в вебе лучше потери причины сбоя
-        return head
-
-    def requeue(self, items: list[dict[str, Any]]) -> None:
-        """Вернуть неотправленные записи в голову (офлайн → следующий цикл)."""
-        if not items:
-            return
-        with suppress(Exception):  # RO-FS не повод валить вызывающего
-            self._write_bounded(list(items) + self.read_all())
-
-    def clear(self) -> None:
+    # Файл убираем ТОЛЬКО если всё, что в нём было пригодно, уехало в outbox.
+    # Иначе (outbox выключен/недоступен) оставляем как есть — пусть попробует
+    # следующий старт, чем потерять записи молча.
+    if moved or not raw.strip():
+        with suppress(OSError):
+            target.unlink()
+    if moved:
+        # INFO в ``skillery.install`` (у него СВОЙ INFO-хендлер и он же синкается),
+        # чтобы факт переноса был виден и в локальном логе, и в вебе.
         with suppress(Exception):
-            self._write_bounded([])
+            logging.getLogger("skillery.install").info(
+                "лог-синк: старая очередь перелита в общий outbox",
+                extra={"context": {"moved": moved, "legacy": str(target)}},
+            )
+    return moved
 
 
 # ─────────────────────────── rate-limit ─────────────────────────────────
@@ -354,25 +290,37 @@ class _RateLimiter:
 #: Метка на LogRecord: «эта запись уже поставлена в очередь синка».
 _SYNCED_FLAG = "_skillery_log_synced"
 
+#: Полное имя логгера воркера доставки (``outbox_worker.LOGGER_NAME_FULL``).
+#: Держим строкой, а не импортом: :mod:`outbox_worker` — потребитель этого
+#: модуля, обратный импорт завёл бы цикл ради одной константы. Сверено тестом
+#: ``test_outbox_worker.py::test_worker_own_errors_do_not_feed_the_queue``.
+_WORKER_LOGGER = "skillery.outbox"
+
 
 class LogSyncHandler(logging.Handler):
-    """Кладёт лог-запись в :class:`LogSyncQueue` (сеть — отдельно, во flush)."""
+    """Кладёт лог-запись в ОБЩИЙ outbox (``kind="log"``); сеть — дело воркера."""
 
     def __init__(
         self,
-        queue: LogSyncQueue,
         *,
         level: int = logging.WARNING,
         limiter: _RateLimiter | None = None,
+        sink: Any = None,
     ) -> None:
         super().__init__(level=level)
-        self._queue = queue
         self._limiter = limiter or _RateLimiter(
             limit=RATE_MAX_RECORDS, window=RATE_WINDOW_SEC
         )
+        #: Точка подмены в тестах; прод-значение — :func:`publish`.
+        self._sink = sink or publish
 
     def build_item(self, record: logging.LogRecord) -> dict[str, Any]:
-        """LogRecord → payload элемента ``POST /cli-logs``."""
+        """LogRecord → payload конверта ``kind="log"``.
+
+        Форма payload'а — ТА ЖЕ, что раньше уходила элементом ``POST /cli-logs``
+        (level/logger/message/context/ts/stack): бэкенд разбирает её как и
+        прежде, меняется только транспорт.
+        """
         from datetime import UTC, datetime
 
         context = sanitize_context(getattr(record, "context", None))
@@ -399,6 +347,13 @@ class LogSyncHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:  # noqa: D102
         try:
+            # #1174 анти-петля: доставщик общего outbox'а НЕ имеет права писать
+            # в очередь, которую сам же и везёт. Иначе каждая ошибка доставки
+            # рождает новый конверт → офлайн растит очередь сам от себя.
+            if record.name == _WORKER_LOGGER or record.name.startswith(
+                _WORKER_LOGGER + "."
+            ):
+                return
             # Одна запись = одна отправка. ``skillery.install`` в проде имеет
             # propagate=False, но полагаться на это нельзя: без метки ERROR из
             # него ушёл бы дважды (свой handler + корневой).
@@ -407,7 +362,7 @@ class LogSyncHandler(logging.Handler):
             setattr(record, _SYNCED_FLAG, True)
             if not self._limiter.allow():
                 if self._limiter.should_report_drop():
-                    self._queue.append({
+                    self._sink({
                         "ts": None,
                         "level": "warning",
                         "logger": "skillery.log_sync",
@@ -419,17 +374,17 @@ class LogSyncHandler(logging.Handler):
                         "context": _device_context(),
                     })
                 return
-            self._queue.append(self.build_item(record))
+            self._sink(self.build_item(record))
         except Exception:  # noqa: BLE001 — телеметрия не валит процесс
             return
 
 
 def attach_log_sync(
     *,
-    queue: LogSyncQueue | None = None,
     rate_max: int = RATE_MAX_RECORDS,
     rate_window: float = RATE_WINDOW_SEC,
-) -> LogSyncQueue:
+    sink: Any = None,
+) -> None:
     """Идемпотентно подключить синк к дереву логгеров ``skillery``.
 
     Два порога, потому что аудит установки живёт в отдельном логгере с
@@ -438,8 +393,11 @@ def attach_log_sync(
     - корень ``skillery`` — WARNING+ (ошибки демона/reconcile/heal/autostart);
     - ``skillery.install`` — INFO+ (аудит установки, включая foreground: шаги
       и итог; раньше foreground-install не синкался вовсе).
+
+    Здесь же (#1174) перекладывается наследство: старая собственная очередь
+    синка переливается в общий outbox. Делаем это ПОСЛЕ подключения handler'ов,
+    чтобы сам факт миграции тоже уехал в веб.
     """
-    q = queue or LogSyncQueue()
     limiter = _RateLimiter(limit=rate_max, window=rate_window)
     for name, level in (("skillery", logging.WARNING),
                         ("skillery.install", logging.INFO)):
@@ -450,8 +408,9 @@ def attach_log_sync(
         # молчит (уровень ERROR из конфига) — на нём порог хендлера и решает.
         if logger.level > level or logger.level == logging.NOTSET:
             logger.setLevel(min(logger.level or level, level))
-        logger.addHandler(LogSyncHandler(q, level=level, limiter=limiter))
-    return q
+        logger.addHandler(LogSyncHandler(level=level, limiter=limiter, sink=sink))
+    with suppress(Exception):  # миграция не имеет права ломать старт CLI
+        migrate_legacy_queue()
 
 
 def detach_log_sync() -> None:
@@ -463,83 +422,16 @@ def detach_log_sync() -> None:
                 logger.removeHandler(h)
 
 
-# ─────────────────────────── отправка ───────────────────────────────────
-_LAST_FLUSH_AT = 0.0
-
-
-def reset_flush_throttle() -> None:
-    """Сбросить троттл отправки (тесты/принудительная досылка)."""
-    global _LAST_FLUSH_AT
-    _LAST_FLUSH_AT = 0.0
-
-
-async def flush_log_sync(
-    client: Any,
-    *,
-    queue: LogSyncQueue | None = None,
-    limit: int = BATCH_LIMIT,
-    timeout: float = FLUSH_TIMEOUT_SEC,
-    force: bool = False,
-    min_interval: float = MIN_FLUSH_INTERVAL_SEC,
-) -> int:
-    """Best-effort досылка буфера на ``POST /cli-logs``. Возвращает число ушедших.
-
-    Гарантии:
-    - НЕ блокирует вызывающего дольше ``timeout`` (жёсткий ``wait_for``);
-    - НЕ теряет записи: сбой/таймаут/офлайн ⇒ ``requeue`` (уедет следующим
-      циклом демона);
-    - НЕ спамит: в одном процессе не чаще ``min_interval`` (кроме ``force``,
-      которым пользуется цикл демона), не больше ``limit`` записей за запрос;
-    - НЕ бросает: любая ошибка синка тише самой команды.
-    """
-    global _LAST_FLUSH_AT
-    now = time.monotonic()
-    if not force and _LAST_FLUSH_AT and (now - _LAST_FLUSH_AT) < min_interval:
-        return 0
-    q = queue or LogSyncQueue()
-    try:
-        items = q.drain(limit)
-    except Exception:  # noqa: BLE001
-        return 0
-    _LAST_FLUSH_AT = now
-    if not items:
-        return 0
-    send = getattr(client, "report_cli_logs", None)
-    if send is None:  # старый/урезанный клиент — не теряем, ждём следующего
-        q.requeue(items)
-        return 0
-    try:
-        await asyncio.wait_for(send(items), timeout=timeout)
-    except asyncio.CancelledError:
-        q.requeue(items)
-        raise
-    except Exception:  # noqa: BLE001 — офлайн/таймаут/4xx → досылаем позже
-        q.requeue(items)
-        return 0
-    return len(items)
-
-
-async def flush_log_sync_safe(client: Any, **kwargs: Any) -> int:
-    """:func:`flush_log_sync`, который не бросает вообще ничего (кроме отмены)."""
-    try:
-        return await flush_log_sync(client, **kwargs)
-    except asyncio.CancelledError:
-        raise
-    except Exception:  # noqa: BLE001
-        return 0
-
-
 __all__ = [
-    "BATCH_LIMIT",
+    "KIND_LOG",
+    "LEGACY_QUEUE_FILENAME",
     "MAX_MESSAGE_LEN",
     "LogSyncHandler",
-    "LogSyncQueue",
     "attach_log_sync",
-    "default_queue_path",
     "detach_log_sync",
-    "flush_log_sync",
-    "flush_log_sync_safe",
-    "reset_flush_throttle",
+    "legacy_queue_path",
+    "migrate_legacy_queue",
+    "publish",
     "sanitize_context",
     "sanitize_text",
     "wire_level",

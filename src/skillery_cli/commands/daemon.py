@@ -81,6 +81,37 @@ _HEAVY_RECONCILE_SEC = 180.0
 # `_check_cli_update_detailed`, поэтому реальный опрос — максимум раз в сутки).
 _SELF_UPGRADE_CHECK_SEC = 3600.0
 
+# #1174: каденс доставки ОБЩЕГО outbox'а (запуски навыков от telemetrykit +
+# логи CLI). Не каждый long-poll-такт (их ~раз в 2с): это фон, а не мгновенная
+# доставка задания. Backoff при сетевых сбоях воркер ведёт сам.
+_OUTBOX_FLUSH_MIN_INTERVAL_SEC = 30.0
+
+
+async def _deliver_outbox(client_factory) -> None:  # noqa: ANN001 — () -> HubClient|None
+    """#1174: один проход воркера доставки общего outbox'а. Никогда не бросает.
+
+    Живёт отдельной функцией, а не строкой в ``_reconcile``, чтобы клиент точно
+    закрывался (``finally``) и чтобы проход был вызываем из теста напрямую.
+    """
+    from skillery_cli.core import outbox_worker
+
+    if not outbox_worker.is_due(min_interval=_OUTBOX_FLUSH_MIN_INTERVAL_SEC):
+        return
+    client = None
+    try:
+        client = client_factory()
+    except Exception:  # noqa: BLE001 — нет клиента → просто не в этот раз
+        return
+    if client is None:
+        return
+    try:
+        await outbox_worker.flush_outbox_safe(
+            client, min_interval=_OUTBOX_FLUSH_MIN_INTERVAL_SEC
+        )
+    finally:
+        with suppress(Exception):
+            await client.close()
+
 
 def _build_runner(
     *, interval_seconds: float, reconcile_installs: bool = True
@@ -155,6 +186,13 @@ def _build_runner(
                 cfg, access, channel="published", agent_target=target,
                 wait=_LONGPOLL_WAIT_SEC,
             )
+            # 0.5) #1174: доставка ЕДИНОЙ исходящей очереди — запуски навыков
+            #    (telemetrykit пишет kind="skill_run") и логи CLI (kind="log").
+            #    Батч → POST /telemetry/batch → ack удалением. Троттл/backoff
+            #    внутри воркера; сеть тут не имеет права уронить цикл, поэтому
+            #    ..._safe. Гейт `is_due` ДО построения клиента: незачем поднимать
+            #    HTTP-клиент на каждый двухсекундный такт, чтобы тут же закрыть.
+            await _deliver_outbox(_factory)
             # 1-2) device-sync НАБОРА + auto-update до latest — РЕЖЕ (не каждый
             #    long-poll-цикл; это фон, не мгновенная доставка).
             now = _time.monotonic()
@@ -281,10 +319,11 @@ def cmd_daemon_run(
         from skillery_cli.core.logging_setup import configure_logging, get_logger
 
         configure_logging(ClientConfig.load().log_level, filename="daemon.log")
-        # C3 (#1099): автосинк логов демона на бэк. Handler только буферизует
-        # (WARNING+ отовсюду, INFO+ из аудита установки); отправка — раз в цикл
-        # в ``_reconcile_device_queue`` (force-flush), поэтому офлайн-периоды
-        # ничего не теряют, а онлайн разбирается из веба.
+        # C3 (#1099) + #1174: автосинк логов демона на бэк. Handler только
+        # буферизует в ОБЩИЙ outbox (WARNING+ отовсюду, INFO+ из аудита
+        # установки); доставку делает воркер в цикле (``_deliver_outbox``),
+        # поэтому офлайн-периоды ничего не теряют. Тот же вызов перекладывает
+        # наследство старой очереди ``logs/sync.queue.jsonl`` (миграция #1174).
         from skillery_cli.core.log_sync import attach_log_sync
 
         attach_log_sync()

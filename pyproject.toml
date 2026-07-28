@@ -38,6 +38,12 @@ dependencies = [
     # (без этого навык молча выпадал из автообновления, см. миграцию меты #1145).
     "s-skillkit>=0.3.3",
     "s-skillgate>=0.1.2",  # единый secret-scan (G5): regex-fallback publish-гейта на skillgate
+    # >=0.1.2 — модуль telemetrykit.outbox: ОБЩИЙ локальный транспорт исходящих
+    # сущностей (~/.skillery/outbox.jsonl). Навыки пишут туда kind="skill_run"
+    # декоратором @track_skill(), CLI — kind="log"; доставку на /telemetry/batch
+    # делает воркер демона (core/outbox_worker, #1174). Кит stdlib-only — веса
+    # в зависимости CLI не добавляет.
+    "s-telemetrykit>=0.1.2",
 ]
 
 # Все киты (s-librarykit/s-clikit/s-skillkit) тянутся с PyPI — CLI распространяем

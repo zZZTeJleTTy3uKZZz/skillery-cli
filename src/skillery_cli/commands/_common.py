@@ -85,14 +85,15 @@ async def hydrate_session_permissions(
         )
     except Exception:  # noqa: BLE001 — телеметрия не ломает логин
         pass
-    # C3 (#1099): login — первый момент со свежим токеном, поэтому здесь же
-    # досылаем всё, что накопилось в офлайн-буфере (в т.ч. ошибки, случившиеся
-    # у разлогиненного/офлайн CLI). Best-effort, с таймаутом.
+    # C3 (#1099) + #1174: login — первый момент со свежим токеном, поэтому здесь
+    # же досылаем ВСЁ, что накопилось в общем outbox'е офлайн: и логи CLI, и
+    # запуски навыков (навык мог отработать на разлогиненной машине).
+    # Best-effort, с таймаутом.
     try:
-        from skillery_cli.core.log_sync import flush_log_sync_safe
+        from skillery_cli.core.outbox_worker import flush_outbox_safe
 
-        await flush_log_sync_safe(client, force=True)
-    except Exception:  # noqa: BLE001 — синк не ломает логин
+        await flush_outbox_safe(client, force=True)
+    except Exception:  # noqa: BLE001 — доставка не ломает логин
         pass
 
 
