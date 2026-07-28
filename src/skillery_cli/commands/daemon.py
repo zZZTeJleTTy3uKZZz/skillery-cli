@@ -44,6 +44,7 @@ from skillery_cli.daemon.daemon_runner import (
     read_state,
 )
 from skillery_cli.daemon.event_sender import OutboxSender
+from skillery_cli.daemon.queue_stream import DeviceQueueStream
 from skillery_cli.output import emit_data, emit_error, emit_message
 
 console = Console()
@@ -144,6 +145,10 @@ def _build_runner(
         # первый тяжёлый проход на первом же такте (и делает поведение
         # независимым от аптайма — на свежей CI-VM тест это и вскрыл).
         last_heavy: dict[str, float] = {"at": _time.monotonic() - _HEAVY_RECONCILE_SEC}
+        # #1191: канал доставки очереди — SSE-push с прозрачным откатом на
+        # long-poll. Объект ЖИВЁТ МЕЖДУ ТАКТАМИ (курсор, признак «сервер не умеет
+        # SSE», окно backoff'а) — поэтому создаётся здесь, а не внутри `_reconcile`.
+        queue_stream = DeviceQueueStream(wait=_LONGPOLL_WAIT_SEC)
         # #1102: каденс self-upgrade CLI — старт (force, один раз) + раз в час.
         self_upgrade: dict[str, float | bool] = {"at": 0.0, "started": False}
 
@@ -156,13 +161,15 @@ def _build_runner(
             from skillery_cli.core.agents import get_target
 
             target = get_target(cfg.agent)
-            # 0) #905: АДРЕСНАЯ очередь этого устройства — LONG-POLL (висим до
-            #    ~25с). Применяем и РАПОРТУЕМ факт (skill-очередь + #1102
-            #    device_tasks: cli_upgrade и пр.). Висящий коннект держит
-            #    last_seen свежим (устройство почти всегда «на связи»).
-            await main_mod._reconcile_device_queue(
+            # 0) #905/#1191: АДРЕСНАЯ очередь этого устройства. Основной канал —
+            #    SSE-push (`/me/devices/queue/stream`, курсор Last-Event-ID на
+            #    диске ⇒ разрыв не теряет задачи); если он недоступен (старый
+            #    сервер, прокси режет stream, ошибка) — ТОТ ЖЕ такт уходит на
+            #    прежний long-poll, доставка не проседает. Применяем и РАПОРТУЕМ
+            #    факт (skill-очередь + #1102 device_tasks: cli_upgrade и пр.).
+            #    Живой коннект держит last_seen свежим («на связи» в вебе).
+            await queue_stream.run_once(
                 cfg, access, channel="published", agent_target=target,
-                wait=_LONGPOLL_WAIT_SEC,
             )
             # 0.5) #1174/#1180: доставку ЕДИНОЙ исходящей очереди делает ТАКТ
             #    демона (`OutboxSender.send_once` в `cycle_once`) — он идёт до

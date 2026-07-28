@@ -3540,8 +3540,20 @@ async def _reconcile_device_queue(
     channel: str,
     agent_target,  # IAgentTarget
     wait: int = 0,
+    payload: dict | None = None,
+    client=None,  # HubClient | None
 ) -> dict[str, list]:
     """#905: забрать очередь ЭТОГО устройства, применить и ОТРАПОРТОВАТЬ факт.
+
+    #1191 (SSE): применение очереди переиспользуется push-каналом, поэтому
+    источник данных отделён от их обработки:
+
+    - ``payload`` — УЖЕ полученный ответ очереди (``{items, device_tasks}``);
+      задан ⇒ сетевого запроса нет, применяем ровно его. Так SSE-клиент
+      (``daemon/queue_stream.py``) прогоняет тело события ``queue`` через ТОТ ЖЕ
+      код, что и long-poll — обработка заданий не продублирована.
+    - ``client`` — ЧУЖОЙ HubClient (владелец закроет сам). Свой создаём и
+      закрываем только когда его не передали.
 
     ``wait>0`` — LONG-POLL: запрос очереди висит на сервере до <wait> сек, пока
     не появится задание (мгновенная доставка + heartbeat). Сам факт висящего
@@ -3575,30 +3587,39 @@ async def _reconcile_device_queue(
     # Long-poll держит коннект до <wait>с — HTTP-таймаут клиента ОБЯЗАН быть
     # больше wait, иначе клиент отвалится РАНЬШЕ ответа сервера (таймаут задаётся
     # на КОНСТРУКЦИИ HubClient — транспорт кита не принимает per-request timeout).
-    client = HubClient(
-        base_url=cfg.base_url, access_token=access,
-        on_token_refresh=_make_refresh_callback(cfg),
-        timeout=(float(wait) + 10.0) if wait > 0 else 30.0,
-    )
+    own_client = client is None
+    if own_client:
+        client = HubClient(
+            base_url=cfg.base_url, access_token=access,
+            on_token_refresh=_make_refresh_callback(cfg),
+            timeout=(float(wait) + 10.0) if wait > 0 else 30.0,
+        )
     try:
-        try:
-            # #1102: берём ПОЛНЫЙ ответ очереди (items + device_tasks) одним
-            # запросом. getattr-фолбэк — для старого транспорта/фейков без
-            # `fetch_device_queue_full` (skill-очередь тогда работает как прежде,
-            # device_tasks просто пусты).
-            if hasattr(client, "fetch_device_queue_full"):
-                resp = await client.fetch_device_queue_full(
-                    auto_update=cfg.auto_update, wait=wait,
-                    supports_removal=True,  # #13: этот CLI умеет снимать навыки
-                )
-            else:
-                items = await client.fetch_device_queue(
-                    auto_update=cfg.auto_update, wait=wait, supports_removal=True,
-                )
-                resp = {"items": items, "device_tasks": []}
-        except Exception:
-            # Старый backend / нет устройства в UA — молча уступаем legacy-пути.
-            return report
+        if payload is not None:
+            # #1191: тело события SSE — сеть уже отработала, применяем как есть.
+            resp = {
+                "items": list(payload.get("items") or []),
+                "device_tasks": list(payload.get("device_tasks") or []),
+            }
+        else:
+            try:
+                # #1102: берём ПОЛНЫЙ ответ очереди (items + device_tasks) одним
+                # запросом. getattr-фолбэк — для старого транспорта/фейков без
+                # `fetch_device_queue_full` (skill-очередь тогда работает как прежде,
+                # device_tasks просто пусты).
+                if hasattr(client, "fetch_device_queue_full"):
+                    resp = await client.fetch_device_queue_full(
+                        auto_update=cfg.auto_update, wait=wait,
+                        supports_removal=True,  # #13: этот CLI умеет снимать навыки
+                    )
+                else:
+                    items = await client.fetch_device_queue(
+                        auto_update=cfg.auto_update, wait=wait, supports_removal=True,
+                    )
+                    resp = {"items": items, "device_tasks": []}
+            except Exception:
+                # Старый backend / нет устройства в UA — молча уступаем legacy-пути.
+                return report
         queue = list(resp.get("items") or [])
         device_tasks = list(resp.get("device_tasks") or [])
 
@@ -3746,7 +3767,11 @@ async def _reconcile_device_queue(
         # (``commands/daemon.py::_deliver_outbox``) — со своим троттлом и
         # backoff'ом. Раньше force-flush висел тут и на long-poll-ритме (такт ~2с)
         # означал бы запрос к бэку каждые пару секунд.
-        await client.close()
+        #
+        # #1191: ЧУЖОЙ клиент (SSE-сессия) не закрываем — иначе оборвали бы
+        # живой стрим, из которого сами же и получили это тело.
+        if own_client:
+            await client.close()
     return report
 
 

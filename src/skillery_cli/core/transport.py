@@ -641,6 +641,109 @@ class HubClient:
         )
         return list(data.get("items", []))
 
+    async def stream_device_queue(
+        self,
+        *,
+        last_event_id: str | None = None,
+        auto_update: bool | None = None,
+        supports_removal: bool = True,
+    ) -> AsyncIterator[tuple[str, dict[str, Any], str | None]]:
+        """GET /me/devices/queue/stream (SSE) → поток ``(event, data, event_id)`` (#1191).
+
+        PUSH-канал очереди устройства вместо постоянного long-poll'а:
+
+        - события ``queue`` — тело идентично ответу ``/me/device-queue``
+          (``items`` + ``device_tasks``), у каждого есть ``id:`` — КУРСОР;
+        - события ``ping`` — heartbeat (не реже 20с), задачей НЕ является;
+        - первое ``queue`` приходит сразу при подключении.
+
+        ``last_event_id`` уезжает заголовком ``Last-Event-ID`` — сервер добирает
+        из БД всё, что мы пропустили за время разрыва (задачи не теряются).
+
+        ⚠️ Токен идёт ТОЛЬКО заголовком ``Authorization`` — в query его класть
+        нельзя (утечёт в логи прокси/сервера).
+
+        ⚠️ Таймаут чтения задан на КОНСТРУКЦИИ клиента (транспорт кита не
+        принимает per-request ``timeout=`` — это уже приводило к молчаливому
+        TypeError и «вечно офлайн» устройству). Для SSE его берут > heartbeat'а
+        (см. ``daemon/queue_stream.py``): молчание дольше таймаута = мёртвый
+        коннект, читатель уйдёт на реконнект.
+
+        Старый backend без эндпоинта отдаст 404/405 — метод бросит
+        :class:`ApiError` с этим статусом, вызывающий переключается на long-poll.
+        """
+        from urllib.parse import urlencode
+
+        params: dict[str, str] = {}
+        if auto_update is not None:
+            params["auto_update"] = "true" if auto_update else "false"
+        if supports_removal:
+            params["supports_removal"] = "true"
+        path = "/me/devices/queue/stream"
+        if params:
+            path += "?" + urlencode(params)
+        client = self._transport._client  # httpx.AsyncClient кита (base_url задан)
+
+        def _headers() -> dict[str, str]:
+            h = self._auth_headers()
+            h["Accept"] = "text/event-stream"
+            # Прокси/CDN не должны буферизовать поток — иначе события копятся.
+            h["Cache-Control"] = "no-store"
+            if last_event_id:
+                h["Last-Event-ID"] = str(last_event_id)
+            return h
+
+        # До 2 попыток: первая; при 401 с рабочим refresh — вторая с новым токеном.
+        for attempt in range(2):
+            try:
+                async with client.stream("GET", path, headers=_headers()) as resp:
+                    if (
+                        resp.status_code == 401
+                        and self._on_refresh is not None
+                        and attempt == 0
+                    ):
+                        await resp.aread()
+                        new_tokens = await self._on_refresh()
+                        if new_tokens is not None:
+                            self._access_token = new_tokens[0]
+                            continue  # повтор с новым токеном
+                    if resp.status_code >= 400:
+                        await resp.aread()
+                        raise self._parse_error_response(resp)
+                    event: str | None = None
+                    event_id: str | None = None
+                    data_lines: list[str] = []
+                    async for raw in resp.aiter_lines():
+                        line = raw.rstrip("\r")
+                        if not line:
+                            # Пустая строка — конец SSE-кадра: отдаём собранное.
+                            if data_lines:
+                                payload = "\n".join(data_lines)
+                                try:
+                                    data = json.loads(payload)
+                                except json.JSONDecodeError:
+                                    data = {}
+                                if not isinstance(data, dict):
+                                    data = {}
+                                yield (event or "message"), data, event_id
+                            event, data_lines = None, []
+                            continue
+                        if line.startswith(":"):
+                            continue  # SSE-комментарий (тоже keep-alive)
+                        if line.startswith("event:"):
+                            event = line[len("event:"):].strip()
+                        elif line.startswith("id:"):
+                            # Курсор «липкий» по спеке SSE — держим до смены.
+                            event_id = line[len("id:"):].strip() or event_id
+                        elif line.startswith("data:"):
+                            data_lines.append(line[len("data:"):].lstrip())
+                    return  # стрим закрыт сервером — читатель решит про реконнект
+            except (httpx.TransportError, _LkTransportError) as e:
+                # Обрыв/недоступность стрима — доменная ошибка (её ловит
+                # SSE-клиент демона и уходит на реконнект/fallback), а не сырой
+                # httpx-traceback.
+                raise self._network_error("GET", path, e) from e
+
     async def report_device_apply(
         self,
         *,
