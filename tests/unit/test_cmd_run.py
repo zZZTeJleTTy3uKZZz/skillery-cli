@@ -84,12 +84,39 @@ def _patch_spawn(monkeypatch: pytest.MonkeyPatch, spawn: _Spawn) -> _Spawn:
 
 
 def _patch_shim(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, name: str = SLUG) -> Path:
-    """Подменить резолв shim'а: на диске его нет, но путь должен доехать до argv."""
+    """Legacy-путь: sidecar'а нет, есть только shim (установка до кита 0.3.5)."""
     shim = tmp_path / "bin" / name
     shim.parent.mkdir(parents=True, exist_ok=True)
     shim.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(run_mod, "_sidecar_entrypoint", lambda command_name: None)
     monkeypatch.setattr(run_mod, "_shim_path", lambda command_name: shim)
     return shim
+
+
+def _write_sidecar(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    entrypoint: str,
+    name: str = SLUG,
+) -> Path:
+    """Настоящий sidecar в bin-каталоге стора (то, что кладёт ``add_cli``)."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    (bin_dir / f"{name}.json").write_text(
+        json.dumps(
+            {
+                "command_name": name,
+                "entrypoint": entrypoint,
+                "skill_slug": SLUG,
+                "kind": "cmd",
+                "shim": str(bin_dir / f"{name}.cmd"),
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(run_mod, "_bin_dir", lambda: bin_dir)
+    return bin_dir
 
 
 def _runs() -> list[dict[str, Any]]:
@@ -115,7 +142,7 @@ class TestSuccessfulRun:
         # Идентичность — НАВЫКА, а не CLI: иначе события всех навыков слились бы.
         assert payload["component_id"] == SLUG
         assert payload["component_version"] == VERSION
-        # Аргументы ушли навыку как есть, первым идёт shim стора.
+        # Аргументы ушли навыку как есть; здесь legacy-путь (sidecar'а нет).
         assert spawn.calls == [[str(shim), "post", "create"]]
 
     def test_prompt_skill_without_artifacts_is_checkpoint(
@@ -242,10 +269,13 @@ class TestErrors:
         assert exc.value.code == "COMMAND_NOT_FOUND"
 
     def test_missing_shim_and_no_path_command_raises_cli_error(
-        self, store: Path, monkeypatch: pytest.MonkeyPatch
+        self, store: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Ни shim'а, ни команды в PATH → рецепт починки, а не FileNotFoundError."""
+        """Ни sidecar'а, ни shim'а, ни команды в PATH → рецепт, а не FileNotFoundError."""
         _make_skill(store, with_cli=True)
+        empty_bin = tmp_path / "empty-bin"
+        empty_bin.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(run_mod, "_bin_dir", lambda: empty_bin)
         monkeypatch.setattr(run_mod, "_shim_path", lambda command_name: None)
         monkeypatch.setattr("shutil.which", lambda name: None)
 
@@ -280,6 +310,126 @@ class TestRealChildProcess:
 
         assert exc.value.code == 5
         assert _runs()[0]["payload"]["status"] == STATUS_ERROR
+
+
+# ═══════════ #1221: антирекурсия — shim зовёт run, run НЕ зовёт shim ═══════════
+class TestRecursionSafety:
+    """Самое опасное место фичи. Shim навыка теперь зовёт ``skillery run``.
+
+    Если обёртка в ответ запустит shim, получится «shim → run → shim → …» —
+    бесконечный цикл, который положит машину пользователя. Поэтому запускается
+    ПРЯМОЙ entrypoint из sidecar'а, а маркер-переменная страхует на случай, если
+    цикл замкнётся иначе (устаревший shim, ручной PATH).
+    """
+
+    def test_runs_entrypoint_from_sidecar_not_shim(
+        self, store: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _make_skill(store, with_cli=True)
+        entrypoint = '"C:\\venv\\python.exe" -m demo'
+        bin_dir = _write_sidecar(monkeypatch, tmp_path, entrypoint)
+        # Shim на диске ЕСТЬ — и всё равно не должен попасть в argv.
+        shim = bin_dir / f"{SLUG}.cmd"
+        shim.write_text("@echo off\n", encoding="utf-8")
+        spawn = _patch_spawn(monkeypatch, _Spawn(code=0))
+
+        run_mod.cmd_run(SLUG, ["ping"])
+
+        argv = spawn.calls[0]
+        assert argv == ["C:\\venv\\python.exe", "-m", "demo", "ping"]
+        assert str(shim) not in argv, "запуск shim'а из обёртки = рекурсия"
+
+    def test_real_world_entrypoint_with_inline_code_is_parsed(
+        self, store: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Реальный вид entrypoint'а: путь с обратными слэшами + ``-c "…;…"``.
+
+        Оба режима ``shlex`` поодиночке здесь врут: posix съедает слэши пути,
+        non-posix оставляет кавычки ВНУТРИ токена — и ``CreateProcess``
+        получает аргумент вместе с ними.
+        """
+        _make_skill(store, with_cli=True)
+        code = "import sys; from atlas.cli import app; sys.exit(app())"
+        entrypoint = f'C:\\venv\\Scripts\\python.exe -c "{code}"'
+        _write_sidecar(monkeypatch, tmp_path, entrypoint)
+        spawn = _patch_spawn(monkeypatch, _Spawn(code=0))
+
+        run_mod.cmd_run(SLUG, ["--json"])
+
+        assert spawn.calls == [
+            ["C:\\venv\\Scripts\\python.exe", "-c", code, "--json"]
+        ]
+
+    def test_shim_is_only_a_fallback_when_sidecar_is_absent(
+        self, store: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Установки до кита 0.3.5 sidecar'а не имеют — их shim ещё прямой."""
+        _make_skill(store, with_cli=True)
+        shim = _patch_shim(monkeypatch, tmp_path)
+        spawn = _patch_spawn(monkeypatch, _Spawn(code=0))
+
+        run_mod.cmd_run(SLUG, [])
+
+        assert spawn.calls == [[str(shim)]]
+
+    def test_marker_on_input_fails_loudly_instead_of_looping(
+        self, store: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Цикл всё же замкнулся → понятная ошибка, а не кручение до OOM."""
+        _make_skill(store, with_cli=True)
+        spawn = _patch_spawn(monkeypatch, _Spawn(code=0))
+        monkeypatch.setenv(run_mod.guard_env_name(), "1")
+
+        with pytest.raises(CliError) as exc:
+            run_mod.cmd_run(SLUG, [])
+
+        assert exc.value.code == "RUN_RECURSION"
+        assert spawn.calls == [], "при обнаружении цикла ничего не запускаем"
+
+    def test_recursion_guard_writes_no_envelope(
+        self, store: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Виток цикла не должен ещё и раздувать метрику ложными запусками."""
+        _make_skill(store, with_cli=True)
+        _patch_spawn(monkeypatch, _Spawn(code=0))
+        monkeypatch.setenv(run_mod.guard_env_name(), "1")
+        before = len(_runs())
+
+        with pytest.raises(CliError):
+            run_mod.cmd_run(SLUG, [])
+
+        assert len(_runs()) == before
+
+    def test_marker_is_set_for_the_child_process(
+        self, store: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Ребёнок обязан ВИДЕТЬ маркер — на нём держится защита shim'а."""
+        import sys
+
+        _make_skill(store, with_cli=True)
+        probe = tmp_path / "probe.py"
+        out = tmp_path / "marker.txt"
+        probe.write_text(
+            "\n".join(
+                [
+                    "import os",
+                    "marker = os.environ.get(" + repr(run_mod.guard_env_name()) + ", '')",
+                    "with open(" + repr(str(out)) + ", 'w', encoding='utf-8') as fh:",
+                    "    fh.write(marker)",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            run_mod,
+            "_resolve_executable",
+            lambda entry, slug: [sys.executable, str(probe)],
+        )
+
+        run_mod.cmd_run(SLUG, [])
+
+        assert out.read_text(encoding="utf-8") == "1"
 
 
 # ═════════════ инструкции навыков ведут вызов через обёртку ═════════════

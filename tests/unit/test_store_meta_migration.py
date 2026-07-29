@@ -153,3 +153,39 @@ def test_auto_update_picks_up_migrated_skill(tmp_path: Path, monkeypatch) -> Non
 
     after = [s for s in main_mod._collect_store_skills(store) if s["source"] == "hub"]
     assert [s["ref"] for s in after] == ["vk"]
+
+
+# ══════════ #1221 — миграция shim'ов на учёт вызова через «skillery run» ══════════
+class TestShimMigrationToRunner:
+    """Разница между «учёт для новых установок» и «учёт для всех».
+
+    У пользователей уже лежат shim'ы старого формата — с прямым вызовом
+    entrypoint, мимо учёта. Без перегенерации метрика «запуски» осталась бы
+    вырожденной для всего, что установлено до кита 0.3.5, то есть для всего
+    реально используемого.
+    """
+
+    def test_delegates_to_kit_and_reports_regenerated(self, monkeypatch) -> None:
+        from skillery_cli.core import path_store, store_migrations
+
+        monkeypatch.setattr(
+            path_store, "regenerate_shims", lambda: ["vk", "atlas"], raising=False
+        )
+        assert store_migrations.ensure_shims_route_through_runner() == ["vk", "atlas"]
+
+    def test_old_kit_without_regenerate_is_survived(self, monkeypatch) -> None:
+        """Кит <0.3.5 метода не несёт — это отсутствие учёта, а не падение CLI."""
+        from skillery_cli.core import path_store, store_migrations
+
+        monkeypatch.delattr(path_store, "regenerate_shims", raising=False)
+        assert store_migrations.ensure_shims_route_through_runner() == []
+
+    def test_kit_failure_never_breaks_the_caller(self, monkeypatch) -> None:
+        """Нет прав на bin-каталог → пустой список, а не упавший демон."""
+        from skillery_cli.core import path_store, store_migrations
+
+        def _boom() -> list[str]:
+            raise OSError("bin-каталог только на чтение")
+
+        monkeypatch.setattr(path_store, "regenerate_shims", _boom, raising=False)
+        assert store_migrations.ensure_shims_route_through_runner() == []

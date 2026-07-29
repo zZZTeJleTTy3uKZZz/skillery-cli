@@ -14,8 +14,7 @@
 * если это ``kind="tooling"``-навык, его мета несёт ``manifest.cli[]``
   (``command_name`` + ``entrypoint``), и установка кладёт исполняемый **shim**
   в bin-каталог стора (``<store>/../bin/<command_name>[.cmd]``) + sidecar
-  ``<command_name>.json`` — см. ``skillkit.path_store``. ЭТО и есть исполняемая
-  сущность навыка: «запустить навык» = запустить его shim;
+  ``<command_name>.json`` — см. ``skillkit.path_store``;
 * prompt-/comprehensive-навык исполняемых артефактов НЕ несёт. Запускать нечего
   — но факт использования всё равно существует и должен быть зафиксирован
   (агент прочитал инструкцию и применил её). Для таких навыков команда работает
@@ -30,6 +29,26 @@
 3. **stdio прозрачно.** Дочерний процесс наследует stdin/stdout/stderr — навык
    остаётся интерактивным, а обёртка ничего не печатает в его канал.
 
+ЧТО ЗАПУСКАЕМ И ПОЧЕМУ ИМЕННО ЭТО (антирекурсия — главное здесь).
+
+С ``s-skillkit`` 0.3.5 shim навыка сам зовёт ``skillery run <slug> --command
+<name> …`` — именно так учёт перестал зависеть от того, вспомнит ли модель
+позвать обёртку: он срабатывает при ЛЮБОМ вызове (``vk …``, ``atlas …``),
+включая уже опубликованные навыки. Отсюда жёсткое следствие: **обёртка НЕ имеет
+права запускать shim**. Пара «shim → run → shim» — бесконечный цикл, который
+положит машину пользователя.
+
+Поэтому исполняемое резолвится из sidecar'а ``<bin>/<command_name>.json``, поле
+``entrypoint`` — там лежит ПРЯМОЙ вызов (``<venv>/Scripts/python.exe -c "…"``).
+Shim остаётся лишь крайним fallback'ом для старых установок, где sidecar'а нет.
+
+Второй, независимый предохранитель — маркер-переменная
+``SKILLERY_RUN_ACTIVE``. Обёртка выставляет её дочернему процессу, а увидев её
+на СВОЁМ входе, честно падает с ``RUN_RECURSION``: значит цикл всё-таки
+замкнулся (старый shim, ручной PATH, entrypoint зовёт обёртку сам). Крутиться
+до исчерпания памяти вместо понятной ошибки — недопустимо. Тот же маркер
+проверяет и сам shim, уходя на прямой вызов.
+
 Запуск процесса — через ``librarykit.proc.popen`` (единая политика win32:
 ``CREATE_NO_WINDOW``, консольные окна дочерних процессов не всплывают). Прямой
 ``subprocess`` в CLI запрещён гейтом ``tests/test_no_raw_subprocess.py``.
@@ -41,7 +60,10 @@
 """
 from __future__ import annotations
 
+import json
 import logging
+import os
+import shlex
 import sys
 from pathlib import Path
 from typing import Any, Optional
@@ -60,6 +82,41 @@ KIND_SKILL_RUN = "skill_run"
 
 #: Код возврата для прерывания пользователем — общепринятый 128+SIGINT.
 EXIT_INTERRUPTED = 130
+
+#: Дефолт маркера антирекурсии на случай, если кит его не отдаёт (старая версия).
+#: Реальное имя спрашиваем у ``skillkit.path_store`` — оно ОДНО и там же его
+#: пишет в shim; захардкодить второе значение = разъехаться с shim'ом молча.
+_GUARD_ENV_FALLBACK = "SKILLERY_RUN_ACTIVE"
+
+
+def guard_env_name() -> str:
+    """Имя маркер-переменной антирекурсии (общее с shim'ом кита)."""
+    try:
+        from skillkit import path_store
+
+        name = str(path_store.guard_env_name()).strip()
+        return name or _GUARD_ENV_FALLBACK
+    except Exception as exc:  # noqa: BLE001 — старый кит без раннера
+        _LOG.debug("имя маркера антирекурсии не получено у кита: %s", exc)
+        return _GUARD_ENV_FALLBACK
+
+
+def _guard_against_recursion() -> None:
+    """Упасть понятно, если обёртка вызвана ИЗ СВОЕГО ЖЕ дочернего процесса.
+
+    Штатно этого быть не может: ``run`` зовёт прямой entrypoint из sidecar'а, а
+    shim при виде маркера уходит на прямой вызов. Но цикл может замкнуться
+    иначе — старый shim без проверки маркера, ручной PATH, сам entrypoint зовёт
+    ``skillery run``. Крутиться до исчерпания памяти вместо честной ошибки —
+    недопустимо: это ляжет на машину пользователя, а не на метрику.
+    """
+    if os.environ.get(guard_env_name()):
+        raise CliError(
+            "RUN_RECURSION",
+            "Обнаружен цикл запуска: «skillery run» вызван из процесса, который "
+            "сам запущен «skillery run».\nОбычно это устаревший shim навыка. "
+            "Починить: skillery install <slug> --force",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -126,33 +183,109 @@ def _pick_entry(
     return entries[0]
 
 
-def _shim_path(command_name: str) -> Path | None:
-    """Путь к установленному shim'у команды навыка (или ``None``, если его нет).
+def _bin_dir() -> Path | None:
+    """Bin-каталог стора у ``skillkit.path_store`` — того, кто shim'ы и кладёт.
 
-    Каталог берём у ``skillkit.path_store`` — того самого модуля, который shim и
-    кладёт; второго мнения о раскладке bin-каталога здесь не заводим.
+    Второго мнения о раскладке каталога здесь не заводим: разъехавшись, оно
+    молча увело бы запуск мимо установленного навыка.
     """
     try:
         from skillkit import path_store
 
-        shim = path_store.bin_dir() / (
-            f"{command_name}.cmd" if sys.platform == "win32" else command_name
-        )
-        return shim if shim.exists() else None
+        return path_store.bin_dir()
     except Exception as exc:  # noqa: BLE001
-        _LOG.debug("не определён путь shim'а для %s: %s", command_name, exc)
+        _LOG.debug("не определён bin-каталог стора: %s", exc)
         return None
+
+
+def _split_entrypoint(entrypoint: str) -> list[str]:
+    """Разобрать строку entrypoint в argv. Пусто — если разобрать не удалось.
+
+    Реальный entrypoint выглядит так::
+
+        C:\\...\\Scripts\\python.exe -c "import sys; from atlas.cli import app; …"
+
+    и ломает оба режима ``shlex`` поодиночке: ``posix=True`` на Windows съел бы
+    обратные слэши путей (``C:\\venv`` → ``C:venv``), а ``posix=False`` оставил
+    бы кавычки ВНУТРИ токена — и ``CreateProcess`` получил бы аргумент
+    ``"import sys; …"`` вместе с кавычками. Поэтому на win32 режим
+    non-posix + ручное снятие обрамляющих кавычек, на POSIX — штатный posix.
+    """
+    if not entrypoint:
+        return []
+    try:
+        if sys.platform != "win32":
+            return shlex.split(entrypoint, posix=True)
+        tokens = shlex.split(entrypoint, posix=False)
+    except ValueError as exc:  # незакрытая кавычка в мете навыка
+        _LOG.debug("entrypoint %r не разобран: %s", entrypoint, exc)
+        return []
+    out: list[str] = []
+    for token in tokens:
+        if len(token) >= 2 and token[0] == token[-1] and token[0] in ('"', "'"):
+            token = token[1:-1]
+        out.append(token)
+    return out
+
+
+def _sidecar_entrypoint(command_name: str) -> list[str] | None:
+    """argv прямого запуска команды из sidecar'а ``<bin>/<command_name>.json``.
+
+    Sidecar — ИСТОЧНИК ПРАВДЫ о том, чем на самом деле запускается навык
+    (``<venv>/Scripts/python.exe -c "…"``). Именно его, а не shim, обязана
+    звать обёртка: shim с кита 0.3.5 сам ведёт в ``skillery run``, и вызов
+    shim'а отсюда замкнул бы бесконечный цикл.
+    """
+    d = _bin_dir()
+    if d is None:
+        return None
+    sidecar = d / f"{command_name}.json"
+    try:
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        _LOG.debug("sidecar %s не прочитан: %s", sidecar, exc)
+        return None
+    if not isinstance(data, dict):
+        return None
+    entrypoint = str(data.get("entrypoint") or "").strip()
+    if not entrypoint:
+        return None
+    return _split_entrypoint(entrypoint) or None
+
+
+def _shim_path(command_name: str) -> Path | None:
+    """Путь к установленному shim'у команды навыка (или ``None``, если его нет).
+
+    ВНИМАНИЕ: это КРАЙНИЙ fallback (старые установки без sidecar'а). Shim кита
+    0.3.5+ ведёт в ``skillery run`` — запускать его отсюда штатно нельзя.
+    """
+    d = _bin_dir()
+    if d is None:
+        return None
+    shim = d / (f"{command_name}.cmd" if sys.platform == "win32" else command_name)
+    return shim if shim.exists() else None
 
 
 def _resolve_executable(entry: dict[str, Any], slug: str) -> list[str]:
     """argv[0..] для запуска команды навыка.
 
-    Приоритет — shim стора: он единственный знает, каким интерпретатором
-    (venv навыка) звать entrypoint. Если shim'а нет, но команда уже на PATH
-    (навык ставился иначе / PATH настроен вручную) — берём её оттуда. Иначе
-    честная ошибка с готовым рецептом, а не падение ``FileNotFoundError``.
+    Приоритет — ПРЯМОЙ entrypoint из sidecar'а: только он гарантированно не
+    заворачивает исполнение обратно в эту же обёртку. Дальше — shim и команда
+    из PATH: обе ветки существуют ради установок, сделанных до кита 0.3.5, где
+    shim ещё звал entrypoint напрямую. Ничего не нашли — честная ошибка с
+    рецептом, а не ``FileNotFoundError`` из недр ``popen``.
+
+    Чего здесь НЕТ намеренно: ``entrypoint`` из МЕТЫ навыка. Там лежит спека
+    (``demo_skill.cli:main``), а не исполняемое — запустить её нельзя; резолвом
+    спеки в интерпретатор venv занимается установщик, и результат он кладёт
+    именно в sidecar.
     """
     name = str(entry["command_name"]).strip()
+
+    argv = _sidecar_entrypoint(name)
+    if argv:
+        return argv
+
     shim = _shim_path(name)
     if shim is not None:
         return [str(shim)]
@@ -164,8 +297,8 @@ def _resolve_executable(entry: dict[str, Any], slug: str) -> list[str]:
     raise CliError(
         "CLI_NOT_REGISTERED",
         f"Команда «{name}» навыка «{slug}» не зарегистрирована на этом "
-        f"устройстве (нет shim'а в bin-каталоге стора и нет команды в PATH).\n"
-        f"Починить: skillery install {slug} --force",
+        f"устройстве (нет sidecar'а/shim'а в bin-каталоге стора и нет команды "
+        f"в PATH).\nПочинить: skillery install {slug} --force",
     )
 
 
@@ -251,7 +384,11 @@ def _spawn(argv: list[str], *, cwd: Path | None) -> int:
     """
     from librarykit import proc
 
-    child = proc.popen(argv, cwd=cwd, stdin=None, stdout=None, stderr=None)
+    # Маркер антирекурсии наследуется всем поддеревом процесса: shim навыка,
+    # увидев его, уйдёт на прямой вызов entrypoint, а вложенный «skillery run»
+    # честно упадёт RUN_RECURSION вместо бесконечного цикла.
+    env = {**os.environ, guard_env_name(): "1"}
+    child = proc.popen(argv, cwd=cwd, env=env, stdin=None, stdout=None, stderr=None)
     return int(child.wait())
 
 
@@ -283,6 +420,10 @@ def cmd_run(
         command_name = None
     if not isinstance(cwd, Path):
         cwd = None
+
+    # ПЕРВЫМ делом — до стора, меты и телеметрии: если цикл уже замкнулся,
+    # каждый его виток не должен ещё и писать событие в outbox.
+    _guard_against_recursion()
 
     cfg = ClientConfig.load()
     skill_dir = _skill_dir(cfg, slug)
@@ -343,4 +484,10 @@ def register(app: typer.Typer) -> None:
     )(command(cmd_run))
 
 
-__all__ = ["EXIT_INTERRUPTED", "KIND_SKILL_RUN", "cmd_run", "register"]
+__all__ = [
+    "EXIT_INTERRUPTED",
+    "KIND_SKILL_RUN",
+    "cmd_run",
+    "guard_env_name",
+    "register",
+]

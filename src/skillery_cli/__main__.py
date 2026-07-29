@@ -4005,9 +4005,17 @@ async def _auto_update_hub_installs(
     # конфиге, повторный проход стоит одну проверку флага. Выше гейтов — чтобы
     # выключённое автообновление или ещё не истёкший cooldown не откладывали
     # починку меты на неопределённый срок.
-    from skillery_cli.core.store_migrations import ensure_store_meta_migrated
+    from skillery_cli.core.store_migrations import (
+        ensure_shims_route_through_runner,
+        ensure_store_meta_migrated,
+    )
 
     ensure_store_meta_migrated(cfg)
+    # #1221: у уже установленных навыков shim'ы старого формата зовут entrypoint
+    # напрямую — мимо учёта. Перегенерация по sidecar'ам и есть разница между
+    # «учёт для новых установок» и «учёт для всех». Тоже ВЫШЕ гейтов ниже:
+    # выключённое автообновление не должно означать выключённый учёт.
+    ensure_shims_route_through_runner()
     if not cfg.auto_update:
         # Автообновление выключено пользователем — оставляем device-sync как есть,
         # до latest ничего не поднимаем.
