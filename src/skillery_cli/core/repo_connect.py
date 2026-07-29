@@ -14,8 +14,11 @@
 """
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import subprocess  # noqa: F401 — только тип исключения SubprocessError; запуск через proc
+import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Callable, Optional
@@ -30,6 +33,9 @@ _GITLAB_TOKEN_NAME = "skillery-sync"
 _GITLAB_TOKEN_TTL_DAYS = 364
 # access_level=20 (Reporter) — минимум для read_api на теги/содержимое.
 _GITLAB_REPORTER_LEVEL = 20
+# Скоупы project-токена. МАССИВ — так его требует GitLab API (см. ниже про
+# сериализацию); одиночная строка и «scopes[]» здесь не эквивалентны.
+_GITLAB_TOKEN_SCOPES = ["read_api"]
 
 
 @dataclass(frozen=True)
@@ -141,6 +147,22 @@ def github_repo_is_public(
 CommandRunner = Callable[..., Any]
 
 
+def _write_temp_json(body: dict[str, Any]) -> str:
+    """Записать JSON-тело во временный файл и вернуть путь к нему.
+
+    ``delete=False`` + явный ``close``: на Windows файл, открытый нами, второй
+    процесс (``glab``) открыть не сможет. Удаление — на вызывающем (``finally``).
+    """
+    fh = tempfile.NamedTemporaryFile(  # noqa: SIM115 — закрываем сами, см. выше
+        mode="w", suffix=".json", encoding="utf-8", delete=False
+    )
+    try:
+        json.dump(body, fh)
+    finally:
+        fh.close()
+    return fh.name
+
+
 def create_gitlab_project_token(
     slug: RepoSlug,
     *,
@@ -153,6 +175,21 @@ def create_gitlab_project_token(
     maintainer на проекте. Возвращает токен или ``None`` при любом сбое
     (нет glab / нет прав / неожиданный ответ) — вызывающий откатится на
     ручной ``--repo-token``.
+
+    СЕРИАЛИЗАЦИЯ ТЕЛА — НЕ КОСМЕТИКА (#1225). ``POST
+    /projects/:id/access_tokens`` ждёт ``scopes`` **массивом**. Раньше здесь
+    стояло ``-f "scopes[]=read_api"`` в расчёте на rack-подобный разбор имени
+    поля, но ``glab api -f`` кладёт параметры в JSON-тело как есть, и на провод
+    уходило ``{"scopes[]": "read_api"}`` — ключа ``scopes`` в теле нет вовсе,
+    GitLab отвечает 400, публикация приватного навыка требовала ручного
+    ``--repo-token``. (Проверено захватом реального запроса ``glab 1.93``.)
+
+    Поэтому тело формируется как JSON и отдаётся через ``--input`` — тем же
+    способом, что и в ``core.webhook_setup``. Файл, а не ``-``/stdin: у ``glab``
+    ``--input -`` отправляет ПУСТОЕ тело (проверено на том же захвате), то есть
+    молча теряет все параметры. Секретов в теле нет (имя/скоупы/срок), токен
+    приходит только в ОТВЕТЕ, поэтому временный файл безопасен; он удаляется в
+    ``finally``.
     """
     now = now or datetime.now(UTC)
     expires_at = (now + timedelta(days=_GITLAB_TOKEN_TTL_DAYS)).strftime(
@@ -161,6 +198,16 @@ def create_gitlab_project_token(
     # GitLab API: путь проекта URL-энкодится (owner%2Fname; вложенные группы
     # тоже через %2F). Эндпоинт после /api/v4/.
     project_path = slug.path.replace("/", "%2F")
+    body = {
+        "name": _GITLAB_TOKEN_NAME,
+        "scopes": list(_GITLAB_TOKEN_SCOPES),
+        "access_level": _GITLAB_REPORTER_LEVEL,
+        "expires_at": expires_at,
+    }
+    try:
+        body_file = _write_temp_json(body)
+    except OSError:
+        return None
     args = [
         "glab",
         "api",
@@ -169,14 +216,8 @@ def create_gitlab_project_token(
         "--method",
         "POST",
         f"projects/{project_path}/access_tokens",
-        "-f",
-        f"name={_GITLAB_TOKEN_NAME}",
-        "-f",
-        "scopes[]=read_api",
-        "-f",
-        f"access_level={_GITLAB_REPORTER_LEVEL}",
-        "-f",
-        f"expires_at={expires_at}",
+        "--input",
+        body_file,
     ]
     try:
         proc = runner(
@@ -188,6 +229,9 @@ def create_gitlab_project_token(
         )
     except (OSError, subprocess.SubprocessError):
         return None
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(body_file)
     if proc.returncode != 0:
         return None
     try:

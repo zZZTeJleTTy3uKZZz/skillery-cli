@@ -90,24 +90,88 @@ def test_gitlab_token_created() -> None:
     assert tok == "glpat-scoped-xyz"
 
 
-def test_gitlab_token_args_scope_and_expiry() -> None:
-    slug = RepoSlug("gitlab.com", "acme", "skills")
+def _capture_request() -> tuple:
+    """Раннер, снимающий argv И РАЗОБРАННОЕ ТЕЛО запроса (файл ``--input``).
+
+    Тело читается ВНУТРИ вызова: файл временный и удаляется в ``finally``,
+    после возврата его уже нет.
+    """
     captured: dict = {}
 
     def _run(args, **kwargs):
-        captured["args"] = args
+        captured["args"] = list(args)
+        body_file = args[args.index("--input") + 1]
+        with open(body_file, encoding="utf-8") as fh:
+            captured["body"] = json.load(fh)
+        captured["body_file"] = body_file
         return subprocess.CompletedProcess(args, 0, stdout='{"token":"t"}', stderr="")
 
+    return _run, captured
+
+
+def test_gitlab_token_body_is_json_with_scopes_array() -> None:
+    """#1225: ``scopes`` уходит МАССИВОМ в JSON-теле, а не ключом «scopes[]».
+
+    Регресс, который здесь заперт: ``glab api -f "scopes[]=read_api"`` кладёт
+    параметр в JSON-тело как есть, и GitLab получает ``{"scopes[]": "..."}`` —
+    поля ``scopes`` в запросе нет вовсе, создание токена падает 400.
+    """
+    slug = RepoSlug("gitlab.com", "acme", "skills")
+    runner, captured = _capture_request()
+
     create_gitlab_project_token(
-        slug, runner=_run, now=datetime(2026, 1, 1, tzinfo=UTC)
+        slug, runner=runner, now=datetime(2026, 1, 1, tzinfo=UTC)
     )
+
+    body = captured["body"]
+    assert body["scopes"] == ["read_api"]
+    assert isinstance(body["scopes"], list)
+    assert "scopes[]" not in body
+    assert body["name"] == "skillery-sync"
+    # access_level — ЧИСЛО (Reporter), а не строка: у GitLab это integer.
+    assert body["access_level"] == 20
+    # expires_at = now + 364 дней = 2026-12-31
+    assert body["expires_at"] == "2026-12-31"
+
+
+def test_gitlab_token_args_endpoint_and_input() -> None:
+    slug = RepoSlug("gitlab.com", "acme", "skills")
+    runner, captured = _capture_request()
+
+    create_gitlab_project_token(
+        slug, runner=runner, now=datetime(2026, 1, 1, tzinfo=UTC)
+    )
+
     args = captured["args"]
     joined = " ".join(args)
-    assert "scopes[]=read_api" in joined
     assert "projects/acme%2Fskills/access_tokens" in joined
     assert "--hostname" in args and "gitlab.com" in args
-    # expires_at = now + 364 дней = 2026-12-31
-    assert "expires_at=2026-12-31" in joined
+    assert "--method" in args and "POST" in args
+    # Тело — через --input <файл>. Именно файл: у glab «--input -» (stdin)
+    # отправляет ПУСТОЕ тело, то есть молча теряет все параметры.
+    assert "--input" in args
+    assert args[args.index("--input") + 1] != "-"
+    # Ни одного «-f/--raw-field»: они и породили ключ «scopes[]».
+    assert "-f" not in args and "--raw-field" not in args
+
+
+def test_gitlab_token_temp_body_file_removed() -> None:
+    """Временный файл тела не остаётся на диске — ни на успехе, ни на ошибке."""
+    import os
+
+    slug = RepoSlug("gitlab.com", "acme", "skills")
+    runner, captured = _capture_request()
+    create_gitlab_project_token(slug, runner=runner)
+    assert not os.path.exists(captured["body_file"])
+
+    seen: dict = {}
+
+    def _boom(args, **kwargs):
+        seen["file"] = args[args.index("--input") + 1]
+        raise OSError("glab упал")
+
+    assert create_gitlab_project_token(slug, runner=_boom) is None
+    assert not os.path.exists(seen["file"])
 
 
 def test_gitlab_token_none_on_glab_failure() -> None:
