@@ -20,6 +20,24 @@ from skillery_cli.config import ClientConfig
 from skillery_cli.core.transport import ApiError
 from skillery_cli.core.webhook_setup import SKILL_QUERY_KEY
 
+
+def _body_from_call(args: list[str], kwargs: dict[str, Any]) -> Any:
+    """Тело запроса из вызова провайдерского CLI — обе формы передачи.
+
+    После #1266 тело уходит через ``--input <файл>``: ``glab api --input -``
+    отправлял ПУСТОЕ тело с кодом возврата 0, то есть вебхук молча не
+    создавался. Читаем файл; форму со stdin оставляем, чтобы фейк не был
+    завязан на одну реализацию.
+    """
+    if "--input" in args:
+        source = args[args.index("--input") + 1]
+        if source != "-":
+            from pathlib import Path
+
+            return json.loads(Path(source).read_text(encoding="utf-8"))
+    raw = kwargs.get("input")
+    return json.loads(raw) if raw else None
+
 SECRET = "wh-secret-DO-NOT-LEAK"
 # Приёмник хаба один на провайдера; адрес hook'а = приёмник + маркер навыка.
 CALLBACK = "https://api.skillery.ru/webhooks/git/github"
@@ -198,8 +216,12 @@ class FakeProvider:
 
     def __call__(self, args, **kwargs):
         method = args[args.index("--method") + 1]
-        path = args[-1] if args[-1] != "-" else args[-3]
-        body = json.loads(kwargs["input"]) if kwargs.get("input") else None
+        # Путь берём ПО ПОЗИЦИИ (сразу за значением --method), а не как
+        # последний аргумент: после #1266 тело уходит через `--input <файл>`,
+        # и «последним» стал путь к временному файлу. Прежняя эвристика
+        # молча подсовывала его вместо API-пути.
+        path = args[args.index("--method") + 2]
+        body = _body_from_call(args, kwargs)
         tail = path.split("/hooks", 1)[1].strip("/")
         out = "null"
         if method == "GET" and not tail:

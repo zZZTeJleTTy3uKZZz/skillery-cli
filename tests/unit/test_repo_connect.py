@@ -25,7 +25,14 @@ from skillery_cli.core.repo_connect import (
         ("https://github.com/acme/skills.git", RepoSlug("github.com", "acme", "skills")),
         ("https://github.com/acme/skills", RepoSlug("github.com", "acme", "skills")),
         ("git@github.com:acme/skills.git", RepoSlug("github.com", "acme", "skills")),
-        ("https://gitlab.com/grp/sub/proj.git", RepoSlug("gitlab.com", "grp", "proj")),
+        # #1267: средняя группа обязана сохраняться. Раньше здесь стояло
+        # `RepoSlug("gitlab.com", "grp", "proj")` — тест закреплял дефект как
+        # ожидаемое поведение, из-за чего починка выглядела бы регрессом, а сам
+        # баг был «покрыт тестом» и потому невидим.
+        (
+            "https://gitlab.com/grp/sub/proj.git",
+            RepoSlug("gitlab.com", "grp", "proj", subgroups=("sub",)),
+        ),
         ("https://user:pass@gitlab.com/acme/skills.git", RepoSlug("gitlab.com", "acme", "skills")),
         ("ssh://git@gitlab.example.com:22/acme/skills.git", RepoSlug("gitlab.example.com", "acme", "skills")),
     ],

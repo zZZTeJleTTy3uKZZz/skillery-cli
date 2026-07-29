@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import subprocess
 import sys
 
@@ -24,6 +25,21 @@ BASE = "http://hub.local"
 CALLBACK = f"{BASE}/webhooks/git/github"
 
 
+def _body_from_call(args: list[str], kwargs: dict) -> object:
+    """Тело запроса из вызова провайдерского CLI — обе формы передачи.
+
+    После #1266 тело уходит через ``--input <файл>``: форма ``--input -``
+    отправляла ПУСТОЕ тело с кодом возврата 0, то есть вебхук молча не
+    создавался.
+    """
+    if "--input" in args:
+        source = args[args.index("--input") + 1]
+        if source != "-":
+            return json.loads(Path(source).read_text(encoding="utf-8"))
+    raw = kwargs.get("input")
+    return json.loads(raw) if raw else None
+
+
 class FakeGh:
     def __init__(self) -> None:
         self.hooks: dict[str, dict] = {}
@@ -33,8 +49,11 @@ class FakeGh:
     def __call__(self, args, **kwargs):
         self.argv_log.append(list(args))
         method = args[args.index("--method") + 1]
-        path = args[-1] if args[-1] != "-" else args[-3]
-        body = json.loads(kwargs["input"]) if kwargs.get("input") else None
+        # Путь — ПО ПОЗИЦИИ (сразу за значением --method). После #1266 тело
+        # уходит через `--input <файл>`, поэтому «последний аргумент» — это
+        # путь к временному файлу, а не к API.
+        path = args[args.index("--method") + 2]
+        body = _body_from_call(args, kwargs)
         tail = path.split("/hooks", 1)[1].strip("/")
         out = "null"
         if method == "GET" and not tail:
