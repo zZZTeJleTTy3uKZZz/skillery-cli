@@ -5746,10 +5746,20 @@ def build_app() -> typer.Typer:
           name="list")(_comment_mod.cmd_comments_list)
     app.add_typer(comment_app, name="comment")
     # Back-compat СКРЫТЫЕ алиасы (прежние плоские дефисные формы).
+    # #1223: алиас теперь ПРЕДУПРЕЖДАЕТ о новом имени в stderr — иначе он
+    # консервирует скрипты на старой форме вместо перевода на канон.
+    from skillery_cli._grouping import deprecated_alias as _dep_alias
+
     gated(app, permission="comment.edit_own", has_permission=cfg.has_permission,
-          name="comment-edit", hidden=True)(_comment_mod.cmd_comment_edit)
+          name="comment-edit", hidden=True, deprecated=True)(
+        _dep_alias(_comment_mod.cmd_comment_edit,
+                   old="comment-edit", new="comment edit")
+    )
     gated(app, permission="comment.delete_own", has_permission=cfg.has_permission,
-          name="comment-delete", hidden=True)(_comment_mod.cmd_comment_delete)
+          name="comment-delete", hidden=True, deprecated=True)(
+        _dep_alias(_comment_mod.cmd_comment_delete,
+                   old="comment-delete", new="comment delete")
+    )
 
     # === Support tickets ===
     if cfg.has_permission("ticket.create") or cfg.has_permission("ticket.read"):
@@ -5876,7 +5886,22 @@ def build_app() -> typer.Typer:
         can_catalog_manage=cfg.has_permission("catalog.manage"),
     )
 
+    _finalize_groups(app)
     return app
+
+
+def _finalize_groups(app: typer.Typer) -> None:
+    """#1223: плоские команды → ресурсные группы ``skillery <ресурс> <глагол>``.
+
+    Делается ОДНИМ проходом в самом конце сборки, а не в каждом ``register()``:
+    к этому моменту известно, какие команды реально зарегистрированы (часть
+    режут permission-гейты), и группа создаётся ровно под доступные глаголы.
+    Плоские имена остаются рабочими скрытыми алиасами с предупреждением в
+    stderr — см. ``skillery_cli._grouping``.
+    """
+    from skillery_cli._grouping import apply_resource_groups
+
+    apply_resource_groups(app)
 
 
 app = build_app()

@@ -25,6 +25,7 @@ import typer
 from rich.console import Console
 from rich.prompt import Prompt
 
+from skillery_cli._grouping import deprecated_alias
 from skillery_cli.commands import _common
 from skillery_cli.config import ClientConfig, populate_from_jwt, save_tokens
 from skillery_cli.core.transport import ApiError
@@ -362,4 +363,8 @@ def register(app: typer.Typer) -> None:
     )
     invite_app.command(name="accept")(cmd_accept_invite)
     app.add_typer(invite_app, name="invite")
-    app.command(name="accept-invite", hidden=True)(cmd_accept_invite)
+    # #1223: скрытый алиас теперь ещё и ПРЕДУПРЕЖДАЕТ (stderr) о новом имени —
+    # молчаливый алиас не переводит скрипты на канон, он их там консервирует.
+    app.command(name="accept-invite", hidden=True, deprecated=True)(
+        deprecated_alias(cmd_accept_invite, old="accept-invite", new="invite accept")
+    )

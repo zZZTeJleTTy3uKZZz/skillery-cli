@@ -631,14 +631,20 @@ def _build_app(monkeypatch: pytest.MonkeyPatch, perms: list[str]):  # noqa: ANN2
 def test_members_and_roles_registered_for_plain_member(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """members/roles — для любого залогиненного (бэк сам сужает выдачу);
-    member sub-app без мутационных прав НЕ регистрируется."""
+    """members/roles — для любого залогиненного (бэк сам сужает выдачу).
+
+    #1223: плоские имена ОСТАЛИСЬ (back-compat, скрытые алиасы), а группа
+    ``member`` теперь есть и без мутационных прав — в неё переехал read-only
+    список (``members`` → ``member list``). Отсутствие прав проверяем по
+    МУТАЦИЯМ внутри группы, а не по факту её наличия.
+    """
     app = _build_app(monkeypatch, ["skill.read"])
     names = [c.name for c in app.registered_commands]
     assert "members" in names
     assert "roles" in names
-    groups = [g.name for g in app.registered_groups]
-    assert "member" not in groups
+    groups = {g.name: g.typer_instance for g in app.registered_groups}
+    member_sub = [c.name for c in groups["member"].registered_commands]
+    assert member_sub == ["list"]
 
 
 def test_member_subapp_partial_gates(

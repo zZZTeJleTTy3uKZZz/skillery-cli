@@ -680,14 +680,24 @@ def test_m4_role_subapp_and_permissions_hub_admin_only(
     assert "set-permissions" in role_sub
 
 
-def test_m4_role_absent_for_non_hub_admin(
+def test_m4_role_management_absent_for_non_hub_admin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Управление правами — только hub.admin.
+
+    #1223: сама группа ``role`` теперь ЕСТЬ и у не-админа, потому что в неё
+    переехал read-only каталог (``roles`` → ``role list``, доступен любому
+    залогиненному). Гейт проверяем там, где он и живёт — на МУТАЦИЯХ:
+    ``show``/``set-permissions`` не должны быть зарегистрированы. Каталога
+    прав (``permission list``) у не-админа нет вовсе.
+    """
     app = _build_app(monkeypatch, ["role.manage", "skill.read"])
-    names = [c.name for c in app.registered_commands]
-    groups = [g.name for g in app.registered_groups]
-    assert "permissions" not in names
-    assert "role" not in groups
+    groups = {g.name: g.typer_instance for g in app.registered_groups}
+    assert "permission" not in groups
+    role_sub = [c.name for c in groups["role"].registered_commands]
+    assert "show" not in role_sub
+    assert "set-permissions" not in role_sub
+    assert role_sub == ["list"]
 
 
 def test_collection_tags_command_registered(

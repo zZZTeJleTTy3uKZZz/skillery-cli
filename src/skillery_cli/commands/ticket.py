@@ -17,6 +17,7 @@ from clikit.command_kit import gated
 from rich.console import Console
 from rich.table import Table
 
+from skillery_cli._grouping import deprecated_alias
 from skillery_cli.commands import _common
 from skillery_cli.config import ClientConfig
 from skillery_cli.output import emit_data, emit_error
@@ -317,16 +318,28 @@ def register_ticket(
     create). ``status`` — только при ``ticket.update_status`` (``can_update``);
     по умолчанию False (back-compat для существующих вызовов без аргумента).
     """
-    ticket_app = typer.Typer(no_args_is_help=True, help="Support tickets")
+    ticket_app = typer.Typer(
+        no_args_is_help=True,
+        # ВНИМАНИЕ: rich_markup_mode="rich" — квадратные скобки в help
+        # интерпретируются как разметка и роняют рендер справки.
+        help="Тикеты поддержки: list / create / show / reply / status.",
+    )
     ticket_app.command("create")(cmd_ticket_create)
     ticket_app.command("show")(cmd_ticket_show)
     ticket_app.command("reply")(cmd_ticket_reply)
+    # #1223: список — глагол СВОЕГО ресурса (`ticket list`), а не отдельная
+    # группа-множественное `tickets`.
+    ticket_app.command("list")(cmd_tickets_list)
     # cli-kits W6: одиночный гейт status → command_kit.gated (предикат —
     # предвычисленный can_update).
     gated(ticket_app, permission="status", has_permission=lambda _p: can_update,
           name="status")(cmd_ticket_status)
     app.add_typer(ticket_app, name="ticket")
 
+    # Back-compat: прежняя группа-множественное `tickets list` остаётся
+    # рабочей СКРЫТОЙ формой и предупреждает о новом имени в stderr.
     tickets_app = typer.Typer(no_args_is_help=True, help="List support tickets")
-    tickets_app.command("list")(cmd_tickets_list)
-    app.add_typer(tickets_app, name="tickets")
+    tickets_app.command("list", deprecated=True)(
+        deprecated_alias(cmd_tickets_list, old="tickets list", new="ticket list")
+    )
+    app.add_typer(tickets_app, name="tickets", hidden=True)

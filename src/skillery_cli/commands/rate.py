@@ -10,6 +10,7 @@ from typing import Any
 import typer
 from rich.console import Console
 
+from skillery_cli._grouping import deprecated_alias
 from skillery_cli.commands import _common
 from skillery_cli.config import ClientConfig
 from skillery_cli.output import emit_data, emit_error
@@ -97,8 +98,13 @@ def register(app: typer.Typer) -> None:
     # Ресурс-группа `rating` (canon #890): `rating summary` вместо дефисной
     # `rating-summary`. Дефисную форму держим СКРЫТЫМ алиасом (back-compat).
     rating_app = typer.Typer(
-        no_args_is_help=True, help="Рейтинг навыков: summary."
+        no_args_is_help=True, help="Рейтинг навыков: set (оценить) / summary."
     )
     rating_app.command(name="summary")(cmd_rating_summary)
     app.add_typer(rating_app, name="rating")
-    app.command(name="rating-summary", hidden=True)(cmd_rating_summary)
+    # #1223: скрытый алиас теперь предупреждает о новом имени (stderr).
+    app.command(name="rating-summary", hidden=True, deprecated=True)(
+        deprecated_alias(
+            cmd_rating_summary, old="rating-summary", new="rating summary"
+        )
+    )

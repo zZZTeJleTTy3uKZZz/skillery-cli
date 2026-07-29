@@ -23,36 +23,60 @@ skillery --help
 > Прежнее имя команды `skills-hub` оставлено как совместимость и лишь
 > подсказывает перейти на `skillery`.
 
+## Канон команд: `skillery <ресурс> <глагол>`
+
+Команды сгруппированы по ресурсам (ресурс — в единственном числе):
+
+| Ресурс | Про что | Глаголы |
+|--------|---------|---------|
+| `skill` | навыки | `list` `show` `suggest` `contributors` `install` `remove` `enable` `disable` `update` `installed` `sync` `pull` `push` `publish` `report` `new` |
+| `auth` | аккаунт и сессия | `login` `logout` `whoami` `passwd` `register` `join` |
+| `cli` | сам CLI | `status` `doctor` `logs` `config` `upgrade` |
+| `store` | центральный стор | `list` `path` `gc` `migrate` |
+| `device` | устройства | `list` |
+| `collection` · `rating` · `comment` · `ticket` · `webhook` · `event` · `daemon` | — | `<группа> --help` |
+| `member` · `role` · `permission` · `company` · `invite` · `admin` | администрирование | `<группа> --help` |
+
+Вне групп остались `run` (обёртка запуска навыка — вшита в каждый `SKILL.md`),
+`ask`, `web` и `onboard`: это разовые действия без ресурса-собрата.
+
+**Старые плоские имена продолжают работать.** `skillery install …`,
+`skillery members`, `skillery status` вызывают ровно те же функции, что и
+новые формы — ни один существующий скрипт, `SKILL.md` или вызов из демона не
+ломается. При вызове старого имени в **stderr** уходит подсказка с новой
+формой; stdout не затрагивается, поэтому разбор вывода (в т.ч. `--json`)
+остаётся валидным. Заглушить подсказку — `SKILLERY_NO_DEPRECATION_WARNINGS=1`.
+
 ## Quickstart
 
 ```bash
 # Онбординг: зарегистрироваться самому либо принять инвайт-ссылку/токен.
-skillery register
-skillery join <ссылка-или-токен>
+skillery auth register
+skillery auth join <ссылка-или-токен>
 # либо, если уже есть учётка:
-skillery login --email me@example.com --password ...
+skillery auth login --email me@example.com --password ...
 
 # Посмотреть доступные навыки (доступ фильтруется правами):
-skillery list
-skillery collections                 # кураторские подборки
+skillery skill list
+skillery collection list             # кураторские подборки
 
 # Навыки ставятся в центральный стор (~/.skillery/store) и линкуются junction/
 # symlink. Дефолтный scope — project (текущая папка).
-skillery install bitrix24                 # → стор + ссылка в ./.claude/skills
-skillery install bitrix24 --scope global  # → стор + ссылка в ~/.claude/skills
+skillery skill install bitrix24                 # → стор + ссылка в ./.claude/skills
+skillery skill install bitrix24 --scope global  # → стор + ссылка в ~/.claude/skills
 
 # Автономно — без хаба, из локальной папки или git (логин не нужен):
-skillery install --path ./my-skill
-skillery install --from-git <url> --ref v1.0.0
+skillery skill install --path ./my-skill
+skillery skill install --from-git <url> --ref v1.0.0
 
 # Динамический набор проекта:
-skillery enable wb-api           # включить в текущем проекте
-skillery disable wb-api          # выключить (стор цел)
-skillery sync                    # применить манифест проекта
+skillery skill enable wb-api     # включить в текущем проекте
+skillery skill disable wb-api    # выключить (стор цел)
+skillery skill sync              # применить манифест проекта
 skillery store list              # что в сторе
 
 # Обновить установленные навыки:
-skillery update --all
+skillery skill update --all
 ```
 
 ## Установка под всех агентов
@@ -62,8 +86,8 @@ CLI автодетектит установленного агента (Claude C
 форсировать конкретного агента или поставить сразу под всех:
 
 ```bash
-skillery install bitrix24 --agent codex
-skillery install bitrix24 --all-agents
+skillery skill install bitrix24 --agent codex
+skillery skill install bitrix24 --all-agents
 ```
 
 ## Оценки, комментарии, тикеты, коллекции
@@ -72,19 +96,19 @@ skillery install bitrix24 --all-agents
 
 ```bash
 # Оценить навык (1..5) и посмотреть сводку:
-skillery rate bitrix24 5
-skillery rating-summary bitrix24
+skillery rating set bitrix24 5
+skillery rating summary bitrix24
 
 # Комментарий (с необязательным скриншотом):
-skillery comment bitrix24 "работает в облаке" --screenshot ~/proof.png
-skillery comments bitrix24 --limit 25
+skillery comment add bitrix24 "работает в облаке" --screenshot ~/proof.png
+skillery comment list bitrix24 --limit 25
 
 # Тикеты в поддержку:
 skillery ticket create "OAuth ломается" --skill bitrix24 --kind bug
-skillery tickets list --status open
+skillery ticket list --status open
 
 # Коллекции (просмотр из CLI):
-skillery collections list --type dynamic
+skillery collection list --type dynamic
 skillery collection show popular
 ```
 
