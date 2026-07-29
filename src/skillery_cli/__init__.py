@@ -11,4 +11,4 @@ from importlib.metadata import version as _pkg_version
 try:
     __version__ = _pkg_version("skillery-cli")
 except PackageNotFoundError:  # dev-запуск из дерева исходников, не установлен
-    __version__ = "0.5.71"
+    __version__ = "0.5.72"

@@ -714,7 +714,7 @@ wheels = [
 
 [[package]]
 name = "s-skillkit"
-version = "0.3.4"
+version = "0.3.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pathspec" },
@@ -723,9 +723,9 @@ dependencies = [
     { name = "s-telemetrykit" },
     { name = "tomli-w" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/aa/77/2f1e3b1b7fcc1b854e029ec6e4e87b9d68d8ea07ec1bec35390e2907543c/s_skillkit-0.3.4.tar.gz", hash = "sha256:27cb48e8337f69ec3d292886befd58971d652e5309f12b2524f706ef9e46342b", size = 213237, upload-time = "2026-07-28T13:34:23.346Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6c/29/3b2082857009ba1d6e32bdb507a5e11b31a6208c62c91ec921f38da3084f/s_skillkit-0.3.5.tar.gz", hash = "sha256:61d5fde1959e22ce8121dad92312b46fdafea54c76f3d9064dec926b592bc3c5", size = 223267, upload-time = "2026-07-29T00:10:04.427Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b7/cc/8e0a9c2d35b465fa6d18b1a8872a2c2a6244c6993756481212674f640269/s_skillkit-0.3.4-py3-none-any.whl", hash = "sha256:36cb4b276fe53043137f17d6bf776c573ca1c39b2b9be78ca5e80334381dd9e2", size = 130721, upload-time = "2026-07-28T13:34:22.331Z" },
+    { url = "https://files.pythonhosted.org/packages/80/bb/5246c7485667120c0c713b9d0afab634c374d199a0de1593676c3d86b79a/s_skillkit-0.3.5-py3-none-any.whl", hash = "sha256:200e292d619d7c8b7f3dcb53d2ee1fe0d7eb8be1de9171e3a71198150509f8b8", size = 136152, upload-time = "2026-07-29T00:10:02.713Z" },
 ]
 
 [[package]]
@@ -761,7 +761,7 @@ wheels = [
 
 [[package]]
 name = "skillery-cli"
-version = "0.5.71"
+version = "0.5.72"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
@@ -800,7 +800,7 @@ requires-dist = [
     { name = "s-clikit", specifier = ">=0.1.4" },
     { name = "s-librarykit", specifier = ">=0.7.1" },
     { name = "s-skillgate", specifier = ">=0.1.2" },
-    { name = "s-skillkit", specifier = ">=0.3.4" },
+    { name = "s-skillkit", specifier = ">=0.3.5" },
     { name = "s-telemetrykit", specifier = ">=0.2.0" },
     { name = "tomli-w", specifier = ">=1.0" },
     { name = "typer", specifier = ">=0.15" },
