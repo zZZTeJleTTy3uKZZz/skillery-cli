@@ -14,7 +14,11 @@ config) даёт машинную структуру для AI-агентов и
 4. **Hub login** — залогинен ли (pass) или аноним (warn: оффлайн-режим);
 5. **PATH-стор** — bin-каталог CLI-шимов (``~/.skillery/bin``) в PATH? warn
    если нет (CLI установленных навыков не позовутся → ``doctor`` чинит);
-6. **clikit** — доступен ли пакет (опц.; warn если нет — нужен tooling-навыкам
+6. **PATH-коллизии** — не перехвачена ли команда навыка одноимённым бинарём из
+   каталога, стоящего в PATH РАНЬШЕ (pipx/uv в ``~/.local/bin``). Такой вызов
+   уходит мимо навыка и не учитывается — молчать об этом нельзя (#1249);
+   правится явным ``--fix-path-order`` (с бэкапом прежнего PATH);
+7. **clikit** — доступен ли пакет (опц.; warn если нет — нужен tooling-навыкам
    с встроенным CLI).
 
 Движок (``run_checks`` + ``_probe_*``) — чистые функции, тестируются точечно;
@@ -145,6 +149,21 @@ def _probe_path_store() -> Result:
     )
 
 
+def _probe_shim_collisions() -> Result:
+    """Не перехвачена ли команда навыка одноимённым бинарём из чужого каталога.
+
+    Отдельно от ``PATH-стор``: там вопрос «каталог вообще в PATH?», здесь —
+    «а он в PATH РАНЬШЕ чужого?». Второй случай коварнее: всё выглядит рабочим,
+    навык при этом не зовётся и запуск не учитывается (#1249).
+    """
+    from skillery_cli.core import shim_collisions
+
+    found = shim_collisions.detect()
+    if not found:
+        return ok("PATH-коллизии", "команды навыков не перехвачены")
+    return warn("PATH-коллизии", shim_collisions.summary(found))
+
+
 def _probe_clikit() -> Result:
     """clikit — опциональная зависимость (нужен tooling-навыкам с CLI)."""
     try:
@@ -259,6 +278,7 @@ def run_checks(cfg: ClientConfig) -> list[Result]:
         _probe_agent(cfg),
         _probe_login(cfg),
         _probe_path_store(),
+        _probe_shim_collisions(),
         _probe_clikit(),
         _probe_cli_version(),
     ]
@@ -288,6 +308,14 @@ def cmd_doctor(
         "--fix",
         help="Авто-починить известные проблемы (кривой конфиг + PATH) перед проверкой.",
     ),
+    fix_path_order: bool = typer.Option(
+        False,
+        "--fix-path-order",
+        help=(
+            "Поднять каталог команд навыков на первое место в PATH пользователя "
+            "(лечит перехват команды одноимённым бинарём). Прежний PATH — в бэкап."
+        ),
+    ),
 ) -> None:
     """Проверка окружения: Python/uv/config/agent/login/PATH/clikit (pass/warn/fail).
 
@@ -298,6 +326,7 @@ def cmd_doctor(
     strict = _unwrap_bool(strict, False)
     fix_path = _unwrap_bool(fix_path, False)
     fix = _unwrap_bool(fix, False)
+    fix_path_order = _unwrap_bool(fix_path_order, False)
 
     config_repairs: list[str] = []
     if fix:
@@ -310,6 +339,15 @@ def cmd_doctor(
     path_fix: dict[str, str] | None = None
     if fix_path or fix:
         path_fix = path_store.ensure_on_path()
+
+    # Порядок PATH правим ТОЛЬКО по явному флагу — не в составе широкого --fix:
+    # одноимённая программа может быть чужим инструментом, задвинуть её молча
+    # так же недопустимо, как молча потерять учёт (#1249).
+    order_fix: dict[str, str] | None = None
+    if fix_path_order:
+        from skillery_cli.core import shim_collisions
+
+        order_fix = shim_collisions.fix_path_order()
 
     results = run_checks(cfg)
     summary = _summary(results)
@@ -326,6 +364,8 @@ def cmd_doctor(
     }
     if path_fix is not None:
         payload["path_fix"] = path_fix
+    if order_fix is not None:
+        payload["path_order_fix"] = order_fix
     if config_repairs:
         payload["config_repairs"] = config_repairs
 
@@ -343,6 +383,24 @@ def cmd_doctor(
                 console.print(
                     f"[yellow]![/] PATH не удалось обновить автоматически. "
                     f"Выполни вручную: {path_fix.get('instruction', '')}"
+                )
+        if order_fix is not None:
+            st = order_fix.get("status")
+            if st == "reordered":
+                console.print(
+                    f"[green]✓[/] PATH: {order_fix['bin_dir']} поднят на первое "
+                    f"место (перезапусти терминал). Прежний PATH сохранён: "
+                    f"{order_fix.get('backup', '')}"
+                )
+            elif st == "already":
+                console.print(
+                    f"[green]✓[/] PATH: {order_fix['bin_dir']} уже первый — "
+                    "переставлять нечего"
+                )
+            else:
+                console.print(
+                    "[yellow]![/] Порядок PATH не изменён автоматически. "
+                    f"Сделай вручную: {order_fix.get('instruction', '')}"
                 )
         table = Table(title="skillery · doctor")
         table.add_column("проверка", style="bold")

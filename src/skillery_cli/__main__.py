@@ -1785,6 +1785,12 @@ def cmd_status(
     # Что демон поставил в фоне (его onboarding-печать ушла бы в DEVNULL) —
     # показываем агенту/пользователю здесь: что установилось и что доделать.
     pending = _read_pending_onboarding()
+    # #1249: команда навыка, перехваченная одноимённым бинарём из чужого
+    # каталога, работает «как будто нормально», но идёт мимо учёта. Молчаливой
+    # эта потеря быть не должна — показываем в обычном статусе.
+    from skillery_cli.core import shim_collisions
+
+    collisions = [c.as_dict() for c in shim_collisions.detect()]
     payload = {
         "agent": target.name,
         "global_skills_dir": str(target.base_dir()),
@@ -1796,6 +1802,7 @@ def cmd_status(
         "installed_global": global_items,
         "installed_project": project_items,
         "pending_onboarding": pending,
+        "shim_collisions": collisions,
     }
 
     def _render(p: dict) -> None:
@@ -1812,6 +1819,22 @@ def cmd_status(
             f"Installed:       global={len(p['installed_global'])}  "
             f"project={len(p['installed_project'])}"
         )
+        coll = p.get("shim_collisions") or []
+        if coll:
+            console.print("")
+            console.print(
+                f"[bold yellow]⚠ Команды навыков перехвачены ({len(coll)}) — "
+                "эти вызовы НЕ учитываются:[/]"
+            )
+            for c in coll:
+                console.print(
+                    f"  • [bold]{c['command']}[/] → {c['winner']} "
+                    f"(вместо навыка «{c['skill_slug']}»)"
+                )
+            console.print(
+                "  Починить: [bold]skillery doctor --fix-path-order[/] "
+                "· или звать навык явно: skillery run <slug>"
+            )
         pend = p.get("pending_onboarding") or []
         if pend:
             console.print("")
@@ -2483,6 +2506,21 @@ def _apply_tooling(
     _report_tooling(report)
 
 
+def _warn_shim_collision(command_name: str, skill_slug: str = "") -> None:
+    """Предупредить, если команду навыка перехватывает чужой одноимённый бинарь.
+
+    Best-effort: диагностика не имеет права сорвать установку — детект и так
+    не бросает, но импорт держим локальным и глушим на всякий случай.
+    """
+    try:
+        from skillery_cli.core import shim_collisions
+
+        for c in shim_collisions.detect_for_command(command_name, skill_slug):
+            emit_message(shim_collisions.describe(c), level="warn")
+    except Exception:  # noqa: BLE001 — предупреждение, а не исключение
+        pass
+
+
 def _report_tooling(report: dict) -> None:
     """Человекочитаемая сводка отчёта apply_tooling_artifacts (text + warn)."""
     for cli in report.get("cli") or []:
@@ -2497,6 +2535,10 @@ def _report_tooling(report: dict) -> None:
                     f"{path_info.get('instruction', '')} (или `skillery doctor --fix-path`).",
                     level="warn",
                 )
+            # #1249: shim положили — но выиграет он только если наш каталог в
+            # PATH раньше чужого. Сказать об этом надо ЗДЕСЬ, а не когда
+            # пользователь удивится нулевым запускам.
+            _warn_shim_collision(name)
         elif status in ("error", "skipped"):
             emit_message(
                 f"CLI «{name}» не поставлен ({status}): {cli.get('reason', '')}",
