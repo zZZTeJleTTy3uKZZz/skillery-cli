@@ -155,12 +155,22 @@ def _scan_text(rel_path: str, text: str) -> list[Finding]:
 
     snippet восстанавливаем как masked-line по номеру строки (UX ``cmd_publish``:
     видно ГДЕ утечка, без сырого секрета). Дедуп по ``(rule, line)``.
+
+    #1226: берём ТОЛЬКО находки severity=fail. Мягкие сигналы (``warn``, напр.
+    ``public-ipv4`` — «проверь, не внутренний ли это сервер») здесь абортили
+    publish наравне с настоящим ключом, потому что severity терялась при
+    конвертации в клиентский ``Finding``. Их место — денилист-гейт
+    (``_run_publish_denylist_gate``), который печатает warn НЕ блокируя.
+    Блокирующая чувствительность к секретам не меняется: все secret-правила и
+    ``windows-user-path`` имеют severity=fail.
     """
     rules, allowlist = _skillgate_rules_allowlist()
     lines = text.splitlines()
     findings: list[Finding] = []
     seen: set[tuple[str, int]] = set()
     for f in _skillgate_scan_text(text, rules, allowlist, file=rel_path):
+        if f.severity.value != "fail":
+            continue
         key = (f.rule, f.line)
         if key in seen:
             continue

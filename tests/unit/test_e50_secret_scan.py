@@ -242,3 +242,37 @@ def test_finding_is_frozen() -> None:
     f = Finding(file="a", line=1, rule="r", snippet="s")
     with pytest.raises((AttributeError, Exception)):
         f.line = 2  # type: ignore[misc]
+
+
+# --------------------------------------------------------------------------
+# #1226 — калибровка: мягкие сигналы не абортят publish, секреты абортят
+# --------------------------------------------------------------------------
+def test_scan_text_ignores_warn_severity_signals() -> None:
+    """``public-ipv4`` (severity=warn) — забота денилист-гейта, не секрет-скана.
+
+    Раньше severity терялась и любой IPv4 в коде рушил publish наравне с ключом,
+    а обходили это ``--force`` — то есть отключая гейт целиком.
+    """
+    findings = scan_text("net.py", 'PROD = "5.181.253.77"')
+    assert [f.rule for f in findings] == []
+
+
+def test_scan_text_skips_version_strings_and_paths() -> None:
+    """Нормальный код: User-Agent и URL-путь больше не считаются утечкой."""
+    ua = '"Mozilla/5.0 (Windows NT 10.0) Chrome/131.0.0.0 Safari/537.36"'
+    assert scan_text("http.py", ua) == []
+    api = 'API_KEY_PATH = "/api/analytics/v1/wb/subject/categories"'
+    assert [f.rule for f in scan_text("client.py", api)] == []
+
+
+def test_scan_text_still_detects_real_secrets_after_calibration() -> None:
+    """Калибровка не ослабила детект: известные форматы ловятся по-прежнему."""
+    cases = {
+        "aws-akia": f'AWS = "{AWS_EXAMPLE_KEY}"',
+        "gitlab-pat": "PAT = " + "glpat-" + "A1b2C3d4E5f6G7h8I9j0",  # склейка: цельный литерал
+        # ловится push-protection GitHub как настоящий токен
+        "private-key-block": "-----BEGIN RSA PRIVATE KEY-----",
+        "high-entropy-string": 'token = "6LdsFiUsAAAAAIjVDZcuLhaHiDn5nnHVXVRQGeMV"',
+    }
+    for rule_id, line in cases.items():
+        assert any(f.rule == rule_id for f in scan_text("src/app.py", line)), rule_id

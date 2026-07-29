@@ -82,6 +82,14 @@ _ALLOW_MARKER = "leak-gate-allow"
 #: автора пакета клиент и так видит на странице PyPI).
 _SKIP_SUFFIXES = (".gitignore", ".dockerignore", "METADATA", "PKG-INFO")
 
+#: Каталоги-эталоны сканеров секретов. В `tests/golden/` у `s-skillgate` лежат
+#: ОБРАЗЦЫ срабатываний правил — файл сверяется дословно, поэтому построчный
+#: `leak-gate-allow` туда не вписать (он ломает сравнение), а без образцов
+#: сканер нечем проверять. Исключение намеренно узкое: только этот подкаталог,
+#: не весь `tests/` — настоящая утечка в прошлый раз пришла именно из обычного
+#: тестового файла.
+_SKIP_PATH_PARTS = ("/tests/golden/",)
+
 
 def _is_benign(rule: str, hit: str) -> bool:
     low = hit.lower()
@@ -121,6 +129,9 @@ def scan(dist_dir: Path) -> list[str]:
     for archive in archives:
         for name, raw in _iter_members(archive):
             if name.endswith(_SKIP_SUFFIXES):
+                continue
+            norm = "/" + name.replace("\\", "/").lstrip("/")
+            if any(part in norm for part in _SKIP_PATH_PARTS):
                 continue
             text = raw.decode("utf-8", "ignore")
             # Построчно: allow-маркер действует ровно на свою строку, и в отчёт

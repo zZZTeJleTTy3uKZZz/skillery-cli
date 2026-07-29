@@ -705,11 +705,11 @@ wheels = [
 
 [[package]]
 name = "s-skillgate"
-version = "0.1.4"
+version = "0.1.5"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/c6/6f/7ceaecefec7a22ae80a577e7f69521e985e785eb77fda41f58ab7edddf92/s_skillgate-0.1.4.tar.gz", hash = "sha256:01dae00593139caf62bdfe5c724e0f868c27de47d88588adc398c24f0636d994", size = 20546, upload-time = "2026-07-17T22:34:41.992Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e6/ca/f7cacebcc95d1b3bf4cc5ea96c8e5ec89e3bd5d8d6c9bf09bf053cdc21c0/s_skillgate-0.1.5.tar.gz", hash = "sha256:41717ca6a1c7705654fbd6909fed8681308d9b4a9e0a0c65b7baf1f700d85118", size = 25850, upload-time = "2026-07-29T17:17:08.891Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/40/8f/57edaf3d823689d245f1a25c7268bdb5b8c85bacaa478a069a9622fc2b94/s_skillgate-0.1.4-py3-none-any.whl", hash = "sha256:cc331e6759344cb94e63a6a7a1e1a1792f0104c9ff22c49360c7b72ebde89d0a", size = 16274, upload-time = "2026-07-17T22:34:40.8Z" },
+    { url = "https://files.pythonhosted.org/packages/36/1d/48a990a80575d299e226cdd02924413b4216d63fc6796085354d311b2d52/s_skillgate-0.1.5-py3-none-any.whl", hash = "sha256:d3a075654237a3419a77d1739a6c41c3ce042ee9310462cdf185ec85ed4f76c9", size = 19276, upload-time = "2026-07-29T17:17:07.774Z" },
 ]
 
 [[package]]
@@ -761,7 +761,7 @@ wheels = [
 
 [[package]]
 name = "skillery-cli"
-version = "0.5.75"
+version = "0.5.76"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
@@ -799,7 +799,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
     { name = "s-clikit", specifier = ">=0.1.4" },
     { name = "s-librarykit", specifier = ">=0.7.1" },
-    { name = "s-skillgate", specifier = ">=0.1.2" },
+    { name = "s-skillgate", specifier = ">=0.1.5" },
     { name = "s-skillkit", specifier = ">=0.3.5" },
     { name = "s-telemetrykit", specifier = ">=0.2.0" },
     { name = "tomli-w", specifier = ">=1.0" },

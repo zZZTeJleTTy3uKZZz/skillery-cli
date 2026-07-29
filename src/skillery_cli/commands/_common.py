@@ -14,7 +14,7 @@ from typing import Any
 import typer
 from rich.console import Console
 
-from skillery_cli.config import ClientConfig, load_tokens, populate_from_jwt, save_tokens
+from skillery_cli.config import ClientConfig, load_tokens
 from skillery_cli.core.transport import ApiError, HubClient
 from skillery_cli.output import emit_error
 
@@ -144,29 +144,20 @@ def get_access_token() -> str:
 
 
 def make_refresh_callback(cfg: ClientConfig) -> object:
-    """Тот же callback что в ``__main__._make_refresh_callback``."""
+    """Реэкспорт ЕДИНСТВЕННОЙ реализации — ``__main__._make_refresh_callback``.
 
-    async def _refresh() -> tuple[str, str] | None:
-        if not cfg.user_email:
-            return None
-        _, refresh = load_tokens(cfg.user_email)
-        if not refresh:
-            return None
-        sub = HubClient(base_url=cfg.base_url, access_token=None)
-        try:
-            data = await sub.refresh(refresh)
-        except ApiError:
-            return None
-        finally:
-            await sub.close()
-        new_access = data["access_token"]
-        new_refresh = data["refresh_token"]
-        save_tokens(cfg.user_email, new_access, new_refresh)
-        populate_from_jwt(cfg, new_access)
-        cfg.save()
-        return (new_access, new_refresh)
+    #1227: здесь лежала копия того же флоу, разошедшаяся с оригиналом — она НЕ
+    писала причину в ``__main__._REFRESH_FAILURE``. А клиентов большинство
+    команд собирает именно через ``make_client`` → на протухшей сессии
+    пользователь видел сырое «401 Signature has expired» вместо «сессия
+    истекла, выполните login». Обновление токена — один флоу на весь CLI.
 
-    return _refresh
+    Импорт ленивый: ``__main__`` импортирует этот модуль на старте, обратный
+    импорт на уровне модуля дал бы цикл.
+    """
+    from skillery_cli.__main__ import _make_refresh_callback
+
+    return _make_refresh_callback(cfg)
 
 
 def make_client(cfg: ClientConfig, access: str) -> HubClient:
