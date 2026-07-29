@@ -1975,3 +1975,712 @@ class HubClient:
             "/skills/search-semantic",
             json={"query": query, "top_k": top_k},
         )
+
+    # ------------------------------------------------------------------
+    # #1224 — закрытие гэпов матрицы функционала (docs/ops/functional-canon.md)
+    #
+    # Ниже — методы под эндпоинты, которые матрица числила за CLI, но в коде
+    # их не было ни одного вызова: теги, access-grants, system-config, сессии,
+    # CRUD ролей, вспомогательные ручки навыков и коллекций.
+    # ------------------------------------------------------------------
+
+    # --- теги (routes/tags.py) ---
+    async def list_tags(
+        self,
+        *,
+        parent_id: str | None = None,
+        include_descendants: bool = False,
+        roots_only: bool = False,
+        q: str | None = None,
+        page: int | None = None,
+        size: int | None = None,
+        sort: str = "name",
+        direction: str = "asc",
+    ) -> dict[str, Any]:
+        """GET /tags — плоский список тегов.
+
+        Сверено с ``routes/tags.py::list_tags``: ответ — ``TagListResponse``
+        ``{items,total,page,size}``. Если ``page``/``size`` не заданы, backend
+        отдаёт legacy-режим (весь список до 500, ``page``/``size`` = ``null``),
+        поэтому по умолчанию их НЕ шлём — CLI обычно нужен весь каталог.
+        ``size`` капится бэком на 500 (422 PAGE_SIZE_TOO_LARGE).
+        """
+        params: dict[str, Any] = {"sort": sort, "direction": direction}
+        if parent_id is not None:
+            params["parent_id"] = parent_id
+        if include_descendants:
+            params["include_descendants"] = True
+        if roots_only:
+            params["roots_only"] = True
+        if q is not None:
+            params["q"] = q
+        if page is not None:
+            params["page"] = page
+        if size is not None:
+            params["size"] = size
+        return await self._request("GET", "/tags", params=params)
+
+    async def get_tag_tree(self) -> dict[str, Any]:
+        """GET /tags/tree — иерархия тегов.
+
+        Ответ ``TagTreeResponse{items: [{tag: TagDTO, children: [...]}]}`` —
+        рекурсивно, корни на верхнем уровне. Параметров нет.
+        """
+        return await self._request("GET", "/tags/tree")
+
+    async def get_tag(self, tag_id: str) -> dict[str, Any]:
+        """GET /tags/{tag_id} — карточка тега (404 TAG_NOT_FOUND)."""
+        return await self._request("GET", f"/tags/{tag_id}")
+
+    async def count_tags(
+        self,
+        *,
+        parent_id: str | None = None,
+        include_descendants: bool = False,
+        roots_only: bool = False,
+        q: str | None = None,
+    ) -> dict[str, Any]:
+        """GET /tags/count — ``{count}`` по тем же фильтрам, что ``GET /tags``."""
+        params: dict[str, Any] = {}
+        if parent_id is not None:
+            params["parent_id"] = parent_id
+        if include_descendants:
+            params["include_descendants"] = True
+        if roots_only:
+            params["roots_only"] = True
+        if q is not None:
+            params["q"] = q
+        return await self._request("GET", "/tags/count", params=params)
+
+    async def create_tag(
+        self,
+        *,
+        name: str,
+        description: str | None = None,
+        icon: str | None = None,
+        icon_color: str | None = None,
+        parent_id: str | None = None,
+    ) -> dict[str, Any]:
+        """POST /tags — создать тег (201, ``TagDTO``).
+
+        Право: ``tag.create``/``tag.manage``/``hub.admin``. ``parent_id=None``
+        = корневой тег.
+        """
+        payload: dict[str, Any] = {"name": name}
+        if description is not None:
+            payload["description"] = description
+        if icon is not None:
+            payload["icon"] = icon
+        if icon_color is not None:
+            payload["icon_color"] = icon_color
+        if parent_id is not None:
+            payload["parent_id"] = parent_id
+        return await self._request("POST", "/tags", json=payload)
+
+    async def update_tag(
+        self,
+        tag_id: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        icon: str | None = None,
+        icon_color: str | None = None,
+    ) -> dict[str, Any]:
+        """PATCH /tags/{tag_id} — частичное обновление (``TagDTO``).
+
+        Родителя тут менять НЕЛЬЗЯ — для этого отдельный
+        :meth:`move_tag` (``PATCH /tags/{id}/move``), как в backend.
+        """
+        payload: dict[str, Any] = {}
+        if name is not None:
+            payload["name"] = name
+        if description is not None:
+            payload["description"] = description
+        if icon is not None:
+            payload["icon"] = icon
+        if icon_color is not None:
+            payload["icon_color"] = icon_color
+        return await self._request("PATCH", f"/tags/{tag_id}", json=payload)
+
+    async def move_tag(
+        self, tag_id: str, *, new_parent_id: str | None
+    ) -> dict[str, Any]:
+        """PATCH /tags/{tag_id}/move — сменить родителя (``None`` = в корень).
+
+        ``new_parent_id`` шлём ВСЕГДА, в том числе ``null``: пропуск ключа и
+        ``null`` для backend значат разное (не менять / в корень).
+        """
+        return await self._request(
+            "PATCH",
+            f"/tags/{tag_id}/move",
+            json={"new_parent_id": new_parent_id},
+        )
+
+    async def delete_tag(self, tag_id: str) -> None:
+        """DELETE /tags/{tag_id} — удалить тег (204). Право ``tag.manage``."""
+        await self._request("DELETE", f"/tags/{tag_id}")
+
+    async def bulk_delete_tags(self, *, ids: list[str]) -> dict[str, Any]:
+        """POST /tags/bulk/delete — удалить пачку тегов по id.
+
+        Backend принимает ЛИБО ``ids``, ЛИБО ``filter`` (последний только
+        вместе с ``all=true``). CLI сознательно отдаёт только явный список id:
+        массовое удаление «по фильтру» из терминала слишком легко выстреливает
+        в ногу. Ответ ``BulkResultResponse{processed,updated,skipped_ids,errors}``.
+        """
+        return await self._request(
+            "POST", "/tags/bulk/delete", json={"ids": ids}
+        )
+
+    async def bulk_move_tags(
+        self, *, ids: list[str], new_parent_id: str | None
+    ) -> dict[str, Any]:
+        """POST /tags/bulk/move — перевесить пачку тегов под нового родителя."""
+        return await self._request(
+            "POST",
+            "/tags/bulk/move",
+            json={"ids": ids, "new_parent_id": new_parent_id},
+        )
+
+    async def get_entity_tags(
+        self, *, entity_type: str, entity_id: str
+    ) -> dict[str, Any]:
+        """GET /tags/assignments — теги, навешенные на сущность.
+
+        ``entity_type`` ∈ ``skill|collection|company|user``. Ответ
+        ``EntityTagsResponse{entity_type, entity_id, tags: [TagRef]}``.
+        """
+        return await self._request(
+            "GET",
+            "/tags/assignments",
+            params={"entity_type": entity_type, "entity_id": entity_id},
+        )
+
+    async def set_entity_tags(
+        self, *, entity_type: str, entity_id: str, tag_ids: list[str]
+    ) -> dict[str, Any]:
+        """PUT /tags/assignments — REPLACE-SET тегов сущности (не добавление).
+
+        Пустой ``tag_ids`` снимает все теги. Право — как у создания тега.
+        """
+        return await self._request(
+            "PUT",
+            "/tags/assignments",
+            json={
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+                "tag_ids": tag_ids,
+            },
+        )
+
+    # --- access-grants (routes/access_grants.py) ---
+    async def list_skill_access_grants(self, skill_id: str) -> dict[str, Any]:
+        """GET /skills/{skill_id}/access-grants — кому выдан доступ к навыку.
+
+        Право: ``skill.manage``/``hub.admin`` (эта GET-ручка гейтится, в
+        отличие от большинства чтений). Ответ
+        ``{skill_id, grants: [SkillAccessGrantDTO]}``.
+        """
+        return await self._request("GET", f"/skills/{skill_id}/access-grants")
+
+    async def grant_skill_access(
+        self,
+        skill_id: str,
+        *,
+        target_type: str,
+        target_id: str,
+        role: str = "viewer",
+    ) -> dict[str, Any]:
+        """PUT /skills/{skill_id}/access-grants — выдать доступ (идемпотентно).
+
+        ``target_type`` ∈ ``company|user|tag``; ``role`` ∈
+        ``viewer|editor|admin``. Повторный PUT на тот же таргет возвращает
+        существующий grant (тоже 201) — операция идемпотентна.
+        """
+        return await self._request(
+            "PUT",
+            f"/skills/{skill_id}/access-grants",
+            json={
+                "target_type": target_type,
+                "target_id": target_id,
+                "role": role,
+            },
+        )
+
+    async def revoke_skill_access(self, skill_id: str, grant_id: str) -> None:
+        """DELETE /skills/{skill_id}/access-grants/{grant_id} — отозвать (204)."""
+        await self._request(
+            "DELETE", f"/skills/{skill_id}/access-grants/{grant_id}"
+        )
+
+    async def list_collection_access_grants(
+        self, collection_id: str
+    ) -> dict[str, Any]:
+        """GET /collections/{id}/access-grants — кому выдан доступ к коллекции."""
+        return await self._request(
+            "GET", f"/collections/{collection_id}/access-grants"
+        )
+
+    async def grant_collection_access(
+        self,
+        collection_id: str,
+        *,
+        target_type: str,
+        target_id: str,
+        role: str = "viewer",
+    ) -> dict[str, Any]:
+        """PUT /collections/{id}/access-grants — выдать доступ к коллекции.
+
+        Гейт у мутаций коллекции ДРУГОЙ, чем у навыка: владелец коллекции
+        ИЛИ ``collection.update.any`` ИЛИ ``hub.admin``.
+        """
+        return await self._request(
+            "PUT",
+            f"/collections/{collection_id}/access-grants",
+            json={
+                "target_type": target_type,
+                "target_id": target_id,
+                "role": role,
+            },
+        )
+
+    async def revoke_collection_access(
+        self, collection_id: str, grant_id: str
+    ) -> None:
+        """DELETE /collections/{id}/access-grants/{grant_id} — отозвать (204)."""
+        await self._request(
+            "DELETE", f"/collections/{collection_id}/access-grants/{grant_id}"
+        )
+
+    # --- system config (routes/system_config.py) ---
+    #
+    # ВНИМАНИЕ: путь — ``/system/config`` (через слэш), а НЕ ``/system-config``.
+    # В матрице функционала он записан через дефис — это ошибка документа.
+    async def list_system_config(self) -> dict[str, Any]:
+        """GET /system/config — все конфиг-записи (``{items:[...]}``).
+
+        Право: ``hub.admin`` либо мягкое ``system.config.read``. У секретных
+        записей (``is_secret=true``) поле ``value`` приходит ``null``.
+        """
+        return await self._request("GET", "/system/config")
+
+    async def get_system_config(self, key: str) -> dict[str, Any]:
+        """GET /system/config/{key} — одна запись (``SystemConfigEntryDTO``)."""
+        return await self._request("GET", f"/system/config/{key}")
+
+    async def set_system_config(self, key: str, *, value: str) -> dict[str, Any]:
+        """PATCH /system/config/{key} — записать значение. Только ``hub.admin``.
+
+        ``value`` ВСЕГДА строка (≤8192): backend сам разбирает её по
+        ``value_type`` записи (int/bool/json).
+        """
+        return await self._request(
+            "PATCH", f"/system/config/{key}", json={"value": value}
+        )
+
+    # --- сессии и профиль (routes/me.py, routes/auth.py) ---
+    async def list_sessions(
+        self, *, page: int = 1, size: int = 50
+    ) -> dict[str, Any]:
+        """GET /me/sessions — активные сессии (``{items,total,page,size}``).
+
+        ``size`` ≤ 200. Backend схлопывает несколько refresh-записей одного
+        устройства в одну строку, поэтому ``total`` — про устройства, а не
+        про токены. У текущей сессии ``is_current=true``.
+        """
+        return await self._request(
+            "GET", "/me/sessions", params={"page": page, "size": size}
+        )
+
+    async def revoke_session(self, session_id: str) -> None:
+        """DELETE /me/sessions/{id} — закрыть одну сессию (204).
+
+        404 ``SESSION_NOT_FOUND`` — чужая/несуществующая;
+        404 ``SESSION_ALREADY_REVOKED`` — уже закрыта.
+        """
+        await self._request("DELETE", f"/me/sessions/{session_id}")
+
+    async def revoke_all_sessions(self) -> None:
+        """DELETE /me/sessions — закрыть все сессии, кроме текущей (204).
+
+        «Текущая» определяется по refresh-куке. CLI ходит по Bearer без куки,
+        поэтому для него это «закрыть ВСЕ» — включая себя: после вызова
+        локальные токены надо считать протухшими.
+        """
+        await self._request("DELETE", "/me/sessions")
+
+    async def logout(self, refresh_token: str | None = None) -> None:
+        """POST /auth/logout — серверная инвалидация refresh-токена (204).
+
+        Идемпотентно: неизвестный/уже отозванный токен тоже даёт 204 (backend
+        не подтверждает существование токена). Тело — сырое
+        ``{"refresh_token": ...}``; без него backend читает куку, которой у
+        CLI нет, поэтому передавать токен обязательно, иначе вызов бесполезен.
+        """
+        payload = {"refresh_token": refresh_token} if refresh_token else {}
+        await self._request("POST", "/auth/logout", json=payload)
+
+    async def update_me(
+        self,
+        *,
+        display_name: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
+    ) -> dict[str, Any]:
+        """PATCH /me — обновить свой профиль (``MeResponse``).
+
+        Передаём только явно заданные поля: ``None`` у backend означает «не
+        менять», и слать его бессмысленно.
+        """
+        payload: dict[str, Any] = {}
+        if display_name is not None:
+            payload["display_name"] = display_name
+        if first_name is not None:
+            payload["first_name"] = first_name
+        if last_name is not None:
+            payload["last_name"] = last_name
+        return await self._request("PATCH", "/me", json=payload)
+
+    async def list_my_skills(
+        self, *, channel: str = "published", page: int = 1, size: int = 50
+    ) -> dict[str, Any]:
+        """GET /me/skills — навыки, где я автор (``{items,total,page,size}``).
+
+        Это НЕ ``/me/installs`` (установленное мне) — здесь авторство.
+        ``size`` ≤ 200.
+        """
+        return await self._request(
+            "GET",
+            "/me/skills",
+            params={"channel": channel, "page": page, "size": size},
+        )
+
+    async def get_my_skills_usage(
+        self, *, days: int = 30, limit: int = 5
+    ) -> dict[str, Any]:
+        """GET /me/skills/usage — статистика моих навыков.
+
+        ``days`` 1..365, ``limit`` 1..20. ``count`` в элементах — установки
+        по РАЗЛИЧНЫМ устройствам, а не сырые события.
+        """
+        return await self._request(
+            "GET", "/me/skills/usage", params={"days": days, "limit": limit}
+        )
+
+    # --- роли: CRUD + назначение (routes/roles.py, role_assignments.py) ---
+    async def get_role(self, role_id: str) -> dict[str, Any]:
+        """GET /roles/{role_id} — карточка роли (``RoleWithScopeDTO``)."""
+        return await self._request("GET", f"/roles/{role_id}")
+
+    async def create_role(
+        self,
+        *,
+        slug: str,
+        name: str,
+        permission_keys: list[str] | None = None,
+        description: str | None = None,
+        is_default: bool = False,
+        is_assignable_by_company: bool = False,
+    ) -> dict[str, Any]:
+        """POST /roles — создать глобальную роль (201). Право ``hub.admin``."""
+        payload: dict[str, Any] = {
+            "slug": slug,
+            "name": name,
+            "permission_keys": permission_keys or [],
+            "is_default": is_default,
+            "is_assignable_by_company": is_assignable_by_company,
+        }
+        if description is not None:
+            payload["description"] = description
+        return await self._request("POST", "/roles", json=payload)
+
+    async def update_role(
+        self,
+        role_id: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        permission_keys: list[str] | None = None,
+        is_default: bool | None = None,
+        is_assignable_by_company: bool | None = None,
+    ) -> dict[str, Any]:
+        """PATCH /roles/{role_id} — обновить роль. Право ``hub.admin``.
+
+        ``slug`` неизменяем (его нет в запросе backend'а).
+        """
+        payload: dict[str, Any] = {}
+        if name is not None:
+            payload["name"] = name
+        if description is not None:
+            payload["description"] = description
+        if permission_keys is not None:
+            payload["permission_keys"] = permission_keys
+        if is_default is not None:
+            payload["is_default"] = is_default
+        if is_assignable_by_company is not None:
+            payload["is_assignable_by_company"] = is_assignable_by_company
+        return await self._request("PATCH", f"/roles/{role_id}", json=payload)
+
+    async def delete_role(self, role_id: str) -> None:
+        """DELETE /roles/{role_id} — удалить роль (204). Право ``hub.admin``."""
+        await self._request("DELETE", f"/roles/{role_id}")
+
+    async def assign_role(
+        self, *, user_id: str, role_id: str
+    ) -> dict[str, Any]:
+        """POST /role-assignments — назначить пользователю ГЛОБАЛЬНУЮ роль.
+
+        Идемпотентно по паре (пользователь, NULL-компания): повторный вызов с
+        другим ``role_id`` — это смена роли, а не второе назначение. Ответ —
+        сырой словарь ``{user_id, role_id, created}``, где ``created`` —
+        СТРОКА ``"true"``/``"false"`` (не bool). Право ``hub.admin``.
+        """
+        return await self._request(
+            "POST",
+            "/role-assignments",
+            json={"user_id": user_id, "role_id": role_id},
+        )
+
+    # --- навыки: правка, удаление, версии, обвязка репозитория ---
+    async def update_skill(
+        self, slug: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """PATCH /skills/{slug} — частичное обновление карточки навыка.
+
+        Словарь собирает вызывающая команда — полей много (title, description,
+        tags, channel, visible, category, access_level, kind, license,
+        short_description, icon/cover…), и дублировать их здесь именованными
+        аргументами значило бы держать две расходящиеся копии схемы.
+        """
+        return await self._request("PATCH", f"/skills/{slug}", json=payload)
+
+    async def delete_skill(self, id_or_slug: str) -> None:
+        """DELETE /skills/{id_or_slug} — удалить навык (204, soft-delete).
+
+        Принимает и числовой id, и slug. Право ``skill.manage``/``hub.admin``.
+        """
+        await self._request("DELETE", f"/skills/{id_or_slug}")
+
+    async def publish_skill_version(
+        self,
+        slug: str,
+        *,
+        semver: str,
+        commit_sha: str,
+        manifest: dict[str, Any],
+        channel: str = "published",
+        tags: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """POST /skills/{slug}/versions — зарегистрировать версию навыка.
+
+        Тело — JSON (НЕ multipart): содержимое навыка приезжает через
+        git-sync/webhook, а эта ручка регистрирует semver+commit+манифест.
+        Право ``skill.publish``. Ответ ``{skill_id, version_id, is_new_skill}``.
+        """
+        return await self._request(
+            "POST",
+            f"/skills/{slug}/versions",
+            json={
+                "semver": semver,
+                "commit_sha": commit_sha,
+                "manifest": manifest,
+                "channel": channel,
+                "tags": tags or [],
+            },
+        )
+
+    async def list_skill_collections(self, slug: str) -> dict[str, Any]:
+        """GET /skills/{slug}/collections — в каких коллекциях лежит навык."""
+        return await self._request("GET", f"/skills/{slug}/collections")
+
+    async def get_skill_analytics(
+        self, slug: str, *, date_from: str | None = None, date_to: str | None = None
+    ) -> dict[str, Any]:
+        """GET /skills/{slug}/analytics — установки/включения/DAU/ошибки.
+
+        Query-параметры называются ``from``/``to`` (зарезервированные слова в
+        Python — отсюда переименованные аргументы). ``top_companies`` придёт
+        пустым, если прав не хватает: backend режет поле, а не весь ответ.
+        """
+        params: dict[str, Any] = {}
+        if date_from is not None:
+            params["from"] = date_from
+        if date_to is not None:
+            params["to"] = date_to
+        return await self._request(
+            "GET", f"/skills/{slug}/analytics", params=params
+        )
+
+    async def get_sync_job(self, slug: str, job_id: str) -> dict[str, Any]:
+        """GET /skills/{slug}/sync-jobs/{job_id} — статус джобы синхронизации.
+
+        ``status`` ∈ ``queued|running|done|error``. Право ``skill.publish``.
+        """
+        return await self._request("GET", f"/skills/{slug}/sync-jobs/{job_id}")
+
+    async def get_repo_credential(self, slug: str) -> dict[str, Any]:
+        """GET /skills/{slug}/repo-credential — ТОЛЬКО метаданные.
+
+        Значение секрета не возвращается никогда; если credential не задан —
+        ``has_credential=false`` с пустыми provider/secret_type.
+        """
+        return await self._request("GET", f"/skills/{slug}/repo-credential")
+
+    async def set_repo_credential(
+        self, slug: str, *, provider: str, secret_type: str, secret: str
+    ) -> dict[str, Any]:
+        """PUT /skills/{slug}/repo-credential — положить токен/deploy-key.
+
+        ``provider`` ∈ ``github|gitlab``, ``secret_type`` ∈
+        ``token|deploy_key``. Секрет шифруется на стороне backend; 503
+        ``SECRETS_DISABLED``, если у хаба не настроен ключ шифрования.
+        Значение секрета НЕ логируем и НЕ печатаем.
+        """
+        return await self._request(
+            "PUT",
+            f"/skills/{slug}/repo-credential",
+            json={
+                "provider": provider,
+                "secret_type": secret_type,
+                "secret": secret,
+            },
+        )
+
+    async def delete_repo_credential(self, slug: str) -> None:
+        """DELETE /skills/{slug}/repo-credential — забыть credential (204)."""
+        await self._request("DELETE", f"/skills/{slug}/repo-credential")
+
+    async def get_repo_tree(
+        self, slug: str, *, ref: str | None = None
+    ) -> dict[str, Any]:
+        """GET /skills/{slug}/repo/tree — список файлов репозитория навыка.
+
+        ``ref`` — sha/тег/ветка; по умолчанию backend берёт последнюю версию.
+        """
+        params: dict[str, Any] = {}
+        if ref is not None:
+            params["ref"] = ref
+        return await self._request(
+            "GET", f"/skills/{slug}/repo/tree", params=params
+        )
+
+    async def get_repo_file(
+        self, slug: str, *, path: str, ref: str | None = None
+    ) -> dict[str, Any]:
+        """GET /skills/{slug}/repo/file — содержимое одного файла.
+
+        Ответ ``{path, ref, encoding, size, truncated, content}``; у бинарных
+        файлов ``content=null``, ``encoding="binary"``. Обход каталогов
+        (``..``/абсолютный путь) backend отбивает 400.
+        """
+        params: dict[str, Any] = {"path": path}
+        if ref is not None:
+            params["ref"] = ref
+        return await self._request(
+            "GET", f"/skills/{slug}/repo/file", params=params
+        )
+
+    async def get_repo_readme(
+        self, slug: str, *, ref: str | None = None
+    ) -> dict[str, Any]:
+        """GET /skills/{slug}/repo/readme — README навыка (404, если нет)."""
+        params: dict[str, Any] = {}
+        if ref is not None:
+            params["ref"] = ref
+        return await self._request(
+            "GET", f"/skills/{slug}/repo/readme", params=params
+        )
+
+    async def star_skill(self, skill_id: str) -> dict[str, Any]:
+        """POST /skills/{skill_id}/star — ПЕРЕКЛЮЧАТЕЛЬ звезды.
+
+        Это toggle, а не «поставить»: если звезда уже стоит — снимется. Ответ
+        ``{is_starred, hub_star_count, repo_star_count, total_star_count}``.
+        """
+        return await self._request("POST", f"/skills/{skill_id}/star")
+
+    # --- коллекции: перемещение и статистика ---
+    async def update_collection(
+        self,
+        slug: str,
+        *,
+        title: str | None = None,
+        description: str | None = None,
+        icon: str | None = None,
+        icon_color: str | None = None,
+        access_level: str | None = None,
+    ) -> dict[str, Any]:
+        """PATCH /collections/{slug} — обновить карточку коллекции."""
+        payload: dict[str, Any] = {}
+        if title is not None:
+            payload["title"] = title
+        if description is not None:
+            payload["description"] = description
+        if icon is not None:
+            payload["icon"] = icon
+        if icon_color is not None:
+            payload["icon_color"] = icon_color
+        if access_level is not None:
+            payload["access_level"] = access_level
+        return await self._request("PATCH", f"/collections/{slug}", json=payload)
+
+    async def move_collection(
+        self, slug: str, *, new_parent_id: str | None
+    ) -> dict[str, Any]:
+        """PATCH /collections/{slug}/move — сменить родителя (``None`` = корень).
+
+        Цикл/превышение глубины backend отбивает 409
+        ``COLLECTION_HIERARCHY_ERROR``.
+        """
+        return await self._request(
+            "PATCH",
+            f"/collections/{slug}/move",
+            json={"new_parent_id": new_parent_id},
+        )
+
+    async def get_collection_stats(
+        self, slug: str, *, days: int = 30
+    ) -> dict[str, Any]:
+        """GET /collections/{slug}/stats — навыки/компании/установки + таймлайн.
+
+        ``days`` 1..365. ``source`` показывает, откуда взяты цифры
+        (``clickhouse``/``postgres``/``none``).
+        """
+        return await self._request(
+            "GET", f"/collections/{slug}/stats", params={"days": days}
+        )
+
+    # --- аналитические события (чтение) ---
+    async def list_events(
+        self,
+        *,
+        event_type: str | None = None,
+        actor_id: str | None = None,
+        company_id: str | None = None,
+        resource_type: str | None = None,
+        resource_id: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        page: int = 1,
+        size: int = 50,
+    ) -> dict[str, Any]:
+        """GET /events — лента аналитических событий. Право ``hub.admin``.
+
+        ВСЕГДА шлём ``page``/``size``: у backend два режима, и без них
+        включается legacy-курсорный, где ``total`` — это количество строк на
+        текущей странице, а не всего. Offset-режим даёт честный глобальный
+        ``total``. ``size`` ≤ 200.
+        """
+        params: dict[str, Any] = {"page": page, "size": size}
+        for key, value in (
+            ("event_type", event_type),
+            ("actor_id", actor_id),
+            ("company_id", company_id),
+            ("resource_type", resource_type),
+            ("resource_id", resource_id),
+            ("since", since),
+            ("until", until),
+        ):
+            if value is not None:
+                params[key] = value
+        return await self._request("GET", "/events", params=params)

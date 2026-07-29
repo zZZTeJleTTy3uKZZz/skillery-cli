@@ -5774,7 +5774,7 @@ def build_app() -> typer.Typer:
     from skillery_cli.commands import daemon as _daemon_mod
     from skillery_cli.commands import event as _event_mod
 
-    _event_mod.register(app)
+    _event_mod.register(app, can_read_hub=cfg.is_hub_admin())
     _daemon_mod.register(app)
 
     # === Creator ===
@@ -5884,6 +5884,40 @@ def build_app() -> typer.Typer:
             or cfg.has_permission("catalog.view_all")
         ),
         can_catalog_manage=cfg.has_permission("catalog.manage"),
+    )
+
+    # === #1224: закрытие гэпов матрицы функционала ===
+    # Матрица docs/ops/functional-canon.md числила эти ручки за CLI, но
+    # обращений к ним в коде не было ни одного. Регистрируем ПОСЛЕ основных
+    # модулей и ДО _finalize_groups: модули, которые дописывают глаголы в
+    # существующие группы (skill/auth), должны видеть их уже созданными, а
+    # _grouping потом дольёт в те же группы исторические плоские команды.
+    from skillery_cli.commands import access as _access_mod
+    from skillery_cli.commands import session as _session_mod
+    from skillery_cli.commands import skill_extra as _skill_extra_mod
+    from skillery_cli.commands import system as _system_mod
+    from skillery_cli.commands import tag as _tag_mod
+
+    # Теги: чтение — любому вошедшему, мутации — tag.create/tag.manage.
+    _tag_mod.register(
+        app,
+        can_manage=(
+            cfg.has_permission("tag.create") or cfg.has_permission("tag.manage")
+        ),
+    )
+    # Гранты доступа: у backend гейтится даже GET, поэтому гейтим целиком.
+    _access_mod.register(app, can_manage=cfg.has_permission("skill.manage"))
+    # Конфигурация хаба — только hub.admin.
+    _system_mod.register(app, can_manage=cfg.is_hub_admin())
+    # Сессии и профиль — всегда: это про СВОЙ аккаунт, прав не требует.
+    _session_mod.register(app)
+    # Доп-глаголы навыка: чтение всем, мутации — публикующим/управляющим.
+    _skill_extra_mod.register(
+        app,
+        can_publish=(
+            cfg.has_permission("skill.publish")
+            or cfg.has_permission("skill.manage")
+        ),
     )
 
     _finalize_groups(app)

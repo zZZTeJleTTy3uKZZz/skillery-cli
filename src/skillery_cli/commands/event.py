@@ -188,10 +188,93 @@ def cmd_event_flush() -> None:
     _common.run(_do())
 
 
-def register(app: typer.Typer) -> None:
-    """Register ``event track / queue / flush``."""
+def cmd_event_list(
+    event_type: str | None = typer.Option(None, "--type", help="Тип события"),
+    actor_id: str | None = typer.Option(None, "--actor", help="ID актора"),
+    company_id: str | None = typer.Option(None, "--company", help="ID компании"),
+    resource_type: str | None = typer.Option(
+        None, "--resource-type", help="Тип ресурса"
+    ),
+    resource_id: str | None = typer.Option(None, "--resource-id", help="ID ресурса"),
+    since: str | None = typer.Option(None, "--since", help="С момента (ISO 8601)"),
+    until: str | None = typer.Option(None, "--until", help="До момента (ISO 8601)"),
+    page: int = typer.Option(1, "--page", help="Страница (с 1)"),
+    size: int = typer.Option(50, "--size", help="Размер страницы (макс. 200)"),
+) -> None:
+    """Лента аналитических событий хаба (GET /events) — #1224.
+
+    Это ЧТЕНИЕ с сервера, в отличие от ``event track``/``flush``, которые
+    работают с локальной очередью отправки. Право — ``hub.admin``.
+
+    CLI всегда ходит в offset-режиме (``page``+``size``): в legacy-курсорном
+    у backend ``total`` считает строки текущей страницы, а не всё совпадение,
+    и по нему нельзя оценить объём выборки.
+    """
+    cfg = ClientConfig.load()
+    access = _common.get_access_token()
+
+    async def _do() -> None:
+        client = _common.make_client(cfg, access)
+        try:
+            resp = await client.list_events(
+                event_type=event_type,
+                actor_id=actor_id,
+                company_id=company_id,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                since=since,
+                until=until,
+                page=page,
+                size=size,
+            )
+        finally:
+            await client.close()
+
+        def _render(payload: dict[str, Any]) -> None:
+            items = payload.get("items") or []
+            if not items:
+                console.print("[yellow]Событий не найдено[/]")
+                return
+            table = Table(
+                title=f"События (всего: {payload.get('total', len(items))})"
+            )
+            table.add_column("когда")
+            table.add_column("тип", overflow="fold")
+            table.add_column("актор", overflow="fold")
+            table.add_column("ресурс", overflow="fold")
+            for item in items:
+                actor = item.get("actor") or {}
+                resource = item.get("resource") or {}
+                table.add_row(
+                    str(item.get("occurred_at") or "—"),
+                    str(item.get("event_type") or "—"),
+                    str(
+                        actor.get("display_name")
+                        or actor.get("email")
+                        or actor.get("type")
+                        or "—"
+                    ),
+                    (
+                        f"{resource.get('type')}:{resource.get('id')}"
+                        if resource
+                        else "—"
+                    ),
+                )
+            console.print(table)
+
+        emit_data(resp, text_renderer=_render)
+
+    _common.run(_do())
+
+
+def register(app: typer.Typer, *, can_read_hub: bool = False) -> None:
+    """Register ``event track / queue / flush`` (+ ``list`` при hub.admin)."""
     event_app = typer.Typer(no_args_is_help=True, help="Event tracking")
     event_app.command("track")(cmd_event_track)
     event_app.command("queue")(cmd_event_queue)
     event_app.command("flush")(cmd_event_flush)
+    if can_read_hub:
+        # GET /events — hub.admin-only; без права команда только сбивала бы с
+        # толку гарантированным 403.
+        event_app.command("list")(cmd_event_list)
     app.add_typer(event_app, name="event")

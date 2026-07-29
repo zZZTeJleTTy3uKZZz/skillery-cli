@@ -162,8 +162,216 @@ def cmd_role_set_permissions(
     _common.run(_do())
 
 
+def cmd_role_get(
+    role_id: str = typer.Argument(..., help="ID роли (см. `skillery role list`)"),
+) -> None:
+    """Карточка роли целиком (GET /roles/{id}) — #1224.
+
+    Отличие от ``role show``: тот отдаёт ПРАВА роли
+    (``GET /roles/{id}/permissions``), а это — саму роль: slug, флаги,
+    количество носителей. Имя ``show`` не переиспользуем, чтобы не менять
+    форму вывода у тех, кто уже парсит его в скриптах.
+    """
+    cfg = ClientConfig.load()
+    access = _common.get_access_token()
+
+    async def _do() -> None:
+        client = _common.make_client(cfg, access)
+        try:
+            resp = await client.get_role(role_id)
+        finally:
+            await client.close()
+
+        def _render(role: dict[str, Any]) -> None:
+            console.print(f"[bold]{role.get('name')}[/] ({role.get('slug')})")
+            console.print(f"  ID: {role.get('id')}")
+            console.print(f"  Описание: {role.get('description') or '—'}")
+            console.print(f"  Системная: {'да' if role.get('is_system') else 'нет'}")
+            console.print(f"  По умолчанию: {'да' if role.get('is_default') else 'нет'}")
+            console.print(
+                "  Назначается компанией: "
+                f"{'да' if role.get('is_assignable_by_company') else 'нет'}"
+            )
+            console.print(f"  Носителей: {role.get('member_count', 0)}")
+            keys = role.get("permission_keys") or []
+            console.print(f"  Прав: {len(keys)}")
+            if keys:
+                console.print(f"    {', '.join(keys)}")
+
+        emit_data(resp, text_renderer=_render)
+
+    _common.run(_do())
+
+
+def cmd_role_create(
+    slug: str = typer.Argument(..., help="Машинный slug роли, напр. auditor"),
+    name: str = typer.Option(..., "--name", help="Человекочитаемое имя"),
+    description: str | None = typer.Option(None, "--description", help="Описание"),
+    perms: str | None = typer.Option(
+        None, "--perms", help="Ключи прав через запятую (можно задать позже)"
+    ),
+    is_default: bool = typer.Option(
+        False, "--default", help="Выдавать новым пользователям"
+    ),
+    assignable_by_company: bool = typer.Option(
+        False, "--company-assignable", help="Компания может назначать эту роль"
+    ),
+) -> None:
+    """Создать глобальную роль (POST /roles). Право hub.admin."""
+    cfg = ClientConfig.load()
+    access = _common.get_access_token()
+    keys = [p.strip() for p in (perms or "").split(",") if p.strip()]
+
+    async def _do() -> None:
+        client = _common.make_client(cfg, access)
+        try:
+            resp = await client.create_role(
+                slug=slug,
+                name=name,
+                permission_keys=keys,
+                description=description,
+                is_default=is_default,
+                is_assignable_by_company=assignable_by_company,
+            )
+        finally:
+            await client.close()
+
+        emit_data(
+            resp,
+            text_renderer=lambda r: console.print(
+                f"[green]✓[/] Роль создана: {r.get('name')} "
+                f"({r.get('slug')}, id={r.get('id')})"
+            ),
+        )
+
+    _common.run(_do())
+
+
+def cmd_role_edit(
+    role_id: str = typer.Argument(..., help="ID роли"),
+    name: str | None = typer.Option(None, "--name", help="Новое имя"),
+    description: str | None = typer.Option(None, "--description", help="Описание"),
+    perms: str | None = typer.Option(
+        None,
+        "--perms",
+        help="Ключи прав через запятую — ПОЛНАЯ замена набора",
+    ),
+    is_default: bool | None = typer.Option(
+        None, "--default/--no-default", help="Выдавать новым пользователям"
+    ),
+    assignable_by_company: bool | None = typer.Option(
+        None,
+        "--company-assignable/--no-company-assignable",
+        help="Может ли компания назначать эту роль",
+    ),
+) -> None:
+    """Обновить роль (PATCH /roles/{id}). Право hub.admin.
+
+    ``slug`` неизменяем — backend его в запросе не принимает.
+    """
+    keys = (
+        [p.strip() for p in perms.split(",") if p.strip()]
+        if perms is not None
+        else None
+    )
+    if (
+        name is None
+        and description is None
+        and keys is None
+        and is_default is None
+        and assignable_by_company is None
+    ):
+        console.print("[yellow]Нечего менять:[/] задайте хотя бы одну опцию")
+        raise typer.Exit(1)
+    cfg = ClientConfig.load()
+    access = _common.get_access_token()
+
+    async def _do() -> None:
+        client = _common.make_client(cfg, access)
+        try:
+            resp = await client.update_role(
+                role_id,
+                name=name,
+                description=description,
+                permission_keys=keys,
+                is_default=is_default,
+                is_assignable_by_company=assignable_by_company,
+            )
+        finally:
+            await client.close()
+
+        emit_data(
+            resp,
+            text_renderer=lambda r: console.print(
+                f"[green]✓[/] Роль обновлена: {r.get('name')} (id={r.get('id')})"
+            ),
+        )
+
+    _common.run(_do())
+
+
+def cmd_role_delete(
+    role_id: str = typer.Argument(..., help="ID роли"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Без подтверждения"),
+) -> None:
+    """Удалить роль (DELETE /roles/{id}). Право hub.admin."""
+    if not yes:
+        typer.confirm(f"Удалить роль {role_id}?", abort=True)
+    cfg = ClientConfig.load()
+    access = _common.get_access_token()
+
+    async def _do() -> None:
+        client = _common.make_client(cfg, access)
+        try:
+            await client.delete_role(role_id)
+        finally:
+            await client.close()
+
+        emit_data(
+            {"deleted": True, "role_id": role_id},
+            text_renderer=lambda _p: console.print(
+                f"[green]✓[/] Роль {role_id} удалена"
+            ),
+        )
+
+    _common.run(_do())
+
+
+def cmd_role_assign(
+    role_id: str = typer.Argument(..., help="ID роли"),
+    user_id: str = typer.Option(..., "--user", help="ID пользователя"),
+) -> None:
+    """Назначить пользователю ГЛОБАЛЬНУЮ роль (POST /role-assignments).
+
+    Идемпотентно по паре (пользователь, платформа): повторный вызов с другой
+    ролью — это СМЕНА роли, а не второе назначение. Роль в конкретной
+    компании назначается другой командой — ``skillery member change-role``.
+    """
+    cfg = ClientConfig.load()
+    access = _common.get_access_token()
+
+    async def _do() -> None:
+        client = _common.make_client(cfg, access)
+        try:
+            resp = await client.assign_role(user_id=user_id, role_id=role_id)
+        finally:
+            await client.close()
+
+        def _render(payload: dict[str, Any]) -> None:
+            # `created` приходит СТРОКОЙ "true"/"false" — сравниваем как строку.
+            created = str(payload.get("created", "")).lower() == "true"
+            verb = "назначена" if created else "уже была назначена (обновлена)"
+            console.print(
+                f"[green]✓[/] Роль {role_id} {verb} пользователю {user_id}"
+            )
+
+        emit_data(resp, text_renderer=_render)
+
+    _common.run(_do())
+
+
 def register(app: typer.Typer, *, can_manage: bool = False) -> None:
-    """Регистрирует ``permissions`` + sub-app ``role`` (M-4).
+    """Регистрирует ``permissions`` + sub-app ``role`` (M-4, расширен в #1224).
 
     Гейт ``can_manage`` (hub.admin). Без него команды не появляются —
     управление правами доступно только администратору хаба.
@@ -173,8 +381,13 @@ def register(app: typer.Typer, *, can_manage: bool = False) -> None:
     app.command(name="permissions")(cmd_permissions_list)
     role_app = typer.Typer(
         no_args_is_help=True,
-        help="Права ролей: show / set-permissions (hub.admin)",
+        help="Роли: карточка, права, создание/правка/удаление, назначение (hub.admin)",
     )
     role_app.command("show")(cmd_role_show)
     role_app.command("set-permissions")(cmd_role_set_permissions)
+    role_app.command("get")(cmd_role_get)
+    role_app.command("create")(cmd_role_create)
+    role_app.command("edit")(cmd_role_edit)
+    role_app.command("delete")(cmd_role_delete)
+    role_app.command("assign")(cmd_role_assign)
     app.add_typer(role_app, name="role")

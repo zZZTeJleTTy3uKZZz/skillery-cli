@@ -881,6 +881,130 @@ def cmd_collection_tags(
     _common.run(_do())
 
 
+def cmd_collection_edit(
+    slug: str = typer.Argument(..., help="Slug коллекции"),
+    title: str | None = typer.Option(None, "--title", help="Название"),
+    description: str | None = typer.Option(None, "--description", help="Описание"),
+    icon: str | None = typer.Option(None, "--icon", help="Имя иконки"),
+    icon_color: str | None = typer.Option(None, "--icon-color", help="Цвет иконки"),
+    access_level: str | None = typer.Option(
+        None, "--access-level", help="public | restricted | private"
+    ),
+) -> None:
+    """Изменить карточку коллекции (PATCH /collections/{slug}) — #1224.
+
+    Только серверный режим: у локальных коллекций (``--local``) нет карточки
+    в хабе, их поля живут в манифесте проекта.
+    """
+    _require_manage("edit")
+    if (
+        title is None
+        and description is None
+        and icon is None
+        and icon_color is None
+        and access_level is None
+    ):
+        emit_error("NOTHING_TO_DO", "Задайте хотя бы одну опцию для изменения")
+        raise typer.Exit(1)
+    cfg = ClientConfig.load()
+    access = _common.get_access_token()
+
+    async def _do() -> None:
+        client = _common.make_client(cfg, access)
+        try:
+            resp = await client.update_collection(
+                slug,
+                title=title,
+                description=description,
+                icon=icon,
+                icon_color=icon_color,
+                access_level=access_level,
+            )
+        finally:
+            await client.close()
+
+        emit_data(
+            resp,
+            text_renderer=lambda c: console.print(
+                f"[green]✓[/] Коллекция обновлена: {c.get('title') or slug}"
+            ),
+        )
+
+    _common.run(_do())
+
+
+def cmd_collection_move(
+    slug: str = typer.Argument(..., help="Slug коллекции"),
+    parent_id: str | None = typer.Option(
+        None, "--parent", help="ID новой родительской коллекции"
+    ),
+    to_root: bool = typer.Option(False, "--root", help="Перенести в корень"),
+) -> None:
+    """Переместить коллекцию в другой раздел (PATCH /collections/{slug}/move).
+
+    ``--root`` требуется указывать явно: «ничего не передали = в корень» —
+    слишком дорогая по последствиям догадка. Цикл или превышение глубины
+    backend отбивает 409.
+    """
+    _require_manage("move")
+    if to_root and parent_id is not None:
+        emit_error("BAD_ARGS", "--root и --parent взаимоисключимы")
+        raise typer.Exit(1)
+    if not to_root and parent_id is None:
+        emit_error("BAD_ARGS", "Укажите --parent <id> или --root")
+        raise typer.Exit(1)
+    cfg = ClientConfig.load()
+    access = _common.get_access_token()
+
+    async def _do() -> None:
+        client = _common.make_client(cfg, access)
+        try:
+            resp = await client.move_collection(slug, new_parent_id=parent_id)
+        finally:
+            await client.close()
+
+        emit_data(
+            resp,
+            text_renderer=lambda c: console.print(
+                f"[green]✓[/] Коллекция {c.get('slug') or slug} перемещена "
+                f"(parent_id={c.get('parent_id') or 'корень'})"
+            ),
+        )
+
+    _common.run(_do())
+
+
+def cmd_collection_stats(
+    slug: str = typer.Argument(..., help="Slug коллекции"),
+    days: int = typer.Option(30, "--days", help="Окно в днях (1..365)"),
+) -> None:
+    """Статистика коллекции (GET /collections/{slug}/stats) — #1224."""
+    _require_server("stats")
+    cfg = ClientConfig.load()
+    access = _common.get_access_token()
+
+    async def _do() -> None:
+        client = _common.make_client(cfg, access)
+        try:
+            resp = await client.get_collection_stats(slug, days=days)
+        finally:
+            await client.close()
+
+        def _render(payload: dict[str, Any]) -> None:
+            console.print(f"[bold]Статистика коллекции {slug}[/]")
+            console.print(f"  Навыков: {payload.get('skills_count', 0)}")
+            console.print(f"  Компаний использует: {payload.get('companies_using_count', 0)}")
+            console.print(f"  Установок всего: {payload.get('installs_total', 0)}")
+            console.print(
+                f"  Окно: {payload.get('days', days)} дн., "
+                f"источник: {payload.get('source') or '—'}"
+            )
+
+        emit_data(resp, text_renderer=_render)
+
+    _common.run(_do())
+
+
 def register(
     app: typer.Typer,
     *,
@@ -914,4 +1038,9 @@ def register(
     collection_app.command("delete")(cmd_collection_delete)
     # M-2: tags — серверная операция (replace-set тегов коллекции).
     collection_app.command("tags")(cmd_collection_tags)
+    # #1224: правка/перемещение/статистика — были в матрице как «есть в CLI»,
+    # но команд не существовало.
+    collection_app.command("edit")(cmd_collection_edit)
+    collection_app.command("move")(cmd_collection_move)
+    collection_app.command("stats")(cmd_collection_stats)
     app.add_typer(collection_app, name="collection")

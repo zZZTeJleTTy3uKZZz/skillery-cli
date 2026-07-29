@@ -424,11 +424,13 @@ def test_install_local_unknown_collection_exit1(
 
 
 # ======================================================
-#  Регистрация: единый sub-app collection, 8 глаголов, без plural
-#  (D-CLI M-2 добавил серверный `tags`).
+#  Регистрация: единый sub-app collection, без plural
+#  (D-CLI M-2 добавил серверный `tags`; #1224 — `edit`/`move`/`stats`,
+#  которые матрица функционала уже числила за CLI, хотя команд не было).
 # ======================================================
 _VERBS = {
     "list", "show", "install", "create", "add", "remove", "delete", "tags",
+    "edit", "move", "stats",
 }
 
 
