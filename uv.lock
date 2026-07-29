@@ -761,7 +761,7 @@ wheels = [
 
 [[package]]
 name = "skillery-cli"
-version = "0.5.73"
+version = "0.5.75"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
