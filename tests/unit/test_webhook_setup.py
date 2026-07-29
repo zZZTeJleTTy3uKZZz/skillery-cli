@@ -7,13 +7,24 @@
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import json
+import os
+import stat
 import subprocess
+import sys
+import tempfile
+from pathlib import Path
 from typing import Any
 
-from skillery_cli.core.repo_connect import RepoSlug
+from skillery_cli.core.repo_connect import (
+    RepoSlug,
+    parse_repo_slug,
+    unlink_quiet,
+    write_temp_json_body,
+)
 from skillery_cli.core.webhook_setup import (
     SKILL_QUERY_KEY,
     delete_provider_hook,
@@ -37,14 +48,47 @@ HOOK_GL = f"{RECEIVER_GL}?{SKILL_QUERY_KEY}={SKILL}"
 
 
 class FakeRunner:
-    """Раннер-заглушка: отвечает по порядку, пишет все вызовы."""
+    """Раннер-заглушка: отвечает по порядку, пишет все вызовы.
+
+    ``input`` тут — ТЕЛО, КОТОРОЕ РЕАЛЬНО УВИДИТ ``gh``/``glab``: содержимое
+    файла из ``--input <файл>``, прочитанное в момент вызова. Раньше сюда клали
+    kwarg ``input=`` (stdin), и ровно поэтому #1266 жил незамеченным: тесты
+    проверяли канал, который ``glab`` игнорирует (``--input -`` → пустое тело
+    на проводе при коде возврата 0). Читаем именно файл — тогда «тело пустое»
+    в тестах выглядит так же, как на проводе.
+
+    Ещё пишем ``input_path`` и ``input_exists_during_call``: по ним проверяется,
+    что временный файл с секретом жив ровно на время вызова и удаляется после.
+    """
 
     def __init__(self, responses: list[tuple[int, str]] | None = None) -> None:
         self._responses = list(responses or [])
         self.calls: list[dict[str, Any]] = []
+        self.raise_on_call: BaseException | None = None
 
     def __call__(self, args, **kwargs):
-        self.calls.append({"args": list(args), "input": kwargs.get("input")})
+        args = list(args)
+        body_path: str | None = None
+        body: str | None = None
+        if "--input" in args:
+            body_path = args[args.index("--input") + 1]
+            with contextlib.suppress(OSError):
+                body = Path(body_path).read_text(encoding="utf-8")
+        self.calls.append(
+            {
+                "args": args,
+                "input": body,
+                "input_path": body_path,
+                "input_exists_during_call": (
+                    body_path is not None and Path(body_path).exists()
+                ),
+                # Контроль того, что #1266 не вернётся окольным путём: тело
+                # обязано уходить файлом, а не stdin.
+                "stdin_kwarg": kwargs.get("input"),
+            }
+        )
+        if self.raise_on_call is not None:
+            raise self.raise_on_call
         code, out = self._responses.pop(0) if self._responses else (0, "null")
         # stderr наполняем только на ненулевом коде (как настоящий gh/glab).
         return subprocess.CompletedProcess(
@@ -58,7 +102,9 @@ def _method(call: dict[str, Any]) -> str:
 
 
 def _path(call: dict[str, Any]) -> str:
-    return call["args"][-1] if call["args"][-1] != "-" else call["args"][-3]
+    """Эндпоинт: последний позиционный аргумент до ``--input <файл>``."""
+    args = call["args"]
+    return args[args.index("--input") - 1] if "--input" in args else args[-1]
 
 
 def test_github_hook_created_when_absent() -> None:
@@ -298,7 +344,7 @@ def test_gitlab_hook_token_is_the_hub_secret_verbatim() -> None:
 
 
 def test_secret_never_in_argv() -> None:
-    """Секрет уходит только через stdin — иначе он виден в списке процессов."""
+    """Секрет уходит только телом-файлом — иначе он виден в списке процессов."""
     runner = FakeRunner([(0, "[]"), (0, json.dumps({"id": 1}))])
     ensure_provider_hook(
         provider="github",
@@ -630,3 +676,211 @@ def test_foreign_hook_is_not_reported_as_hub_hook():
         runner=_runner,
     )
     assert state.hub_hook_id is None
+
+
+# --- #1266: тело запроса реально уходит на провод -----------------------------
+#
+# Баг, ради которого эти тесты и написаны: тело отдавалось через ``--input -``,
+# а ``glab api`` при этом отправляет ЗАПРОС С ПУСТЫМ ТЕЛОМ и выходит с кодом 0.
+# Проверено захватом реального трафика (glab 1.93, локальный приёмник вместо
+# gitlab): в POST ``/projects/.../hooks`` не было даже ``Content-Length``, а
+# ``ensure_provider_hook`` рапортовал ``created``. Ни один тест этого не ловил,
+# потому что все они читали kwarg ``input=`` — канал, который ``glab``
+# игнорирует. Ниже проверяется ровно то, чего не хватало: тело НЕПУСТОЕ, лежит
+# в файле ``--input`` и содержит нужные поля.
+
+
+def _body_call(runner: FakeRunner) -> dict[str, Any]:
+    """Единственный вызов с телом (создание/обновление hook'а)."""
+    with_body = [c for c in runner.calls if c["input_path"] is not None]
+    assert len(with_body) == 1, "тело должно уходить ровно в одном вызове"
+    return with_body[0]
+
+
+def test_gitlab_create_sends_non_empty_body_via_file_not_stdin() -> None:
+    """GitLab: тело непустое, уходит ФАЙЛОМ и содержит все поля контракта."""
+    runner = FakeRunner([(0, "[]"), (0, json.dumps({"id": 1}))])
+    out = ensure_provider_hook(
+        provider="gitlab",
+        repo=GL,
+        callback_url=RECEIVER_GL,
+        skill_id=SKILL,
+        secret="hub-secret",
+        runner=runner,
+    )
+    assert out.action == "created"
+    call = _body_call(runner)
+    # ГЛАВНОЕ: тело не пустое (именно этой проверки и не было).
+    assert call["input"], "тело запроса пустое — hook у провайдера не создастся"
+    body = json.loads(call["input"])
+    assert body == {
+        "url": HOOK_GL,
+        "token": "hub-secret",
+        "push_events": True,
+        "tag_push_events": True,
+    }
+    # Файлом, а не stdin: ``--input -`` у glab = пустое тело на проводе.
+    assert call["args"][call["args"].index("--input") + 1] != "-"
+    assert call["stdin_kwarg"] is None
+
+
+def test_github_create_sends_non_empty_body_via_file_not_stdin() -> None:
+    """GitHub: то же самое — тело непустое и в файле (единый путь кода)."""
+    runner = FakeRunner([(0, "[]"), (0, json.dumps({"id": 1}))])
+    ensure_provider_hook(
+        provider="github",
+        repo=GH,
+        callback_url=RECEIVER_GH,
+        skill_id=SKILL,
+        secret="hub-secret",
+        runner=runner,
+    )
+    call = _body_call(runner)
+    assert call["input"], "тело запроса пустое — hook у провайдера не создастся"
+    body = json.loads(call["input"])
+    assert body["name"] == "web"
+    assert body["events"] == ["push"]
+    assert body["config"] == {
+        "url": HOOK_GH,
+        "content_type": "json",
+        "secret": "hub-secret",
+    }
+    assert call["args"][call["args"].index("--input") + 1] != "-"
+    assert call["stdin_kwarg"] is None
+
+
+def test_update_body_is_also_non_empty() -> None:
+    """Обновление существующего hook'а тоже обязано нести тело с секретом."""
+    existing = [{"id": 42, "url": HOOK_GL}]
+    runner = FakeRunner([(0, json.dumps(existing)), (0, json.dumps({"id": 42}))])
+    out = ensure_provider_hook(
+        provider="gitlab",
+        repo=GL,
+        callback_url=RECEIVER_GL,
+        skill_id=SKILL,
+        secret="rotated-secret",
+        runner=runner,
+    )
+    assert out.action == "updated"
+    body = json.loads(_body_call(runner)["input"])
+    assert body["token"] == "rotated-secret"
+
+
+def test_body_file_lives_only_during_call_and_is_removed() -> None:
+    """Файл с СЕКРЕТОМ жив ровно на время вызова и удаляется после успеха."""
+    runner = FakeRunner([(0, "[]"), (0, json.dumps({"id": 1}))])
+    ensure_provider_hook(
+        provider="gitlab",
+        repo=GL,
+        callback_url=RECEIVER_GL,
+        skill_id=SKILL,
+        secret="TOP-SECRET-VALUE",
+        runner=runner,
+    )
+    call = _body_call(runner)
+    # Во время вызова файл существовал — иначе провайдерскому CLI читать нечего.
+    assert call["input_exists_during_call"] is True
+    assert "TOP-SECRET-VALUE" in call["input"]
+    # После вызова секрет на диске не остаётся.
+    assert not Path(call["input_path"]).exists(), "файл с секретом не удалён"
+
+
+def test_body_file_removed_even_when_runner_raises() -> None:
+    """Раннер упал на вызове с телом — файл с секретом всё равно снесён."""
+    spy = FakeRunner([(0, "[]")])
+
+    def _runner(args, **kwargs):
+        result = spy(args, **kwargs)
+        if "--input" in list(args):
+            raise OSError("провайдерский CLI упал")
+        return result
+
+    out = ensure_provider_hook(
+        provider="gitlab",
+        repo=GL,
+        callback_url=RECEIVER_GL,
+        skill_id=SKILL,
+        secret="TOP-SECRET-VALUE",
+        runner=_runner,
+    )
+    assert out.action == "skipped"
+    assert out.reason == "tool_failed"
+    call = _body_call(spy)
+    assert call["input_exists_during_call"] is True
+    assert not Path(call["input_path"]).exists(), "файл с секретом пережил исключение"
+
+
+def test_temp_body_file_mode_is_owner_only() -> None:
+    """Права временного файла с телом: только владелец (на POSIX — ровно 0600)."""
+    path = write_temp_json_body({"token": "TOP-SECRET-VALUE"})
+    try:
+        assert json.loads(Path(path).read_text(encoding="utf-8")) == {
+            "token": "TOP-SECRET-VALUE"
+        }
+        if sys.platform != "win32":
+            assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+        else:
+            # Windows: POSIX-режима нет; гарантия — личный каталог пользователя.
+            assert Path(tempfile.gettempdir()) in Path(path).parents
+    finally:
+        unlink_quiet(path)
+    assert not Path(path).exists()
+
+
+# --- #1267: вложенные группы GitLab ------------------------------------------
+
+
+def test_gitlab_nested_group_path_is_kept_whole() -> None:
+    """``group/sub/project`` адресуется целиком: ``group%2Fsub%2Fproject``.
+
+    Раньше ``RepoSlug.path`` собирался из owner+name и терял средние сегменты —
+    запрос уходил в ``group%2Fproject``, то есть в НЕСУЩЕСТВУЮЩИЙ проект.
+    """
+    slug = parse_repo_slug("https://gitlab.com/group/sub/project.git")
+    assert slug is not None
+    assert slug.path == "group/sub/project"
+
+    runner = FakeRunner([(0, "[]"), (0, json.dumps({"id": 1}))])
+    ensure_provider_hook(
+        provider="gitlab",
+        repo=slug,
+        callback_url=RECEIVER_GL,
+        skill_id=SKILL,
+        secret="hub-secret",
+        runner=runner,
+    )
+    assert runner.calls
+    for call in runner.calls:
+        assert "projects/group%2Fsub%2Fproject/hooks" in _path(call)
+        assert "group%2Fproject" not in _path(call)
+
+
+def test_gitlab_deeply_nested_group_path() -> None:
+    """Вложенность глубже двух уровней сохраняется целиком."""
+    slug = parse_repo_slug("git@gitlab.com:top/mid/low/project.git")
+    assert slug is not None
+    assert slug.path == "top/mid/low/project"
+
+    runner = FakeRunner([(0, "[]")])
+    probe_provider_hook(
+        provider="gitlab",
+        repo=slug,
+        callback_url=RECEIVER_GL,
+        skill_id=SKILL,
+        runner=runner,
+    )
+    assert "projects/top%2Fmid%2Flow%2Fproject/hooks" in _path(runner.calls[0])
+
+
+def test_github_path_is_unaffected_by_nesting_support() -> None:
+    """У GitHub вложенных групп нет — путь остаётся ``repos/owner/name``."""
+    runner = FakeRunner([(0, "[]"), (0, json.dumps({"id": 1}))])
+    ensure_provider_hook(
+        provider="github",
+        repo=GH,
+        callback_url=RECEIVER_GH,
+        skill_id=SKILL,
+        secret="hub-secret",
+        runner=runner,
+    )
+    assert "repos/acme/skills/hooks" in _path(runner.calls[0])

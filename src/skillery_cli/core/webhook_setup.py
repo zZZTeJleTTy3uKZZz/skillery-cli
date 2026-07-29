@@ -39,7 +39,10 @@
 оставшийся от прежнего публичного адреса хаба, и обновляем его вместо дубля.
 
 Секрет НИКОГДА не уходит в argv (в списке процессов его видно всей машине):
-тело запроса отдаём провайдерскому CLI через stdin (``--input -``).
+тело запроса отдаём провайдерскому CLI через ``--input <файл>`` — временный
+файл режимом ``0600``, удаляемый на любом исходе. Именно ФАЙЛ, а не ``-``:
+``glab api --input -`` отправляет пустое тело с кодом возврата 0 (#1266,
+см. :func:`_api`).
 
 Все внешние эффекты (подпроцесс) инъектируются — модуль юнит-тестируем без
 реальных ``gh``/``glab`` и без сети.
@@ -54,7 +57,12 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from skillery_cli.core.proc_runner import run_command
-from skillery_cli.core.repo_connect import CommandRunner, RepoSlug
+from skillery_cli.core.repo_connect import (
+    CommandRunner,
+    RepoSlug,
+    unlink_quiet,
+    write_temp_json_body,
+)
 
 # Провайдер → локальный CLI, которым ходим в его API.
 _TOOLS: dict[str, str] = {"github": "gh", "gitlab": "glab"}
@@ -175,17 +183,36 @@ def _api(
 ) -> tuple[bool, Any, str]:
     """Один вызов ``gh api`` / ``glab api`` → ``(ok, данные, код_ошибки)``.
 
-    Тело (если есть) уходит через stdin (``--input -``): в argv секрету не место.
+    ТЕЛО ОТДАЁТСЯ ФАЙЛОМ, А НЕ STDIN — и это не стилистика (#1266). Раньше здесь
+    стояло ``--input -``, но ``glab api`` при этом отправляет ЗАПРОС С ПУСТЫМ
+    ТЕЛОМ и выходит с кодом 0. Сбой полностью молчаливый: ``POST .../hooks``
+    уходил без ``url``/``token``/``push_events``, а мы рапортовали
+    ``action="created"``. Проверено захватом реального запроса (``glab 1.93``,
+    локальный приёмник вместо gitlab): ``Content-Length`` в POST отсутствовал
+    вовсе. Тот же дефект в #1225 ломал создание project-токена.
+
+    ``gh api --input -`` этим НЕ страдает (проверено отдельно), но файл
+    используется для обоих провайдеров: один путь кода вместо двух и меньше
+    шансов, что дефект вернётся незамеченным.
+
+    Секрет по-прежнему НЕ попадает в argv (в списке процессов его видно всей
+    машине). Временный файл создаётся режимом ``0600`` в личном каталоге
+    пользователя и удаляется в ``finally`` — в том числе если раннер бросил
+    исключение (см. ``repo_connect.write_temp_json_body``).
+
     Коды ошибок: ``tool_missing`` (CLI не установлен), ``tool_unauthorized``
     (не залогинен/нет прав), ``repo_not_found`` (репо не виден этому логину),
     ``tool_failed`` (прочее — сеть/API), ``bad_response`` (не-JSON).
     """
     tool = _TOOLS[provider]
     args = [tool, "api", "--hostname", repo.host, "--method", method, path]
-    stdin_data: str | None = None
+    body_file: str | None = None
     if body is not None:
-        args += ["--input", "-"]
-        stdin_data = json.dumps(body)
+        try:
+            body_file = write_temp_json_body(body)
+        except OSError:
+            return False, None, "tool_failed"
+        args += ["--input", body_file]
     try:
         proc = runner(
             args,
@@ -193,12 +220,15 @@ def _api(
             text=True,
             timeout=_CALL_TIMEOUT_S,
             check=False,
-            input=stdin_data,
         )
     except FileNotFoundError:
         return False, None, "tool_missing"
     except (OSError, subprocess.SubprocessError):
         return False, None, "tool_failed"
+    finally:
+        # Секрет не должен пережить вызов — чистим на любом исходе.
+        if body_file is not None:
+            unlink_quiet(body_file)
     if proc.returncode != 0:
         return False, None, _classify_failure(proc.stderr)
     raw = (proc.stdout or "").strip() or "null"

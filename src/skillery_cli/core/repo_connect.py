@@ -40,15 +40,27 @@ _GITLAB_TOKEN_SCOPES = ["read_api"]
 
 @dataclass(frozen=True)
 class RepoSlug:
-    """Разобранный git-URL: хост + owner/name (без ``.git``, без кредов)."""
+    """Разобранный git-URL: хост + полный путь проекта (без ``.git``, без кредов).
+
+    ``owner`` — ПЕРВЫЙ сегмент пути, ``name`` — ПОСЛЕДНИЙ. Между ними у GitLab
+    может быть сколько угодно подгрупп (``group/sub/subsub/project``), и они
+    хранятся в ``subgroups`` — без них ``path`` схлопывался бы в
+    ``group/project``, то есть в НЕСУЩЕСТВУЮЩИЙ проект (#1267): все эндпоинты
+    GitLab адресуют проект url-энкоднутым ПОЛНЫМ путём, а не парой owner+name.
+
+    ``subgroups`` — с дефолтом, поэтому старая позиционная конструкция
+    ``RepoSlug(host, owner, name)`` (плоский путь) продолжает работать.
+    """
 
     host: str
     owner: str
     name: str
+    subgroups: tuple[str, ...] = ()
 
     @property
     def path(self) -> str:
-        return f"{self.owner}/{self.name}"
+        """Полный путь проекта: ``group/sub/project`` (все промежуточные группы)."""
+        return "/".join((self.owner, *self.subgroups, self.name))
 
 
 def parse_repo_slug(repo_url: str) -> Optional[RepoSlug]:
@@ -84,8 +96,12 @@ def parse_repo_slug(repo_url: str) -> Optional[RepoSlug]:
     parts = [p for p in path.split("/") if p]
     if not host or len(parts) < 2:
         return None
-    # owner = первый сегмент, name = ПОСЛЕДНИЙ (поддержка вложенных групп GitLab).
-    return RepoSlug(host=host, owner=parts[0], name=parts[-1])
+    # owner = первый сегмент, name = ПОСЛЕДНИЙ, всё между ними — подгруппы
+    # GitLab. Промежуточные сегменты СОХРАНЯЕМ: без них путь проекта
+    # ``group/sub/project`` превращался бы в ``group/project`` (#1267).
+    return RepoSlug(
+        host=host, owner=parts[0], name=parts[-1], subgroups=tuple(parts[1:-1])
+    )
 
 
 def infer_provider(repo_url: str) -> Optional[str]:
@@ -147,11 +163,19 @@ def github_repo_is_public(
 CommandRunner = Callable[..., Any]
 
 
-def _write_temp_json(body: dict[str, Any]) -> str:
-    """Записать JSON-тело во временный файл и вернуть путь к нему.
+def write_temp_json_body(body: dict[str, Any]) -> str:
+    """Записать JSON-тело во временный файл (только для владельца) и вернуть путь.
 
     ``delete=False`` + явный ``close``: на Windows файл, открытый нами, второй
-    процесс (``glab``) открыть не сможет. Удаление — на вызывающем (``finally``).
+    процесс (``glab``/``gh``) открыть не сможет. Удаление — на вызывающем
+    (обязательно в ``finally``, см. :func:`unlink_quiet`).
+
+    ПРАВА. В теле может лежать СЕКРЕТ (токен webhook'а — см.
+    ``core.webhook_setup``), поэтому файл обязан быть читаем только владельцем.
+    ``tempfile`` создаёт файл режимом ``0600`` и в личном каталоге пользователя
+    (``%LOCALAPPDATA%\\Temp`` на Windows, ``TMPDIR``/``/tmp`` с ``0600`` на
+    POSIX), но полагаться на неявное поведение здесь нельзя — ставим режим
+    ЯВНО, чтобы инвариант был проверяем тестом, а не подразумевался.
     """
     fh = tempfile.NamedTemporaryFile(  # noqa: SIM115 — закрываем сами, см. выше
         mode="w", suffix=".json", encoding="utf-8", delete=False
@@ -160,7 +184,15 @@ def _write_temp_json(body: dict[str, Any]) -> str:
         json.dump(body, fh)
     finally:
         fh.close()
+    with contextlib.suppress(OSError, NotImplementedError):
+        os.chmod(fh.name, 0o600)
     return fh.name
+
+
+def unlink_quiet(path: str) -> None:
+    """Удалить файл, проглотив ошибку — для ``finally`` вокруг временного тела."""
+    with contextlib.suppress(OSError):
+        os.unlink(path)
 
 
 def create_gitlab_project_token(
@@ -205,7 +237,7 @@ def create_gitlab_project_token(
         "expires_at": expires_at,
     }
     try:
-        body_file = _write_temp_json(body)
+        body_file = write_temp_json_body(body)
     except OSError:
         return None
     args = [
@@ -230,8 +262,7 @@ def create_gitlab_project_token(
     except (OSError, subprocess.SubprocessError):
         return None
     finally:
-        with contextlib.suppress(OSError):
-            os.unlink(body_file)
+        unlink_quiet(body_file)
     if proc.returncode != 0:
         return None
     try:
