@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from skillery_cli.core.repo_connect import (
+    JSON_CONTENT_TYPE_HEADER,
     RepoSlug,
     parse_repo_slug,
     unlink_quiet,
@@ -102,9 +103,14 @@ def _method(call: dict[str, Any]) -> str:
 
 
 def _path(call: dict[str, Any]) -> str:
-    """Эндпоинт: последний позиционный аргумент до ``--input <файл>``."""
+    """Эндпоинт: единственный позиционный аргумент, идёт сразу за ``--method M``.
+
+    Отсчитываем от ``--method``, а НЕ назад от ``--input``: за путём могут стоять
+    ещё флаги (``--header Content-Type: …``), и «аргумент перед --input» тогда
+    указывает на значение заголовка, а не на эндпоинт.
+    """
     args = call["args"]
-    return args[args.index("--input") - 1] if "--input" in args else args[-1]
+    return args[args.index("--method") + 2]
 
 
 def test_github_hook_created_when_absent() -> None:
@@ -695,6 +701,70 @@ def _body_call(runner: FakeRunner) -> dict[str, Any]:
     with_body = [c for c in runner.calls if c["input_path"] is not None]
     assert len(with_body) == 1, "тело должно уходить ровно в одном вызове"
     return with_body[0]
+
+
+def _headers(call: dict[str, Any]) -> list[str]:
+    """Все значения ``--header`` вызова."""
+    args = call["args"]
+    return [args[i + 1] for i, a in enumerate(args) if a == "--header"]
+
+
+def test_gitlab_body_call_sets_json_content_type() -> None:
+    """БЕЗ ``Content-Type`` GitLab отвечает 415, НЕ ЧИТАЯ ТЕЛО — hook не создаётся.
+
+    Это первопричина #1266 (проверена на живом gitlab.com: без заголовка 415, с
+    заголовком тело разбирается). ``glab`` заголовок сам не ставит, поэтому его
+    отсутствие в argv = молча неработающий вебхук.
+    """
+    runner = FakeRunner([(0, "[]"), (0, json.dumps({"id": 1}))])
+    ensure_provider_hook(
+        provider="gitlab",
+        repo=GL,
+        callback_url=RECEIVER_GL,
+        skill_id=SKILL,
+        secret="hub-secret",
+        runner=runner,
+    )
+    call = _body_call(runner)
+    assert JSON_CONTENT_TYPE_HEADER in _headers(call), (
+        "нет Content-Type — GitLab ответит 415 и hook не создастся"
+    )
+    # Заголовок ставится ровно там, где есть тело: GET-список его не требует.
+    listing = [c for c in runner.calls if c["input_path"] is None]
+    assert all(_headers(c) == [] for c in listing)
+
+
+def test_github_body_call_also_sets_json_content_type() -> None:
+    """У ``gh`` заголовок свой, но путь кода один — проверяем, что он есть."""
+    runner = FakeRunner([(0, "[]"), (0, json.dumps({"id": 1}))])
+    ensure_provider_hook(
+        provider="github",
+        repo=GH,
+        callback_url=RECEIVER_GH,
+        skill_id=SKILL,
+        secret="hub-secret",
+        runner=runner,
+    )
+    assert JSON_CONTENT_TYPE_HEADER in _headers(_body_call(runner))
+
+
+def test_content_type_header_does_not_shift_endpoint_or_leak_secret() -> None:
+    """Заголовок вклинивается в argv — эндпоинт и гигиена секрета не съезжают."""
+    runner = FakeRunner([(0, "[]"), (0, json.dumps({"id": 1}))])
+    ensure_provider_hook(
+        provider="gitlab",
+        repo=GL,
+        callback_url=RECEIVER_GL,
+        skill_id=SKILL,
+        secret="TOP-SECRET-VALUE",
+        runner=runner,
+    )
+    call = _body_call(runner)
+    assert _path(call) == "projects/acme%2Fskills/hooks"
+    assert _method(call) == "POST"
+    # Секрет — только в теле-файле, не в argv (в т.ч. не в значении заголовка).
+    assert "TOP-SECRET-VALUE" not in " ".join(call["args"])
+    assert "TOP-SECRET-VALUE" in (call["input"] or "")
 
 
 def test_gitlab_create_sends_non_empty_body_via_file_not_stdin() -> None:
