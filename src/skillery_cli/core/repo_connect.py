@@ -163,6 +163,23 @@ def github_repo_is_public(
 CommandRunner = Callable[..., Any]
 
 
+#: Заголовок, БЕЗ КОТОРОГО GITLAB НЕ ЧИТАЕТ ТЕЛО ВООБЩЕ (#1225, #1266).
+#:
+#: ``glab api --input <файл|->`` отправляет тело, но НЕ ставит ``Content-Type``.
+#: Grape (API-слой GitLab) отбивает такой запрос ещё до эндпоинта:
+#: ``415 {"error":"The provided content-type '' is not supported."}``. Проверено
+#: на живом gitlab.com (glab 1.93.0) на реальном ``POST projects/:id/hooks``:
+#:
+#: * без заголовка — ``415``, тело не разобрано (hook НЕ создаётся);
+#: * с заголовком и ``{}`` — ``400 {"error":"url is missing"}`` (тело разобрано);
+#: * с заголовком и нашей формой тела — ``422 {"error":"Invalid url given"}``
+#:   (разобраны именно НАШИ поля).
+#:
+#: ``gh`` ставит ``Content-Type`` сам, но заголовок передаётся ОБОИМ провайдерам:
+#: один путь кода вместо двух, и ``gh`` явный заголовок принимает (проверено).
+JSON_CONTENT_TYPE_HEADER = "Content-Type: application/json"
+
+
 def write_temp_json_body(body: dict[str, Any]) -> str:
     """Записать JSON-тело во временный файл (только для владельца) и вернуть путь.
 
@@ -217,11 +234,17 @@ def create_gitlab_project_token(
     ``--repo-token``. (Проверено захватом реального запроса ``glab 1.93``.)
 
     Поэтому тело формируется как JSON и отдаётся через ``--input`` — тем же
-    способом, что и в ``core.webhook_setup``. Файл, а не ``-``/stdin: у ``glab``
-    ``--input -`` отправляет ПУСТОЕ тело (проверено на том же захвате), то есть
-    молча теряет все параметры. Секретов в теле нет (имя/скоупы/срок), токен
-    приходит только в ОТВЕТЕ, поэтому временный файл безопасен; он удаляется в
-    ``finally``.
+    способом, что и в ``core.webhook_setup``.
+
+    ВТОРАЯ ПОЛОВИНА ТОГО ЖЕ ДЕФЕКТА — ``Content-Type``. Одного JSON-тела мало:
+    ``glab`` заголовок не ставит, и GitLab отбивает запрос с ``415`` ещё до
+    эндпоинта, сколько бы правильных полей в теле ни лежало. Поэтому заголовок
+    передаётся ЯВНО — см. :data:`JSON_CONTENT_TYPE_HEADER` (там же протокол
+    проверки на живом GitLab).
+
+    Файл, а не ``-``/stdin: секретов в ТЕЛЕ здесь нет (имя/скоупы/срок), но путь
+    един с ``core.webhook_setup``, где секрет есть и в argv ему не место. Файл
+    удаляется в ``finally``.
     """
     now = now or datetime.now(UTC)
     expires_at = (now + timedelta(days=_GITLAB_TOKEN_TTL_DAYS)).strftime(
@@ -248,6 +271,8 @@ def create_gitlab_project_token(
         "--method",
         "POST",
         f"projects/{project_path}/access_tokens",
+        "--header",
+        JSON_CONTENT_TYPE_HEADER,
         "--input",
         body_file,
     ]

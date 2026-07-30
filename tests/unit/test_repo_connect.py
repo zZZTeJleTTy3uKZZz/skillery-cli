@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 import pytest
 
 from skillery_cli.core.repo_connect import (
+    JSON_CONTENT_TYPE_HEADER,
     RepoSlug,
     create_gitlab_project_token,
     github_repo_is_public,
@@ -154,12 +155,16 @@ def test_gitlab_token_args_endpoint_and_input() -> None:
     assert "projects/acme%2Fskills/access_tokens" in joined
     assert "--hostname" in args and "gitlab.com" in args
     assert "--method" in args and "POST" in args
-    # Тело — через --input <файл>. Именно файл: у glab «--input -» (stdin)
-    # отправляет ПУСТОЕ тело, то есть молча теряет все параметры.
+    # Тело — через --input <файл>, единым путём с core.webhook_setup (там в теле
+    # СЕКРЕТ, и файлу можно проверить права; stdin для этого не нужен).
     assert "--input" in args
     assert args[args.index("--input") + 1] != "-"
     # Ни одного «-f/--raw-field»: они и породили ключ «scopes[]».
     assert "-f" not in args and "--raw-field" not in args
+    # Content-Type ОБЯЗАТЕЛЕН: glab его не ставит, а GitLab без него отвечает
+    # 415, не читая тело — сколько бы правильных полей в теле ни лежало.
+    headers = [args[i + 1] for i, a in enumerate(args) if a == "--header"]
+    assert JSON_CONTENT_TYPE_HEADER in headers
 
 
 def test_gitlab_token_temp_body_file_removed() -> None:
