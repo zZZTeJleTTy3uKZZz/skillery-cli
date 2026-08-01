@@ -38,8 +38,22 @@ _mode: str = "text"  # исторический дефолт — text (clikit п
 
 
 def _sync_clikit_mode() -> None:
-    """Зеркалит локальный ``_mode`` в ``clikit.output`` перед делегацией."""
-    _clikit._mode = _mode
+    """Зеркалит локальный ``_mode`` в ``clikit.output`` перед делегацией.
+
+    ⚠️ В clikit >=0.1.7 ``_mode`` — ``ContextVar``, а не строка. Присваивание
+    ``_clikit._mode = _mode`` подменяло сам ContextVar строкой, после чего
+    ``is_json()`` падал с ``AttributeError: 'str' object has no attribute
+    'get'`` — то есть ЛЮБАЯ команда CLI переставала работать. Поймано на
+    свежей установке 0.5.79, где подтянулся clikit 0.1.7.
+
+    Поэтому: ContextVar обновляем через ``.set()``, а голому атрибуту
+    (старые clikit) присваиваем как раньше — обратная совместимость.
+    """
+    target = getattr(_clikit, "_mode", None)
+    if hasattr(target, "set"):
+        target.set(_mode)
+    else:
+        _clikit._mode = _mode
 
 
 def init_output_mode(*, json_flag: bool, config_format: str) -> None:
