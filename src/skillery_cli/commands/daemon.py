@@ -140,7 +140,18 @@ def _build_runner(
 
     reconcile = None
     loop_interval = interval_seconds
-    if reconcile_installs and cfg.is_logged_in():
+    # #1387: reconcile подключается по флагу, а НЕ по «залогинен прямо сейчас».
+    # Раньше демон, поднятый до входа (автозапуск при загрузке — обычный
+    # случай), оставался без reconcile НАВСЕГДА: после `login` он уже работает,
+    # `ensure_daemon_running` видит живой процесс и ничего не перезапускает, а
+    # значит очередь устройства не опрашивал никто. Сам `_reconcile` при
+    # отсутствии кред выходит первой же строкой — держать его подключённым
+    # ничего не стоит.
+    #
+    # Ритм при этом выбирается один раз: long-poll (2 с) только если вход уже
+    # был. Демон, вошедший в систему позже, работает штатным интервалом
+    # (60 с) до ближайшего перезапуска — медленнее, но РАБОТАЕТ, а не молчит.
+    if reconcile_installs:
         # LONG-POLL: очередь устройства висит на сервере до _LONGPOLL_WAIT_SEC,
         # задание доставляется МГНОВЕННО, а сам висящий коннект = heartbeat.
         # Тяжёлые reconcile (device-sync НАБОРА + auto-update до latest) — реже
@@ -219,7 +230,10 @@ def _build_runner(
         # переподключаться сразу после ответа. ⚠️СТАРЫЙ backend без ?wait
         # вернёт очередь мгновенно → этот tight-loop опрашивал бы часто; поэтому
         # backend с long-poll ДЕПЛОИТСЯ ПЕРВЫМ (он уже поддерживает ?wait).
-        loop_interval = _LONGPOLL_LOOP_INTERVAL
+        # Тугой ритм берём только у вошедшего: незалогиненному демону нечего
+        # опрашивать, и будить его каждые 2 секунды незачем.
+        if cfg.is_logged_in():
+            loop_interval = _LONGPOLL_LOOP_INTERVAL
 
     return DaemonRunner(
         sender, interval_seconds=loop_interval, reconcile=reconcile

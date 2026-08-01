@@ -208,6 +208,50 @@ def test_daemon_stops_building_clients_while_session_is_dead(
     assert built == ["T2"]
 
 
+async def test_daemon_started_before_login_reconciles_after_it(
+    creds_env, monkeypatch
+) -> None:
+    """Демон, поднятый ДО входа, после login опрашивает очередь, а не молчит.
+
+    Обычный случай: автозапуск при загрузке машины. Раньше reconcile
+    подключался по «залогинен на момент построения», а `ensure_daemon_running`
+    при login живой процесс не перезапускает — очередь устройства не опрашивал
+    вообще никто до перезагрузки.
+    """
+    creds = creds_env.make()  # конфига ещё нет → вход не выполнялся
+    assert creds.config().is_logged_in() is False
+    runner = daemon_cmd._build_runner(interval_seconds=60.0, credentials=creds)
+    assert runner._reconcile is not None, "reconcile обязан быть подключён"
+
+    polled: list[str] = []
+
+    class _Stream:
+        async def run_once(self, cfg, access, **kw):  # noqa: ANN001, ANN003
+            polled.append(access)
+
+    monkeypatch.setattr(
+        daemon_cmd, "DeviceQueueStream", lambda **kw: _Stream()
+    )
+    runner = daemon_cmd._build_runner(interval_seconds=60.0, credentials=creds)
+    await runner._reconcile()
+    assert polled == [], "без кред опрашивать нечего"
+
+    creds_env.login("a@test", "T1")
+    import skillery_cli.__main__ as main_mod
+    import skillery_cli.core.agents as agents_mod
+
+    monkeypatch.setattr(agents_mod, "get_target", lambda name: object())
+
+    async def _noop(*_a, **_kw):
+        return {}
+
+    monkeypatch.setattr(main_mod, "_reconcile_hub_installs", _noop)
+    monkeypatch.setattr(main_mod, "_auto_update_hub_installs", _noop)
+    monkeypatch.setattr(main_mod, "_daemon_cli_self_upgrade", _noop)
+    await runner._reconcile()
+    assert polled == ["T1"], "после login живой демон обязан взяться за очередь"
+
+
 def test_daemon_client_carries_state_aware_refresh(creds_env, monkeypatch) -> None:
     """Демон отдаёт транспорту СВОЙ refresh-callback — иначе 401 не наблюдаем."""
     creds_env.login("a@test", "T1")
