@@ -482,6 +482,47 @@ def ensure_autostart(*, home_dir: Path | None = None) -> dict[str, object]:
     return result
 
 
+def write_launcher_script(path: Path, text: str) -> Path:
+    """Записать .vbs-лаунчер, переживая «файл занят другим процессом».
+
+    Живой дефект (#1387, Windows): watchdog-таск раз в 3 минуты запускает
+    ``wscript.exe //B skillery-watchdog.vbs``. Пока скрипт исполняется, wscript
+    держит файл открытым, и параллельная команда (``login`` →
+    ``ensure_autostart`` → ``install_watchdog``) на ``write_text`` получала
+    ``PermissionError: [Errno 13] Permission denied: 'skillery-watchdog.vbs'``.
+    Пользователь видел «watchdog не установлен: …» на успешном логине, хотя
+    ставить было НЕЧЕГО: содержимое файла уже правильное.
+
+    Отсюда порядок:
+
+    1. содержимое совпадает — не пишем вовсе (обычный случай; заодно убирает
+       лишний I/O на каждой команде, которая трогает автозапуск);
+    2. содержимое отличается — пишем как раньше;
+    3. запись не удалась, а файл есть — оставляем старый и говорим об этом в
+       ``daemon.log``: лаунчер рабочий, просто чуть устаревший, и следующая
+       попытка (когда wscript не держит файл) его обновит;
+    4. записать не вышло и файла нет — ошибка наверх: лаунчера действительно
+       нет, и молчать об этом нельзя.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if path.exists() and path.read_text(encoding="utf-8") == text:
+            return path
+    except OSError:
+        pass  # не прочитали — просто попробуем записать
+    try:
+        path.write_text(text, encoding="utf-8")
+    except OSError as exc:
+        if not path.exists():
+            raise
+        _log_autostart(
+            f"лаунчер {path.name} занят другим процессом ({exc}) — "
+            "оставлен прежний, обновится при следующей попытке",
+            level="warning",
+        )
+    return path
+
+
 def _write_watchdog_vbs(home_dir: Path) -> Path:
     """Безоконный .vbs-лаунчер для watchdog-задачи (тот же приём, что автозапуск).
 
@@ -500,8 +541,7 @@ def _write_watchdog_vbs(home_dir: Path) -> Path:
         'CreateObject("WScript.Shell").Run """' + quoted + '"" daemon start", 0, False',
         "",
     ]
-    vbs.write_text(_WIN_EOL.join(body), encoding="utf-8")
-    return vbs
+    return write_launcher_script(vbs, _WIN_EOL.join(body))
 
 
 def install_watchdog(
@@ -581,7 +621,9 @@ def _install_windows_startup_shortcut(home_dir: Path) -> dict[str, object]:
             'CreateObject("WScript.Shell").Run """' + quoted + '"" daemon start", 0, False',
             "",
         ]
-        script.write_text(_WIN_EOL.join(body), encoding="utf-8")
+        # Тот же класс блокировки, что у watchdog-лаунчера: скрипт автозагрузки
+        # может исполняться wscript'ом прямо сейчас (вход в систему).
+        write_launcher_script(script, _WIN_EOL.join(body))
         return {
             "activated": True,
             "command": f"startup: {script}",

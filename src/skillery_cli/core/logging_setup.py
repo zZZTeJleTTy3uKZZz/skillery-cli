@@ -16,6 +16,7 @@ import logging.handlers
 import os
 from datetime import UTC, datetime
 from pathlib import Path
+from time import monotonic as _monotonic
 
 # TRACE — уровень ниже DEBUG для «полного трейса» по запросу пользователя.
 TRACE = 5
@@ -94,6 +95,67 @@ class _JsonFormatter(logging.Formatter):
         return json.dumps(base, ensure_ascii=False)
 
 
+#: Пауза между попытками ротации после того, как файл оказался занят чужим
+#: процессом. Без неё каждая следующая запись снова била бы в тот же
+#: ``WinError 32`` (и в дорогой `os.replace`), пока демон жив.
+ROTATE_RETRY_SEC = 300.0
+
+
+class SafeRotatingFileHandler(logging.handlers.RotatingFileHandler):
+    """``RotatingFileHandler``, переживающий межпроцессную блокировку файла.
+
+    Живой дефект (#1387, Windows): в ``logs/daemon.log`` пишут ДВА процесса —
+    сам демон (он держит файл открытым сутками) и любая foreground-команда
+    (``login`` зовёт ``ensure_autostart`` → ``_log_autostart`` → тот же файл).
+    Когда файл перерастал ``maxBytes``, foreground-процесс пытался
+    ``daemon.log`` → ``daemon.log.1`` и получал
+    ``PermissionError: [WinError 32] файл занят другим процессом``. На POSIX
+    так можно (rename открытого файла легален), на Windows — нет.
+
+    Дальше срабатывала штатная механика ``logging``: ``handleError`` при
+    ``raiseExceptions`` печатает ``--- Logging error ---`` и ПОЛНЫЙ traceback в
+    stderr. Пользователь видел стену трейсбека на успешной команде ``login``.
+
+    Что делает этот класс:
+
+    - **никогда не роняет traceback в stderr** — ``handleError`` подавлен
+      (лог обязан быть тише команды, ради которой он ведётся);
+    - **не теряет запись** — если переименование не удалось, продолжаем
+      дописывать в ТОТ ЖЕ файл (он вырастет сверх ``maxBytes`` — приемлемо;
+      альтернатива «потерять запись» хуже);
+    - **не долбится в замок** — после неудачи ротация не пробуется
+      ``ROTATE_RETRY_SEC`` секунд. Владелец файла (демон) сам ротирует его,
+      когда дойдёт до порога: у него файл открыт, и ``os.replace`` из
+      процесса-владельца на Windows проходит;
+    - **открывает файл лениво** (``delay=True``) — команда, которая за свой
+      прогон ничего не записала (стандартный уровень — ERROR, т.е. почти
+      всегда), файл вообще не трогает и в конкуренцию за него не вступает.
+    """
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        kwargs.setdefault("delay", True)
+        super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+        self._rotate_blocked_until = 0.0
+
+    def shouldRollover(self, record: logging.LogRecord) -> int:  # noqa: N802 — API stdlib
+        if _monotonic() < self._rotate_blocked_until:
+            return 0
+        return super().shouldRollover(record)
+
+    def doRollover(self) -> None:  # noqa: N802 — API stdlib
+        try:
+            super().doRollover()
+        except OSError:
+            # Файл держит другой процесс (Windows) либо каталог недоступен.
+            # Молчим и пишем дальше в текущий файл: базовый класс уже закрыл
+            # поток, ``FileHandler.emit`` откроет его заново на append.
+            self._rotate_blocked_until = _monotonic() + ROTATE_RETRY_SEC
+
+    def handleError(self, record: logging.LogRecord) -> None:  # noqa: N802 — API stdlib
+        """Ошибка записи лога НЕ печатается пользователю (ни строкой, ни трейсом)."""
+        return
+
+
 def configure_logging(level: str | None = None, *, filename: str = "cli.log") -> None:
     """Идемпотентно настроить логгер ``skillery`` на ротируемый файл в logs/.
 
@@ -116,7 +178,7 @@ def configure_logging(level: str | None = None, *, filename: str = "cli.log") ->
             _configured = True
             return
     try:
-        handler = logging.handlers.RotatingFileHandler(
+        handler = SafeRotatingFileHandler(
             target, maxBytes=2_000_000, backupCount=5, encoding="utf-8"
         )
     except Exception:  # noqa: BLE001 — логи не должны валить CLI
@@ -157,7 +219,7 @@ def install_logger(filename: str = "cli.log") -> logging.Logger:
         if getattr(h, "_skillery_target", None) == key:
             return lg
     try:
-        handler = logging.handlers.RotatingFileHandler(
+        handler = SafeRotatingFileHandler(
             target, maxBytes=2_000_000, backupCount=5, encoding="utf-8"
         )
     except Exception:  # noqa: BLE001 — логи не должны валить install
