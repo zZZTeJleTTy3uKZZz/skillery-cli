@@ -210,8 +210,32 @@ def install_logger(filename: str = "cli.log") -> logging.Logger:
     ``filename`` — ``cli.log`` (foreground) или ``daemon.log`` (фоновый демон:
     stdout→DEVNULL, поэтому только файл). Идемпотентно (хендлер на файл — один).
     """
-    lg = logging.getLogger(f"{_ROOT_NAME}.install")
-    lg.setLevel(logging.INFO)
+    return always_on_logger("install", filename=filename)
+
+
+def session_logger(filename: str = "daemon.log") -> logging.Logger:
+    """Журнал состояния сессии — ВСЕГДА пишет в ``logs/<filename>`` (#1387).
+
+    Зачем отдельный, а не общий ``skillery.daemon``: обычный уровень
+    ``daemon.log`` — ERROR, поэтому WARNING «сессия истекла — нужен вход» в
+    файл бы НЕ попал, и владелец, открыв лог, снова не увидел бы причины
+    (ровно то, чем закончился живой инцидент). Тот же приём, что у аудита
+    установки: свой хендлер, свой порог, ``propagate=False``.
+    """
+    return always_on_logger("session", filename=filename, level=logging.INFO)
+
+
+def always_on_logger(
+    subname: str, *, filename: str = "cli.log", level: int = logging.INFO
+) -> logging.Logger:
+    """Дочерний логгер со СВОИМ файловым хендлером и порогом.
+
+    Пишет независимо от общего уровня (``cfg.log_level``, обычно ERROR) и не
+    делает болтливыми остальные логгеры (``propagate=False``). Идемпотентно —
+    хендлер на файл ровно один.
+    """
+    lg = logging.getLogger(f"{_ROOT_NAME}.{subname}")
+    lg.setLevel(level)
     lg.propagate = False
     target = log_dir() / filename
     key = str(target)
@@ -222,10 +246,10 @@ def install_logger(filename: str = "cli.log") -> logging.Logger:
         handler = SafeRotatingFileHandler(
             target, maxBytes=2_000_000, backupCount=5, encoding="utf-8"
         )
-    except Exception:  # noqa: BLE001 — логи не должны валить install
+    except Exception:  # noqa: BLE001 — логи не должны валить вызывающего
         return lg
     handler._skillery_target = key  # type: ignore[attr-defined]
     handler.setFormatter(_JsonFormatter())
-    handler.setLevel(logging.INFO)
+    handler.setLevel(level)
     lg.addHandler(handler)
     return lg

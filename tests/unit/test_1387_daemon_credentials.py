@@ -268,6 +268,50 @@ def test_daemon_client_carries_state_aware_refresh(creds_env, monkeypatch) -> No
     assert seen.get("on_refresh") is not None
 
 
+def test_needs_login_warning_lands_in_daemon_log_at_default_level(
+    creds_env, tmp_path, monkeypatch
+) -> None:
+    """WARNING обязан попасть в ФАЙЛ, хотя штатный уровень демона — ERROR.
+
+    Иначе владелец, открывший daemon.log после суток холостой работы, снова не
+    увидел бы причины — а именно этим инцидент и кончился.
+    """
+    import logging as _logging
+
+    from skillery_cli.core import logging_setup
+
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    monkeypatch.setattr(logging_setup, "log_dir", lambda: logs)
+    sess = _logging.getLogger("skillery.session")
+    for h in list(sess.handlers):
+        sess.removeHandler(h)
+    # Штатная настройка демона: общий уровень ERROR.
+    logging_setup.configure_logging("ERROR", filename="daemon.log")
+
+    creds_env.login("a@test", "T1")
+    creds = creds_env.make()
+    creds.mark_needs_login("refresh отклонён сервером")
+    for h in list(sess.handlers):
+        h.flush()
+
+    body = (logs / "daemon.log").read_text(encoding="utf-8")
+    assert "сессия истекла" in body
+    assert "refresh отклонён сервером" in body
+    assert '"level": "WARNING"' in body
+    for h in list(sess.handlers):
+        h.close()
+        sess.removeHandler(h)
+
+
+def test_session_logger_is_wired_into_backend_sync() -> None:
+    """Журнал сессии с propagate=False должен явно подключаться к синку логов."""
+    from skillery_cli.core import log_sync
+
+    src = Path(log_sync.__file__).read_text(encoding="utf-8")
+    assert '"skillery.session"' in src
+
+
 # ── видимость: status и doctor ──────────────────────────────────────────────
 def test_daemon_status_reports_needs_login(monkeypatch, tmp_path) -> None:
     payload: dict[str, Any] = {}

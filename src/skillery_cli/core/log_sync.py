@@ -400,7 +400,10 @@ def attach_log_sync(
     """
     limiter = _RateLimiter(limit=rate_max, window=rate_window)
     for name, level in (("skillery", logging.WARNING),
-                        ("skillery.install", logging.INFO)):
+                        ("skillery.install", logging.INFO),
+                        # #1387: журнал сессии тоже propagate=False — без явного
+                        # подключения «нужен вход» не уехал бы в веб.
+                        ("skillery.session", logging.WARNING)):
         logger = logging.getLogger(name)
         if any(isinstance(h, LogSyncHandler) for h in logger.handlers):
             continue
@@ -415,7 +418,7 @@ def attach_log_sync(
 
 def detach_log_sync() -> None:
     """Снять handler'ы синка (для тестов/диагностики)."""
-    for name in ("skillery", "skillery.install"):
+    for name in ("skillery", "skillery.install", "skillery.session"):
         logger = logging.getLogger(name)
         for h in list(logger.handlers):
             if isinstance(h, LogSyncHandler):

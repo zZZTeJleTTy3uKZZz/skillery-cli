@@ -60,6 +60,7 @@ outbox вырос до 739 конвертов. Ручной ``daemon stop`` + ``
 from __future__ import annotations
 
 import json
+import logging
 import time
 from contextlib import suppress
 from dataclasses import dataclass
@@ -67,9 +68,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from skillery_cli.core.logging_setup import get_logger
+from skillery_cli.core.logging_setup import session_logger
 
-_log = get_logger("daemon")
+
+def _session_log() -> logging.Logger:
+    """Журнал сессии: ВСЕГДА пишет в ``daemon.log``, минуя общий уровень ERROR.
+
+    Через обычный ``skillery.daemon`` WARNING в файл не попадал бы — и владелец,
+    открыв лог после суток холостой работы, снова не увидел бы причины.
+    """
+    return session_logger("daemon.log")
+
 
 #: Состояния сессии демона.
 AUTH_OK = "ok"
@@ -245,7 +254,7 @@ class DaemonCredentials:
         if self._auth_state == AUTH_NEEDS_LOGIN:
             return  # уже там: не переписываем файл и не повторяем WARNING
         self._set_auth(AUTH_NEEDS_LOGIN, reason)
-        _log.warning(
+        _session_log().warning(
             "сессия истекла — нужен вход; демон приостановил отправку",
             extra={"context": {
                 "reason": reason,
@@ -258,7 +267,7 @@ class DaemonCredentials:
         if self._auth_state == AUTH_OK:
             return
         self._set_auth(AUTH_OK, None)
-        _log.warning("сессия восстановлена — отправка возобновлена")
+        _session_log().warning("сессия восстановлена — отправка возобновлена")
 
     def auth_state(self) -> str:
         return self._auth_state
@@ -282,7 +291,7 @@ class DaemonCredentials:
             # Прошлый вердикт больше не про них: перечитываем и пробуем снова.
             self.reload_now()
             self._set_auth(AUTH_OK, None)
-            _log.warning(
+            _session_log().warning(
                 "креды обновились — демон возобновляет отправку",
                 extra={"context": {"user": getattr(self._cfg, "user_email", None)}},
             )
