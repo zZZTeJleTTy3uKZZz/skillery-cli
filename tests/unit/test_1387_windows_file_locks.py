@@ -11,7 +11,7 @@
 
 Реальную межпроцессную блокировку на CI (и на POSIX) не воспроизвести, поэтому
 блокировка мокается на уровне вызова, который её и получает: ``os.replace``
-для ротации и ``Path.write_text`` для лаунчера.
+для ротации и ``Path.write_bytes`` для лаунчера.
 """
 from __future__ import annotations
 
@@ -134,13 +134,35 @@ def test_launcher_write_is_noop_when_content_matches(
 ) -> None:
     """Совпало содержимое → файл не переписывается (нечего ломать блокировкой)."""
     target = tmp_path / "skillery-watchdog.vbs"
-    target.write_text("body", encoding="utf-8")
+    target.write_bytes(b"body")
 
     def _boom(*_a, **_kw):
         raise AssertionError("не должны писать, когда содержимое совпадает")
 
-    monkeypatch.setattr(Path, "write_text", _boom)
+    monkeypatch.setattr(Path, "write_bytes", _boom)
     assert autostart.write_launcher_script(target, "body") == target
+
+
+def test_launcher_write_is_byte_exact_and_idempotent_with_crlf(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Настоящее содержимое .vbs (CRLF) — второй проход обязан быть no-op.
+
+    Ловушка, из-за которой «пропуск записи» не работал бы вовсе: ``write_text``
+    на Windows транслирует ``\\n`` в ``\\r\\n``, и CRLF-текст ложился на диск
+    как ``\\r\\r\\n``. Сравнение прочитанного с исходником не совпадало никогда
+    — а значит, при КАЖДОМ login мы бы лезли писать в занятый wscript'ом файл.
+    """
+    target = tmp_path / "skillery-watchdog.vbs"
+    text = "line1" + autostart._WIN_EOL + "line2" + autostart._WIN_EOL
+    autostart.write_launcher_script(target, text)
+    assert target.read_bytes() == text.encode("utf-8"), "лишний \\r от текстового режима"
+
+    def _boom(*_a, **_kw):
+        raise AssertionError("повторная запись того же содержимого не нужна")
+
+    monkeypatch.setattr(Path, "write_bytes", _boom)
+    autostart.write_launcher_script(target, text)
 
 
 def test_launcher_write_survives_lock_when_file_exists(
@@ -148,9 +170,9 @@ def test_launcher_write_survives_lock_when_file_exists(
 ) -> None:
     """Занят и содержимое иное → прежний файл остаётся, исключения нет."""
     target = tmp_path / "skillery-watchdog.vbs"
-    target.write_text("old", encoding="utf-8")
+    target.write_bytes(b"old")
     monkeypatch.setattr(
-        Path, "write_text",
+        Path, "write_bytes",
         lambda *_a, **_kw: (_ for _ in ()).throw(
             PermissionError(13, "Permission denied")
         ),
@@ -160,7 +182,7 @@ def test_launcher_write_survives_lock_when_file_exists(
         autostart, "_log_autostart", lambda msg, **kw: logged.append(msg)
     )
     assert autostart.write_launcher_script(target, "new") == target
-    assert target.read_text(encoding="utf-8") == "old"
+    assert target.read_bytes() == b"old"
     assert logged and "занят" in logged[0]
 
 
@@ -169,7 +191,7 @@ def test_launcher_write_raises_when_nothing_to_fall_back_to(
 ) -> None:
     """Файла нет и записать нельзя — это настоящая проблема, её не глушим."""
     monkeypatch.setattr(
-        Path, "write_text",
+        Path, "write_bytes",
         lambda *_a, **_kw: (_ for _ in ()).throw(PermissionError(13, "denied")),
     )
     with pytest.raises(PermissionError):
@@ -184,9 +206,9 @@ def test_install_watchdog_ok_when_vbs_is_locked(
     home = tmp_path
     vbs = home / autostart._HOME / "skillery-watchdog.vbs"
     vbs.parent.mkdir(parents=True, exist_ok=True)
-    vbs.write_text("stale", encoding="utf-8")
+    vbs.write_bytes(b"stale")
     monkeypatch.setattr(
-        Path, "write_text",
+        Path, "write_bytes",
         lambda *_a, **_kw: (_ for _ in ()).throw(PermissionError(13, "denied")),
     )
     monkeypatch.setattr(autostart, "_log_autostart", lambda *_a, **_kw: None)

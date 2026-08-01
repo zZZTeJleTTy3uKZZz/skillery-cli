@@ -503,15 +503,23 @@ def write_launcher_script(path: Path, text: str) -> Path:
        попытка (когда wscript не держит файл) его обновит;
     4. записать не вышло и файла нет — ошибка наверх: лаунчера действительно
        нет, и молчать об этом нельзя.
+
+    Сравнение и запись — ПОБАЙТОВЫЕ, не через ``write_text``. Текст .vbs уже
+    несёт CRLF (``_WIN_EOL``), а текстовый режим на Windows транслирует ``\\n``
+    в ``\\r\\n`` ЕЩЁ РАЗ: на диск уходило ``\\r\\r\\n``, а обратное чтение
+    сворачивало это в ``\\n``. Сравнивать прочитанное с исходником в таких
+    условиях бессмысленно — п.1 не срабатывал бы никогда, и мы бы всякий раз
+    лезли в занятый файл. Заодно уходит и сам лишний ``\\r``.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
+    data = text.encode("utf-8")
     try:
-        if path.exists() and path.read_text(encoding="utf-8") == text:
+        if path.exists() and path.read_bytes() == data:
             return path
     except OSError:
         pass  # не прочитали — просто попробуем записать
     try:
-        path.write_text(text, encoding="utf-8")
+        path.write_bytes(data)
     except OSError as exc:
         if not path.exists():
             raise
