@@ -43,6 +43,7 @@ from skillery_cli.daemon.daemon_runner import (
     read_running_pid,
     read_state,
 )
+from skillery_cli.daemon.credentials import DaemonCredentials, read_auth_state
 from skillery_cli.daemon.event_sender import OutboxSender
 from skillery_cli.daemon.queue_stream import DeviceQueueStream
 from skillery_cli.output import emit_data, emit_error, emit_message
@@ -87,40 +88,47 @@ _OUTBOX_FLUSH_MIN_INTERVAL_SEC = 30.0
 
 
 def _build_runner(
-    *, interval_seconds: float, reconcile_installs: bool = True
+    *,
+    interval_seconds: float,
+    reconcile_installs: bool = True,
+    credentials: DaemonCredentials | None = None,
 ) -> DaemonRunner:
     """Создать ``DaemonRunner`` с реальной очередью + sender'ом.
 
     ``reconcile_installs`` — подключить best-effort reconcile («нажал Установить
     в вебе → демон скачал»). Дефолт on; выключается, если юзер не залогинен или
     флагом. Reconcile НЕ влияет на event-цикл (обёрнут в suppress в runner'е).
+
+    ``credentials`` — точка подмены в тестах; в проде создаётся свой
+    :class:`DaemonCredentials` (см. #1387: живой подхват смены логина).
     """
     import time as _time
 
-    cfg = ClientConfig.load()
-    access_holder: dict[str, str | None] = {"token": None}
-
-    def _current_access() -> str | None:
-        access = access_holder["token"]
-        if not access and cfg.user_email:
-            from skillery_cli.config import load_tokens
-
-            access, _ = load_tokens(cfg.user_email)
-            access_holder["token"] = access
-        return access
+    # #1387: креды НЕ снимаются один раз на весь процесс. Демон живёт сутками и
+    # переживает перезагрузку — после `auth login` он обязан подхватить новую
+    # пару сам (stamp-watch файлов кред), а на неисправимом 401 уйти в видимое
+    # состояние «нужен вход» вместо суточной молотьбы вхолостую.
+    creds = credentials or DaemonCredentials()
+    cfg = creds.config()
+    creds.publish()
 
     def _factory(anonymous: bool = False):  # type: ignore[no-untyped-def]
-        # Lazy: каждый цикл подтягиваем актуальный token из keyring (refresh
-        # callback может его обновить).
-        access = _current_access()
+        access = creds.access()
         if anonymous:
             # POST /events анонимен: при 401 (токен протух) воркер ретраит
             # батч аналитики без Bearer. Деградировать некуда, если токена и
-            # не было — тогда None, и повтор не делается.
+            # не было — тогда None, и повтор не делается. Блокировка сессии
+            # анонимную ветку НЕ трогает: ей Bearer и не нужен.
             if not access:
                 return None
-            return _common.make_client(cfg, "")
-        return _common.make_client(cfg, access or "")
+            return _common.make_client(creds.config(), "")
+        if creds.blocked():
+            # Сессия мертва и переспрашивать рано: клиента не строим вовсе.
+            # Очередь не теряется — 401 повторяемый, конверты лежат в outbox.
+            return None
+        return _common.make_client(
+            creds.config(), access or "", on_refresh=creds.refresh_callback()
+        )
 
     # #1180: такт демона = один проход доставки ОБЩЕГО outbox'а (запуски
     # навыков `skill_run`, логи `log`, аналитика `analytics_event`). Именно в
@@ -153,7 +161,13 @@ def _build_runner(
         self_upgrade: dict[str, float | bool] = {"at": 0.0, "started": False}
 
         async def _reconcile() -> None:
-            access = _current_access()
+            # #1387: конфиг и токен берём АКТУАЛЬНЫЕ (после login живой демон
+            # обязан работать под новой сессией), а на мёртвой сессии молчим —
+            # долбить очередь заведомо отвергаемым запросом бессмысленно.
+            if creds.blocked():
+                return
+            cfg = creds.config()
+            access = creds.access()
             if not access:
                 return
             # Lazy-import: избегаем циклической зависимости __main__ ↔ daemon.
@@ -571,19 +585,43 @@ def cmd_daemon_status() -> None:
         "queue_by_kind": queue_by_kind,
         "state": state,
     }
+    # #1387: состояние сессии демона. Раньше протухшая сессия была НЕВИДИМА:
+    # демон сутки слал вхолостую (sent растёт, accepted=0), а `status` про это
+    # молчал. Файл переживает смерть демона, поэтому картинка честная и когда
+    # процесса уже нет.
+    auth = read_auth_state()
+    if auth:
+        payload["auth"] = auth
+        if str(auth.get("state")) == "needs_login":
+            payload["needs_login"] = True
+            payload["warning"] = (
+                "сессия истекла — демон приостановил отправку"
+                + (f" ({auth['reason']})" if auth.get("reason") else "")
+                + ": skillery auth login"
+            )
     # Демон мёртв, а в очереди копятся конверты → ничего не уходит.
     # Явное предупреждение + машинно-читаемое поле (для автоматики/CI).
     if not alive and queue_size > 0:
         payload["stalled_events"] = queue_size
-        payload["warning"] = (
+        # «Нужен вход» точнее объясняет застрявшую очередь, чем «запусти демон»
+        # — поэтому уже выставленное предупреждение о сессии не затираем.
+        payload.setdefault(
+            "warning",
             f"демон не запущен, {queue_size} "
             f"событ{'ие' if queue_size == 1 else 'ий'} не "
-            f"отправлен{'о' if queue_size == 1 else 'о'}: skillery daemon start"
+            f"отправлен{'о' if queue_size == 1 else 'о'}: skillery daemon start",
         )
 
     def _render(p: dict[str, Any]) -> None:
         status = "[green]running[/]" if p["alive"] else "[yellow]stopped[/]"
         console.print(f"Daemon:      {status}  pid={p['pid'] or '—'}")
+        auth_st = (p.get("auth") or {}).get("state")
+        if auth_st:
+            console.print(
+                "Session:     "
+                + ("[green]ok[/]" if auth_st != "needs_login"
+                   else "[red]нужен вход (skillery auth login)[/]")
+            )
         console.print(f"PID file:    {p['pid_path']}")
         console.print(f"Queue:       {p['queue_path']}  size={p['queue_size']}")
         if p.get("queue_by_kind"):

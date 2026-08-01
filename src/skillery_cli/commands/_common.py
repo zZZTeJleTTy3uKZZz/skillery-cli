@@ -160,12 +160,21 @@ def make_refresh_callback(cfg: ClientConfig) -> object:
     return _make_refresh_callback(cfg)
 
 
-def make_client(cfg: ClientConfig, access: str) -> HubClient:
-    """Стандартный HubClient с auto-refresh callback."""
+def make_client(
+    cfg: ClientConfig, access: str, *, on_refresh: object | None = None
+) -> HubClient:
+    """Стандартный HubClient с auto-refresh callback.
+
+    ``on_refresh`` — подменить callback обновления токена. Нужен ровно одному
+    потребителю: демону (#1387). Ему мало «обновить и забыть» — он обязан
+    заметить неисправимый 401, перейти в видимое состояние «нужен вход» и
+    перестать слать вхолостую. Callback остаётся единым флоу (демонский —
+    обёртка над тем же ``_make_refresh_callback``), просто с наблюдателем.
+    """
     return HubClient(
         base_url=cfg.base_url,
         access_token=access,
-        on_token_refresh=make_refresh_callback(cfg),
+        on_token_refresh=on_refresh or make_refresh_callback(cfg),
     )
 
 

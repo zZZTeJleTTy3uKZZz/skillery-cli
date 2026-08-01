@@ -5969,6 +5969,19 @@ def _self_heal_repairs() -> list[str]:
         return []
 
 
+def _session_hint() -> str | None:
+    """Подсказка про истёкшую сессию, если именно она — вероятная причина (#1387)."""
+    try:
+        from skillery_cli.commands.doctor import _probe_session
+
+        res = _probe_session(ClientConfig.load())
+    except Exception:  # noqa: BLE001 — подсказка не имеет права валить обработчик
+        return None
+    if res.level in ("fail", "warn"):
+        return f"{res.name}: {res.detail}"
+    return None
+
+
 def _invoke_app(*, retry: bool) -> None:
     err = Console(stderr=True)
     try:
@@ -5989,7 +6002,14 @@ def _invoke_app(*, retry: bool) -> None:
                 _invoke_app(retry=False)  # ровно один ретрай после починки
                 return
         else:
-            err.print("  [dim]известных авто-починок не нашлось[/]")
+            # #1387: «починок не нашлось» было ответом даже на истёкшую сессию.
+            # Авто-чинить нечего (вход делает человек), но назвать причину и
+            # точную команду мы обязаны.
+            hint = _session_hint()
+            if hint:
+                err.print(f"  [yellow]{hint}[/]")
+            else:
+                err.print("  [dim]известных авто-починок не нашлось[/]")
         logpath = _write_crash_log(exc)
         err.print(
             f"[yellow]Не удалось авто-починить.[/] Детали в логе: [dim]{logpath}[/]\n"

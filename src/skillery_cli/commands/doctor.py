@@ -12,6 +12,9 @@ config) даёт машинную структуру для AI-агентов и
 3. **Агент** — какой ИИ-агент детектится (claude_code/codex/...); warn если ни
    один не установлен (install сработает, но скилл некому подхватить);
 4. **Hub login** — залогинен ли (pass) или аноним (warn: оффлайн-режим);
+4b. **Сессия** — жива ли она (#1387): вердикт демона о неисправимом 401
+   (``daemon.auth.json``) + срок жизни локального access-токена. Истёкшая
+   сессия — fail с точной командой ``skillery auth login``, а не молчание;
 5. **PATH-стор** — bin-каталог CLI-шимов (``~/.skillery/bin``) в PATH? warn
    если нет (CLI установленных навыков не позовутся → ``doctor`` чинит);
 6. **PATH-коллизии** — не перехвачена ли команда навыка одноимённым бинарём из
@@ -134,6 +137,66 @@ def _probe_login(cfg: ClientConfig) -> Result:
         "не авторизован — доступны автономная установка (--path/--from-git) и "
         "локальный стор; для hub-каталога: skillery login",
     )
+
+
+def _probe_session(cfg: ClientConfig) -> Result:
+    """Жива ли сессия — и если нет, ЧТО конкретно сделать (#1387).
+
+    Раньше истёкшая сессия не диагностировалась вовсе: демон сутки слал
+    вхолостую, а ``doctor`` отвечал «известных авто-починок не нашлось». Здесь
+    два независимых источника, оба локальные (без сети):
+
+    1. вердикт демона (``~/.skillery/daemon.auth.json``) — он единственный
+       ВИДЕЛ 401 и неудачный refresh; файл переживает смерть процесса;
+    2. срок жизни локального access-токена (claim ``exp`` в JWT) — работает и
+       тогда, когда демон вовсе не запускался.
+
+    Починить автоматически нечего: новый вход делает человек. Поэтому задача
+    проверки — назвать причину и точную команду.
+    """
+    from skillery_cli.daemon.credentials import AUTH_NEEDS_LOGIN, read_auth_state
+
+    if not cfg.user_email:
+        return ok("Сессия", "вход не выполнялся — проверять нечего")
+
+    state = read_auth_state()
+    if str(state.get("state") or "") == AUTH_NEEDS_LOGIN:
+        reason = state.get("reason") or "обновление сессии не удалось"
+        return fail(
+            "Сессия",
+            f"истекла и не восстановилась ({reason}) — демон приостановил "
+            "отправку. Почини: skillery auth login",
+        )
+
+    expired = _access_token_expired(cfg)
+    if expired is True:
+        return warn(
+            "Сессия",
+            "локальный access-токен истёк; обычно его молча меняет refresh — "
+            "если команды отвечают 401, выполни: skillery auth login",
+        )
+    return ok("Сессия", f"активна ({cfg.user_email})")
+
+
+def _access_token_expired(cfg: ClientConfig) -> bool | None:
+    """Истёк ли локальный access-токен по claim ``exp``. ``None`` — не узнать."""
+    import time
+
+    from skillery_cli.config import decode_jwt_claims, load_tokens
+
+    try:
+        access, _ = load_tokens(cfg.user_email or "")
+    except Exception:  # noqa: BLE001 — недоступный keyring не валит doctor
+        return None
+    if not access:
+        return None
+    try:
+        exp = decode_jwt_claims(access).get("exp")
+    except Exception:  # noqa: BLE001 — не-JWT токен (тесты/иной провайдер)
+        return None
+    if not isinstance(exp, (int, float)):
+        return None
+    return bool(exp < time.time())
 
 
 def _probe_path_store() -> Result:
@@ -277,6 +340,7 @@ def run_checks(cfg: ClientConfig) -> list[Result]:
         _probe_config(),
         _probe_agent(cfg),
         _probe_login(cfg),
+        _probe_session(cfg),
         _probe_path_store(),
         _probe_shim_collisions(),
         _probe_clikit(),

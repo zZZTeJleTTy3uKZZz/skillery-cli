@@ -580,7 +580,7 @@ async def test_daemon_loop_flushes_outbox_with_throttle(monkeypatch) -> None:
     monkeypatch.setattr(m, "_daemon_cli_self_upgrade", _noop)
 
     client = _FakeClient()
-    monkeypatch.setattr(_common, "make_client", lambda cfg, access: client)
+    monkeypatch.setattr(_common, "make_client", lambda cfg, access, **kw: client)
 
     clock = {"t": 5000.0}
     monkeypatch.setattr("time.monotonic", lambda: clock["t"])
