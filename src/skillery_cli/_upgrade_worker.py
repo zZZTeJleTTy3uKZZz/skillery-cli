@@ -21,12 +21,18 @@
 :func:`_no_window_kwargs` (``CREATE_NO_WINDOW`` + ``DEVNULL`` на все три потока),
 и КАЖДЫЙ ``subprocess.run`` здесь обязан идти с явным ``timeout``.
 
-Порядок работы (всё best-effort, апгрейд важнее аккуратности):
+Порядок работы (#1399; всё best-effort, но ВОЗВРАТ ДЕМОНА важнее апгрейда):
 1. взять single-flight лок — два одновременных апгрейда рвут trampoline;
 2. подождать, пока выйдет породивший нас launcher;
-3. погасить ВСЮ цепочку демона (он держит файлы окружения);
-4. пройти цепочку команд обновления до первой удачной;
-5. поднять демон заново уже НОВЫМ бинарём.
+3. ПРИГЛУШИТЬ watchdog-задачу (schtasks ``/End`` + ``/DISABLE``) — иначе её тик
+   раз в 3 минуты поднимет НОВЫЙ ``skillery daemon start`` ровно посреди
+   установки, и он снова залочит ``Scripts/`` («os error 5»);
+4. погасить ВСЮ цепочку демона И живые процессы watchdog-лаунчера (wscript);
+5. пройти цепочку команд обновления до первой удачной;
+6. в ``finally`` — вернуть watchdog и поднять демон заново (при неудаче
+   установки ТОЖЕ: устройство без демона теряет связь с хабом навсегда), с
+   резервным путём запуска на случай битого трамплина;
+7. ПОДТВЕРДИТЬ: живые pid демона + рабочий ``daemon status``.
 
 Конфиг приходит одним JSON-файлом (см. ``main``).
 """
@@ -52,6 +58,11 @@ MUTEX_ENV = "SKILLERY_UPGRADE_MUTEX"
 
 IS_WIN = sys.platform == "win32"
 
+#: Имя watchdog-задачи планировщика. Вынужденный дубль
+#: ``daemon/autostart.py`` (``_branding.DAEMON_TASK_NAME + "Watchdog"``):
+#: worker переживает замену пакета и не имеет права импортировать его.
+WATCHDOG_TASK = "SkilleryDaemonWatchdog"
+
 
 def mutex_name() -> str:
     """Имя ядерного мьютекса апгрейда (env-оверрайд для изоляции тестов)."""
@@ -68,7 +79,15 @@ def result_path() -> Path:
     return Path.home() / ".skillery" / "_upgrade_result.json"
 
 
-def write_result(cfg: dict, ok: bool, error: str = "", *, base: Path | None = None) -> None:
+def write_result(
+    cfg: dict,
+    ok: bool,
+    error: str = "",
+    *,
+    base: Path | None = None,
+    daemon: dict | None = None,
+    watchdog_restored: bool | None = None,
+) -> None:
     """Записать итог фонового апгрейда, чтобы CLI показал его при следующем запуске.
 
     ``upgrade`` на Windows/в фоне запускает worker отдельным процессом и сразу
@@ -76,24 +95,29 @@ def write_result(cfg: dict, ok: bool, error: str = "", *, base: Path | None = No
     кончилось — успех и провал выглядели одинаково. Кладём результат в
     ~/.skillery/_upgrade_result.json; CLI покажет его один раз и удалит.
 
+    ``daemon`` / ``watchdog_restored`` (#1399) — доказательство, что после цикла
+    демон и watchdog вернулись; кладутся ТОЛЬКО если переданы, чтобы форма
+    sidecar'а оставалась совместимой со старым CLI, который их не ждёт.
+
     ``base`` — для тестов (иначе путь считает :func:`result_path`). Best-effort:
     сбой записи не должен ронять и без того хрупкий финал апгрейда.
     """
     try:
         path = (base / "_upgrade_result.json") if base is not None else result_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(
-                {
-                    "ok": bool(ok),
-                    "from": cfg.get("from_version", ""),
-                    "to": cfg.get("to_version", ""),
-                    "error": error or "",
-                },
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
-        )
+        payload: dict = {
+            "ok": bool(ok),
+            "from": cfg.get("from_version", ""),
+            "to": cfg.get("to_version", ""),
+            "error": error or "",
+        }
+        if daemon is not None:
+            payload["daemon_alive"] = bool(daemon.get("alive"))
+            payload["daemon_pids"] = list(daemon.get("pids") or [])
+            payload["daemon_status_rc"] = daemon.get("status_rc")
+        if watchdog_restored is not None:
+            payload["watchdog_restored"] = bool(watchdog_restored)
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     except Exception:
         pass
 
@@ -175,25 +199,12 @@ def acquire_lock():
 # --------------------------------------------------------------------------
 #  остановка демона (вынужденный дубль single_instance — см. модуль-docstring)
 # --------------------------------------------------------------------------
-def find_daemon_pids() -> list[int]:
-    """PID ВСЕХ процессов демона, а не только записанного в PID-файл.
+def _pids_from(cmd: list[str]) -> list[int]:
+    """Выполнить команду-перечислитель и вернуть PID из её вывода (без своего).
 
-    Одна логическая копия демона на Windows — это цепочка процессов
-    (launcher-трамплин → venv-редиректор → базовый интерпретатор), и держат
-    файлы окружения они все.
+    Свой PID исключается ВСЕГДА: worker запускается тем же ``pythonw.exe``, и
+    без этого он попал бы в список «мешающих» и убил бы сам себя.
     """
-    if IS_WIN:
-        script = (
-            "Get-CimInstance Win32_Process | Where-Object { "
-            "($_.Name -eq 'skillery.exe' -or $_.Name -eq 'python.exe' "
-            "-or $_.Name -eq 'pythonw.exe') "
-            "-and $_.CommandLine -like '*skillery*' "
-            "-and $_.CommandLine -like '*daemon*run*' } | "
-            "Select-Object -ExpandProperty ProcessId"
-        )
-        cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command", script]
-    else:
-        cmd = ["pgrep", "-f", r"skillery.*daemon run"]
     try:
         proc = subprocess.run(cmd, capture_output=True, timeout=30, check=False,
                               **({"creationflags": CREATE_NO_WINDOW} if IS_WIN else {}))
@@ -208,14 +219,142 @@ def find_daemon_pids() -> list[int]:
     return pids
 
 
+def find_daemon_pids() -> list[int]:
+    """PID ВСЕХ процессов демона (``daemon run``), а не только из PID-файла.
+
+    Одна логическая копия демона на Windows — это цепочка процессов
+    (launcher-трамплин → venv-редиректор → базовый интерпретатор), и держат
+    файлы окружения они все.
+
+    Матч намеренно узкий (только ``daemon run``): по этой же функции мы
+    ПОДТВЕРЖДАЕМ, что демон вернулся, а короткоживущий ``daemon start`` давал бы
+    ложное «жив».
+    """
+    if IS_WIN:
+        script = (
+            "Get-CimInstance Win32_Process | Where-Object { "
+            "($_.Name -eq 'skillery.exe' -or $_.Name -eq 'python.exe' "
+            "-or $_.Name -eq 'pythonw.exe') "
+            "-and $_.CommandLine -like '*skillery*' "
+            "-and $_.CommandLine -like '*daemon*run*' } | "
+            "Select-Object -ExpandProperty ProcessId"
+        )
+        cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command", script]
+    else:
+        cmd = ["pgrep", "-f", r"skillery.*daemon run"]
+    return _pids_from(cmd)
+
+
+def find_watchdog_pids() -> list[int]:
+    """PID живого watchdog-тика: ``wscript.exe //B skillery-watchdog.vbs``.
+
+    Сам wscript ``Scripts/`` не держит, но он ПРЯМО СЕЙЧАС запускает
+    ``skillery.exe daemon start`` — а тот держит. Гасим и его: иначе установка
+    ловит «os error 5» от процесса, которого секунду назад ещё не было.
+    """
+    if not IS_WIN:
+        return []
+    script = (
+        "Get-CimInstance Win32_Process | Where-Object { "
+        "($_.Name -eq 'wscript.exe' -or $_.Name -eq 'cscript.exe') "
+        "-and $_.CommandLine -like '*skillery-watchdog*' } | "
+        "Select-Object -ExpandProperty ProcessId"
+    )
+    return _pids_from(["powershell", "-NoProfile", "-NonInteractive", "-Command", script])
+
+
+def find_starting_daemon_pids() -> list[int]:
+    """PID процессов ``skillery daemon start`` (короткий, но держит ``Scripts/``).
+
+    Именно они и оказывались «вторым pythonw.exe» в момент падения установки.
+    """
+    if IS_WIN:
+        script = (
+            "Get-CimInstance Win32_Process | Where-Object { "
+            "($_.Name -eq 'skillery.exe' -or $_.Name -eq 'python.exe' "
+            "-or $_.Name -eq 'pythonw.exe') "
+            "-and $_.CommandLine -like '*skillery*' "
+            "-and $_.CommandLine -like '*daemon*start*' } | "
+            "Select-Object -ExpandProperty ProcessId"
+        )
+        cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command", script]
+    else:
+        cmd = ["pgrep", "-f", r"skillery.*daemon start"]
+    return _pids_from(cmd)
+
+
+def find_blocking_pids() -> list[int]:
+    """ВСЁ, что держит файлы окружения: демон + его старт + watchdog-лаунчер."""
+    seen: list[int] = []
+    for finder in (find_daemon_pids, find_starting_daemon_pids, find_watchdog_pids):
+        try:
+            for pid in finder():
+                if pid not in seen:
+                    seen.append(pid)
+        except Exception:  # noqa: BLE001 — один сломавшийся поиск не рушит остальные
+            continue
+    return seen
+
+
+# --------------------------------------------------------------------------
+#  watchdog (schtasks) — приглушить на время установки и обязательно вернуть
+# --------------------------------------------------------------------------
+def _run_quiet(cmd: list[str], timeout: float = 60.0) -> int:
+    """``subprocess.run`` без окна и с обязательным таймаутом. rc или 1."""
+    try:
+        return subprocess.run(cmd, timeout=timeout, **_no_window_kwargs()).returncode
+    except Exception as exc:  # noqa: BLE001
+        _log(f"cmd EXC {' '.join(cmd)}: {exc}")
+        return 1
+
+
+def suspend_watchdog(task: str = WATCHDOG_TASK) -> bool:
+    """Снять текущий тик и ОТКЛЮЧИТЬ watchdog-задачу на время установки.
+
+    Без этого сценарий воспроизводится как по часам: watchdog раз в 3 минуты
+    поднимает демон, установка длится дольше — и ``uv tool install --force``
+    падает с «failed to remove directory Scripts: os error 5».
+
+    True ⇒ задачу выключили МЫ и обязаны включить обратно (см.
+    :func:`restore_watchdog`). На не-Windows — no-op (там роль watchdog играют
+    systemd Restart / launchd KeepAlive, файлы они не держат).
+    """
+    if not IS_WIN:
+        return False
+    _run_quiet(["schtasks", "/End", "/TN", task], timeout=30)
+    rc = _run_quiet(["schtasks", "/Change", "/TN", task, "/DISABLE"], timeout=30)
+    _log(f"suspend_watchdog {task} → rc={rc}")
+    return rc == 0
+
+
+def restore_watchdog(was_suspended: bool, task: str = WATCHDOG_TASK,
+                     attempts: int = 3) -> bool:
+    """Вернуть watchdog в строй. Вызывается ВСЕГДА, в т.ч. после провала.
+
+    Watchdog — последняя линия обороны «устройство всегда на связи»: если он
+    останется выключенным, а демон не поднимется, машина замолчит навсегда.
+    Поэтому здесь повторы, а результат идёт в лог апгрейда.
+    """
+    if not was_suspended:
+        return False
+    for attempt in range(1, attempts + 1):
+        rc = _run_quiet(["schtasks", "/Change", "/TN", task, "/ENABLE"], timeout=30)
+        _log(f"restore_watchdog attempt {attempt}: rc={rc}")
+        if rc == 0:
+            return True
+        time.sleep(2)
+    return False
+
+
 def stop_daemons(timeout: float = 10.0) -> list[int]:
     """Погасить всех и ДОЖДАТЬСЯ, пока отпустят файлы.
 
     Ждать обязательно: `uv tool install --force` падает с «os error 5», если
-    хоть один процесс ещё держит `Scripts/`.
+    хоть один процесс ещё держит `Scripts/`. Гасим не только ``daemon run``, но
+    и ``daemon start``/watchdog-лаунчер — см. :func:`find_blocking_pids`.
     """
     killed: list[int] = []
-    for pid in find_daemon_pids():
+    for pid in find_blocking_pids():
         try:
             if IS_WIN:
                 import ctypes
@@ -235,7 +374,7 @@ def stop_daemons(timeout: float = 10.0) -> list[int]:
             continue
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if not find_daemon_pids():
+        if not find_blocking_pids():
             break
         time.sleep(0.3)
     return killed
@@ -278,31 +417,95 @@ def run_upgrade(commands: list[list[str]], retries: int = 6, delay: float = 15.0
     return False
 
 
-def start_daemon(binary: str) -> bool:
-    """Поднять демон НОВЫМ бинарём — сразу, не дожидаясь команды пользователя.
+def tool_venv_python() -> str | None:
+    """Python внутри tool-venv CLI — ЗАПАСНОЙ путь запуска демона.
 
-    С ПОВТОРАМИ: сразу после апгрейда trampoline `skillery.exe` пересоздаётся и
-    несколько секунд может быть в переходном состоянии («uv trampoline failed to
-    canonicalize script path»). Запускаем СИНХРОННО и проверяем returncode —
-    Popen «выстрелил и забыл» не отличал бы успех от битого бинаря. `daemon
-    start` быстрый: сам поднимает detached-демон и выходит.
+    Трамплин ``skillery.exe`` после неудачной установки бывает битым («uv
+    trampoline failed to canonicalize script path») — именно в этом состоянии
+    на живой машине переставал работать и ``daemon stop``. Модуль
+    ``skillery_cli`` при этом на месте, и запустить демон можно напрямую
+    интерпретатором tool-venv.
     """
-    if not binary:
-        _log("start_daemon: пустой daemon_binary — пропуск")
-        return False
-    kw = dict(_no_window_kwargs())  # без окна; ждём завершения самой команды
-    for attempt in range(1, 6):
-        try:
-            rc = subprocess.run(
-                [binary, "daemon", "start"], timeout=60, **kw
-            ).returncode
-            _log(f"start_daemon attempt {attempt}: rc={rc}")
-            if rc == 0:
-                return True
-        except Exception as e:  # noqa: BLE001
-            _log(f"start_daemon attempt {attempt} EXC: {e}")
-        time.sleep(3)
-    return False
+    roots: list[Path] = []
+    env_dir = os.environ.get("UV_TOOL_DIR")
+    if env_dir:
+        roots.append(Path(env_dir))
+    if IS_WIN:
+        local = os.environ.get("LOCALAPPDATA")
+        if local:
+            roots.append(Path(local) / "uv" / "tools")
+    else:
+        roots.append(Path.home() / ".local" / "share" / "uv" / "tools")
+    names = ("pythonw.exe", "python.exe") if IS_WIN else ("python3", "python")
+    for root in roots:
+        for name in names:
+            for candidate in (
+                root / "skillery-cli" / "Scripts" / name,
+                root / "skillery-cli" / "bin" / name,
+            ):
+                try:
+                    if candidate.exists():
+                        return str(candidate)
+                except OSError:
+                    continue
+    return None
+
+
+def start_commands(binary: str) -> list[list[str]]:
+    """Пути подъёма демона по убыванию предпочтения (штатный → запасной)."""
+    cmds: list[list[str]] = []
+    if binary:
+        cmds.append([binary, "daemon", "start"])
+    py = tool_venv_python()
+    if py:
+        cmds.append([py, "-m", "skillery_cli", "daemon", "start"])
+    return cmds
+
+
+def confirm_daemon(binary: str) -> dict:
+    """ПОДТВЕРДИТЬ, что демон реально живой, а не «команда вернула 0».
+
+    Две независимые проверки, потому что каждая по отдельности врёт:
+
+    * ``pids`` — процессы ``daemon run`` в системе. Это и есть факт «демон
+      работает»; ``daemon start`` мог вернуть 0 и тут же умереть.
+    * ``status_rc`` — код ``skillery daemon status``. Он проверяет ТРАМПЛИН:
+      если .exe после установки битый, команда падает, даже когда демон жив.
+    """
+    pids = find_daemon_pids()
+    status_rc: int | None = None
+    if binary:
+        status_rc = _run_quiet([binary, "daemon", "status"], timeout=60)
+    return {"pids": pids, "status_rc": status_rc, "alive": bool(pids)}
+
+
+def ensure_daemon_back(binary: str, *, attempts: int = 5, delay: float = 3.0) -> dict:
+    """Поднять демон и дождаться подтверждения. Возвращает отчёт confirm+.
+
+    Инвариант #1399: сюда мы попадаем и после УДАЧНОЙ, и после ПРОВАЛЬНОЙ
+    установки. Оставить устройство без демона нельзя ни в одном из случаев —
+    очередь заданий перестанет применяться, и хаб потеряет машину навсегда.
+    """
+    cmds = start_commands(binary)
+    if not cmds:
+        _log("ensure_daemon_back: нечем запускать (нет бинаря и tool-venv)")
+        return {"pids": [], "status_rc": None, "alive": False, "started_with": None}
+    for cmd in cmds:
+        for attempt in range(1, attempts + 1):
+            rc = _run_quiet(cmd, timeout=60)
+            _log(f"start_daemon [{cmd[0]}] attempt {attempt}: rc={rc}")
+            report = confirm_daemon(binary)
+            if report["alive"]:
+                report["started_with"] = cmd[0]
+                _log(f"daemon подтверждён: pids={report['pids']} "
+                     f"status_rc={report['status_rc']}")
+                return report
+            time.sleep(delay)
+    report = confirm_daemon(binary)
+    report["started_with"] = None
+    _log(f"ensure_daemon_back: НЕ подтверждён (pids={report['pids']}, "
+         f"status_rc={report['status_rc']})")
+    return report
 
 
 def main(argv: list[str]) -> int:
@@ -321,17 +524,46 @@ def main(argv: list[str]) -> int:
 
     _log(f"--- worker start pid={os.getpid()} ---")
     time.sleep(float(cfg.get("delay", 4.0)))
-    killed = stop_daemons()
-    _log(f"stop_daemons killed={killed}")
-    ok = run_upgrade([list(c) for c in cfg.get("commands", [])])
-    _log(f"run_upgrade → {ok}")
+
+    # 1. Приглушить watchdog ДО остановки демона: иначе его тик поднимет демон
+    #    обратно ровно между нашим kill'ом и заменой файлов.
+    suspended = suspend_watchdog()
+    ok = False
+    error = ""
+    restored = False
+    daemon: dict = {"pids": [], "status_rc": None, "alive": False}
+    try:
+        killed = stop_daemons()
+        _log(f"stop_daemons killed={killed}")
+        ok = run_upgrade([list(c) for c in cfg.get("commands", [])])
+        _log(f"run_upgrade → {ok}")
+        if not ok:
+            error = "команды обновления завершились с ошибкой"
+    except Exception as exc:  # noqa: BLE001 — падение установки не отменяет возврат
+        error = f"исключение при обновлении: {exc}"
+        _log(f"run_upgrade EXC: {exc}")
+    finally:
+        # 2. ВОЗВРАТ — важнее самого апгрейда (#1399). Сначала watchdog (страховка
+        #    на случай, если подъём демона ниже не удастся вовсе), затем демон.
+        try:
+            restored = restore_watchdog(suspended)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"restore_watchdog EXC: {exc}")
+        try:
+            daemon = ensure_daemon_back(cfg.get("daemon_binary", ""))
+        except Exception as exc:  # noqa: BLE001
+            _log(f"ensure_daemon_back EXC: {exc}")
+        _log(f"watchdog restored={restored} daemon={daemon}")
+
+    if not daemon.get("alive") and ok:
+        # Обновились, но демон не поднялся — для пользователя это НЕ «✓»:
+        # устройство молчит, и он должен об этом узнать.
+        error = "демон не поднялся после обновления — запустите: skillery daemon start"
     # Итог — для CLI: показать при следующем запуске, чтобы «запущено → тишина»
     # сменилось явным «✓ обновлён» / «✗ не удалось».
-    write_result(cfg, ok, "" if ok else "команды обновления завершились с ошибкой")
-    # Демон возвращаем в ЛЮБОМ случае: даже если обновиться не вышло, оставлять
-    # пользователя без демона нельзя — очередь заданий перестанет применяться.
-    start_daemon(cfg.get("daemon_binary", ""))
-    _log(f"--- worker done ok={ok} ---")
+    write_result(cfg, ok and bool(daemon.get("alive")), error,
+                 daemon=daemon, watchdog_restored=restored)
+    _log(f"--- worker done ok={ok} daemon_alive={daemon.get('alive')} ---")
     return 0 if ok else 1
 
 
