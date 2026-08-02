@@ -74,6 +74,43 @@ class TestSingleFlight:
         finally:
             _release(held)
 
+    def test_second_worker_bails_out_on_real_lock(self, monkeypatch, tmp_path) -> None:
+        """#1399(г): пока идёт установка, второй worker НЕ трогает файлы.
+
+        Лок здесь настоящий (ядерный mutex/flock), а не мок: именно он —
+        единственная защита трамплина от двух воркеров на перезаписи
+        ``skillery.exe``.
+        """
+        touched: list = []
+        monkeypatch.setattr(w, "suspend_watchdog", lambda *a, **k: touched.append("wd"))
+        monkeypatch.setattr(w, "stop_daemons", lambda *a, **k: touched.append("stop"))
+        monkeypatch.setattr(w, "run_upgrade", lambda cmds: touched.append("run"))
+        monkeypatch.setattr(w, "ensure_daemon_back", lambda *a, **k: touched.append("d"))
+
+        cfg = tmp_path / "c.json"
+        cfg.write_text('{"delay":0,"commands":[["uv"]]}', encoding="utf-8")
+
+        held = w.acquire_lock()  # «первый worker» уже внутри установки
+        try:
+            assert w.main(["worker", str(cfg)]) == 0
+        finally:
+            _release(held)
+        assert touched == []
+
+    def test_worker_never_kills_itself(self, monkeypatch) -> None:
+        """Апгрейд часто идёт ИЗ-ПОД демона: worker — тот же pythonw.exe.
+
+        Перечислитель обязан выкидывать собственный PID, иначе worker убьёт
+        себя ровно перед заменой файлов (и не останется ни апгрейда, ни демона).
+        """
+        import os
+
+        class _R:
+            stdout = f"{os.getpid()}\n4242\n".encode()
+
+        monkeypatch.setattr(w.subprocess, "run", lambda *a, **k: _R())
+        assert w.find_daemon_pids() == [4242]
+
     def test_cli_does_not_spawn_when_upgrade_in_flight(self, monkeypatch) -> None:
         from skillery_cli import __main__ as m
 
