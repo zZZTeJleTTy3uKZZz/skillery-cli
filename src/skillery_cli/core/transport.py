@@ -2597,11 +2597,28 @@ class HubClient:
             "GET", f"/skills/{slug}/repo/readme", params=params
         )
 
-    async def star_skill(self, skill_id: str) -> dict[str, Any]:
-        """POST /skills/{skill_id}/star — ПЕРЕКЛЮЧАТЕЛЬ звезды.
+    async def set_skill_star(
+        self, skill_id: str, *, starred: bool
+    ) -> dict[str, Any]:
+        """#1437: PUT/DELETE /skills/{skill_id}/star — УСТАНОВИТЬ состояние.
 
-        Это toggle, а не «поставить»: если звезда уже стоит — снимется. Ответ
-        ``{is_starred, hub_star_count, repo_star_count, total_star_count}``.
+        Пришло на смену toggle-у под POST. Разница не косметическая: toggle
+        читает текущее состояние на СЕРВЕРЕ и инвертирует его, поэтому
+        ретрай по таймауту (ответ потерялся, запрос дошёл) ОТМЕНЯЛ действие
+        пользователя. `PUT` (поставить) и `DELETE` (снять) идемпотентны:
+        сколько раз ни повтори — результат один.
+
+        Ответ ``{is_starred, hub_star_count, repo_star_count, total_star_count}``.
+        """
+        method = "PUT" if starred else "DELETE"
+        return await self._request(method, f"/skills/{skill_id}/star")
+
+    async def star_skill(self, skill_id: str) -> dict[str, Any]:
+        """POST /skills/{skill_id}/star — ПЕРЕКЛЮЧАТЕЛЬ звезды (deprecated).
+
+        ⚠️ Не идемпотентен: ретрай снимает только что поставленную звезду
+        (#1437). Оставлен для совместимости со старым backend'ом, у которого
+        ещё нет PUT/DELETE. Новый код — :meth:`set_skill_star`.
         """
         return await self._request("POST", f"/skills/{skill_id}/star")
 

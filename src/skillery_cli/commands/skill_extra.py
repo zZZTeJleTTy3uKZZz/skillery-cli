@@ -348,10 +348,22 @@ def cmd_skill_analytics(
 
 def cmd_skill_star(
     id_or_slug: str = typer.Argument(..., help="Slug или id навыка"),
+    on: bool | None = typer.Option(
+        None, "--on/--off",
+        help="Поставить (--on) или снять (--off). По умолчанию — переключить.",
+    ),
 ) -> None:
-    """Поставить/снять звезду навыку (POST /skills/{id}/star).
+    """Поставить/снять звезду навыку (PUT/DELETE /skills/{id}/star).
 
-    Это ПЕРЕКЛЮЧАТЕЛЬ: если звезда уже стоит, повторный вызов её снимет.
+    По умолчанию ПЕРЕКЛЮЧАТЕЛЬ, но #1437: решение «ставить или снимать»
+    принимается ЗДЕСЬ, по прочитанному состоянию, а сам запрос идёт
+    идемпотентным методом (`PUT` поставить / `DELETE` снять). Раньше
+    переключением занимался сервер под `POST`, и ретрай по таймауту
+    (ответ потерялся, запрос дошёл) ОТМЕНЯЛ действие пользователя.
+
+    Явные `--on`/`--off` не читают текущее состояние вовсе — сразу нужный
+    метод, лишнего запроса нет.
+
     Оценка «1-5» — другая история, она в ``skillery rating set``.
     """
     cfg = ClientConfig.load()
@@ -361,7 +373,14 @@ def cmd_skill_star(
         client = _common.make_client(cfg, access)
         try:
             skill_id = await _common.resolve_skill_id(client, id_or_slug)
-            resp = await client.star_skill(skill_id)
+            target = on
+            if target is None:
+                # Toggle: инвертируем ПРОЧИТАННОЕ состояние. Гонка с другим
+                # клиентом здесь возможна и безвредна — в отличие от гонки с
+                # собственным ретраем, которую это и убирает.
+                current = await client.get_skill(skill_id)
+                target = not bool(current.get("is_starred"))
+            resp = await client.set_skill_star(skill_id, starred=target)
         finally:
             await client.close()
 

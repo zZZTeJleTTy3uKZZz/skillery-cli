@@ -366,7 +366,48 @@ async def test_repo_credential_response_never_carries_secret() -> None:
 
 
 @pytest.mark.asyncio
-async def test_star_skill_is_toggle() -> None:
+async def test_set_skill_star_uses_idempotent_verbs() -> None:
+    """#1437: поставить — PUT, снять — DELETE; повтор ничего не переключает."""
+    with respx.mock(base_url=_BASE) as router:
+        put = router.put("/skills/12/star").mock(
+            return_value=Response(
+                200,
+                json={
+                    "is_starred": True,
+                    "hub_star_count": 4,
+                    "repo_star_count": 0,
+                    "total_star_count": 4,
+                },
+            )
+        )
+        delete = router.delete("/skills/12/star").mock(
+            return_value=Response(
+                200,
+                json={
+                    "is_starred": False,
+                    "hub_star_count": 3,
+                    "repo_star_count": 0,
+                    "total_star_count": 3,
+                },
+            )
+        )
+        client = HubClient(base_url=_BASE)
+        try:
+            first = await client.set_skill_star("12", starred=True)
+            # Ретрай ТОГО ЖЕ намерения — состояние не инвертируется.
+            second = await client.set_skill_star("12", starred=True)
+            off = await client.set_skill_star("12", starred=False)
+        finally:
+            await client.close()
+    assert first["is_starred"] is True
+    assert second["is_starred"] is True
+    assert off["is_starred"] is False
+    assert len(put.calls) == 2 and len(delete.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_legacy_star_skill_still_posts() -> None:
+    """Старый toggle оставлен для backend'а без PUT/DELETE."""
     with respx.mock(base_url=_BASE) as router:
         router.post("/skills/12/star").mock(
             return_value=Response(
