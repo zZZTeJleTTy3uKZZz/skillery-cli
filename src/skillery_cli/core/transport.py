@@ -1007,11 +1007,17 @@ class HubClient:
     async def yank_skill_version(
         self, *, slug: str, semver: str, yank: bool = True
     ) -> None:
-        """#340: снять/вернуть версию навыка (yank/unyank). 204 без тела."""
-        action = "yank" if yank else "unyank"
-        await self._request(
-            "POST", f"/skills/{slug}/versions/{semver}/{action}"
-        )
+        """#340: снять/вернуть версию навыка (yank/unyank). 204 без тела.
+
+        Путь пишется литералом на каждую ветку, а не собирается f-строкой с
+        ``{action}``: контрактный тест (#1441) разбирает transport.py статически,
+        и склеенный из переменной сегмент он видит как path-параметр — то есть
+        именно этот вызов оставался бы вне сверки с OpenAPI.
+        """
+        if yank:
+            await self._request("POST", f"/skills/{slug}/versions/{semver}/yank")
+        else:
+            await self._request("POST", f"/skills/{slug}/versions/{semver}/unyank")
 
     async def create_company(self, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._request("POST", "/companies", json=payload)

@@ -1,0 +1,594 @@
+{
+ "source": "skillery-backend create_app().openapi()",
+ "title": "Skillery",
+ "paths": {
+  "/admin/cli/update-all": [
+   "POST"
+  ],
+  "/admin/device-tasks": [
+   "GET"
+  ],
+  "/admin/device-tasks/bulk-cancel": [
+   "POST"
+  ],
+  "/admin/device-tasks/bulk-delete": [
+   "POST"
+  ],
+  "/admin/device-tasks/bulk-retry": [
+   "POST"
+  ],
+  "/admin/device-tasks/{task_id}": [
+   "DELETE",
+   "GET"
+  ],
+  "/admin/device-tasks/{task_id}/cancel": [
+   "POST"
+  ],
+  "/admin/device-tasks/{task_id}/history": [
+   "GET"
+  ],
+  "/admin/device-tasks/{task_id}/retry": [
+   "POST"
+  ],
+  "/admin/webhook-keys": [
+   "GET",
+   "POST"
+  ],
+  "/admin/webhook-keys/{key_pk}": [
+   "DELETE"
+  ],
+  "/advisor/conversations": [
+   "GET"
+  ],
+  "/advisor/conversations/{conversation_id}": [
+   "DELETE",
+   "GET",
+   "PATCH"
+  ],
+  "/advisor/messages": [
+   "POST"
+  ],
+  "/auth/exchange/create": [
+   "POST"
+  ],
+  "/auth/exchange/redeem": [
+   "POST"
+  ],
+  "/auth/exchanges": [
+   "POST"
+  ],
+  "/auth/exchanges/{code}/redeem": [
+   "POST"
+  ],
+  "/auth/login": [
+   "POST"
+  ],
+  "/auth/login-invite": [
+   "POST"
+  ],
+  "/auth/logout": [
+   "POST"
+  ],
+  "/auth/mfa": [
+   "GET"
+  ],
+  "/auth/mfa/disable": [
+   "POST"
+  ],
+  "/auth/mfa/setup": [
+   "POST"
+  ],
+  "/auth/mfa/verify": [
+   "POST"
+  ],
+  "/auth/oauth/yandex/callback": [
+   "GET"
+  ],
+  "/auth/oauth/yandex/start": [
+   "GET"
+  ],
+  "/auth/oauth/{provider}": [
+   "DELETE"
+  ],
+  "/auth/password/reset-confirm": [
+   "POST"
+  ],
+  "/auth/password/reset-request": [
+   "POST"
+  ],
+  "/auth/refresh": [
+   "POST"
+  ],
+  "/auth/register": [
+   "POST"
+  ],
+  "/auth/register-with-link": [
+   "POST"
+  ],
+  "/auth/signup/confirm": [
+   "POST"
+  ],
+  "/auth/signup/request": [
+   "POST"
+  ],
+  "/auth/signup/verify": [
+   "GET"
+  ],
+  "/cli-logs": [
+   "POST"
+  ],
+  "/client-logs": [
+   "POST"
+  ],
+  "/collections": [
+   "GET",
+   "POST"
+  ],
+  "/collections/{collection_id}/access-grants": [
+   "GET",
+   "PUT"
+  ],
+  "/collections/{collection_id}/access-grants/{grant_id}": [
+   "DELETE"
+  ],
+  "/collections/{slug}": [
+   "DELETE",
+   "GET",
+   "PATCH"
+  ],
+  "/collections/{slug}/move": [
+   "PATCH"
+  ],
+  "/collections/{slug}/skills": [
+   "POST"
+  ],
+  "/collections/{slug}/skills/{skill_id}": [
+   "DELETE"
+  ],
+  "/collections/{slug}/stats": [
+   "GET"
+  ],
+  "/collections/{slug}/tags": [
+   "PUT"
+  ],
+  "/comments/{comment_id}": [
+   "DELETE",
+   "PATCH"
+  ],
+  "/companies": [
+   "GET",
+   "POST"
+  ],
+  "/companies/{company_id}": [
+   "GET",
+   "PATCH"
+  ],
+  "/companies/{company_id}/access-grants": [
+   "GET",
+   "PUT"
+  ],
+  "/companies/{company_id}/access-grants/{grant_id}": [
+   "DELETE"
+  ],
+  "/companies/{company_id}/catalog": [
+   "GET"
+  ],
+  "/companies/{company_id}/catalog/collections": [
+   "POST"
+  ],
+  "/companies/{company_id}/catalog/collections/{collection_id}": [
+   "DELETE"
+  ],
+  "/companies/{company_id}/catalog/skills": [
+   "POST"
+  ],
+  "/companies/{company_id}/catalog/skills/{slug}": [
+   "DELETE"
+  ],
+  "/companies/{company_id}/invite-links": [
+   "GET",
+   "POST"
+  ],
+  "/companies/{company_id}/invite-links/{link_id}": [
+   "DELETE"
+  ],
+  "/companies/{company_id}/members": [
+   "POST"
+  ],
+  "/companies/{company_id}/members/{user_id}": [
+   "DELETE"
+  ],
+  "/companies/{company_id}/skill-usage": [
+   "GET"
+  ],
+  "/dashboard/entity/{kind}/stats": [
+   "GET"
+  ],
+  "/dashboard/series": [
+   "GET"
+  ],
+  "/dashboard/summary": [
+   "GET"
+  ],
+  "/devices/{client_device_id}/tasks/{task_id}/report": [
+   "POST"
+  ],
+  "/events": [
+   "GET",
+   "POST"
+  ],
+  "/files/{key}": [
+   "GET"
+  ],
+  "/healthz": [
+   "GET"
+  ],
+  "/install": [
+   "GET"
+  ],
+  "/install.ps1": [
+   "GET"
+  ],
+  "/invite-links/accept": [
+   "POST"
+  ],
+  "/invites": [
+   "POST"
+  ],
+  "/invites/accept": [
+   "POST"
+  ],
+  "/logs": [
+   "GET"
+  ],
+  "/logs/stats": [
+   "GET"
+  ],
+  "/me": [
+   "GET",
+   "PATCH"
+  ],
+  "/me/active-company": [
+   "POST"
+  ],
+  "/me/avatar": [
+   "DELETE",
+   "PUT"
+  ],
+  "/me/avatar-source": [
+   "PUT"
+  ],
+  "/me/device-queue": [
+   "GET"
+  ],
+  "/me/device-queue/report": [
+   "POST"
+  ],
+  "/me/devices": [
+   "GET",
+   "POST"
+  ],
+  "/me/devices/queue/stream": [
+   "GET"
+  ],
+  "/me/devices/{device_id}": [
+   "DELETE",
+   "PATCH"
+  ],
+  "/me/installs": [
+   "GET"
+  ],
+  "/me/notifications/stream": [
+   "GET"
+  ],
+  "/me/password": [
+   "POST"
+  ],
+  "/me/permissions": [
+   "GET"
+  ],
+  "/me/preferences": [
+   "GET",
+   "PUT"
+  ],
+  "/me/sessions": [
+   "DELETE",
+   "GET"
+  ],
+  "/me/sessions/{session_id}": [
+   "DELETE"
+  ],
+  "/me/skills": [
+   "GET"
+  ],
+  "/me/skills/usage": [
+   "GET"
+  ],
+  "/memberships": [
+   "DELETE"
+  ],
+  "/notifications": [
+   "GET"
+  ],
+  "/notifications/read-all": [
+   "POST"
+  ],
+  "/notifications/{notification_id}/read": [
+   "POST"
+  ],
+  "/permissions": [
+   "GET",
+   "POST"
+  ],
+  "/permissions/{permission_id}": [
+   "DELETE",
+   "PATCH"
+  ],
+  "/readyz": [
+   "GET"
+  ],
+  "/role-assignments": [
+   "POST"
+  ],
+  "/roles": [
+   "GET",
+   "POST"
+  ],
+  "/roles/{role_id}": [
+   "DELETE",
+   "GET",
+   "PATCH"
+  ],
+  "/roles/{role_id}/permissions": [
+   "GET",
+   "PUT"
+  ],
+  "/share-links/{token}": [
+   "GET"
+  ],
+  "/share-links/{token}/add": [
+   "POST"
+  ],
+  "/skills": [
+   "GET",
+   "POST"
+  ],
+  "/skills/moderation-queue": [
+   "GET"
+  ],
+  "/skills/probe-repo": [
+   "POST"
+  ],
+  "/skills/search-semantic": [
+   "POST"
+  ],
+  "/skills/{id_or_slug}": [
+   "DELETE"
+  ],
+  "/skills/{skill_id}/access-grants": [
+   "GET",
+   "PUT"
+  ],
+  "/skills/{skill_id}/access-grants/{grant_id}": [
+   "DELETE"
+  ],
+  "/skills/{skill_id}/comments": [
+   "GET",
+   "POST"
+  ],
+  "/skills/{skill_id}/comments/multipart": [
+   "POST"
+  ],
+  "/skills/{skill_id}/contributors": [
+   "GET"
+  ],
+  "/skills/{skill_id}/ratings": [
+   "POST"
+  ],
+  "/skills/{skill_id}/ratings/summary": [
+   "GET"
+  ],
+  "/skills/{skill_id}/star": [
+   "POST"
+  ],
+  "/skills/{slug}": [
+   "GET",
+   "PATCH"
+  ],
+  "/skills/{slug}/analytics": [
+   "GET"
+  ],
+  "/skills/{slug}/approve": [
+   "POST"
+  ],
+  "/skills/{slug}/collections": [
+   "GET"
+  ],
+  "/skills/{slug}/cover-image": [
+   "DELETE",
+   "PUT"
+  ],
+  "/skills/{slug}/devices/{client_device_id}/cancel-task": [
+   "POST"
+  ],
+  "/skills/{slug}/devices/{client_device_id}/uninstall": [
+   "POST"
+  ],
+  "/skills/{slug}/install": [
+   "POST"
+  ],
+  "/skills/{slug}/install-bundle": [
+   "GET"
+  ],
+  "/skills/{slug}/issues": [
+   "POST"
+  ],
+  "/skills/{slug}/moderation/comments": [
+   "GET",
+   "POST"
+  ],
+  "/skills/{slug}/reject": [
+   "POST"
+  ],
+  "/skills/{slug}/repo-credential": [
+   "DELETE",
+   "GET",
+   "PUT"
+  ],
+  "/skills/{slug}/repo/file": [
+   "GET"
+  ],
+  "/skills/{slug}/repo/readme": [
+   "GET"
+  ],
+  "/skills/{slug}/repo/tree": [
+   "GET"
+  ],
+  "/skills/{slug}/revision": [
+   "POST"
+  ],
+  "/skills/{slug}/share-link": [
+   "POST"
+  ],
+  "/skills/{slug}/submit-review": [
+   "POST"
+  ],
+  "/skills/{slug}/sync-from-git": [
+   "POST"
+  ],
+  "/skills/{slug}/sync-jobs/{job_id}": [
+   "GET"
+  ],
+  "/skills/{slug}/transfer-ownership": [
+   "POST"
+  ],
+  "/skills/{slug}/versions": [
+   "POST"
+  ],
+  "/skills/{slug}/versions/{semver}/snapshot": [
+   "GET"
+  ],
+  "/skills/{slug}/versions/{semver}/unyank": [
+   "POST"
+  ],
+  "/skills/{slug}/versions/{semver}/yank": [
+   "POST"
+  ],
+  "/skills/{slug}/webhook": [
+   "DELETE",
+   "GET",
+   "POST"
+  ],
+  "/support/tickets": [
+   "GET",
+   "POST"
+  ],
+  "/support/tickets/bulk/update": [
+   "POST"
+  ],
+  "/support/tickets/multipart": [
+   "POST"
+  ],
+  "/support/tickets/{ticket_id}": [
+   "GET",
+   "PATCH"
+  ],
+  "/support/tickets/{ticket_id}/messages": [
+   "GET",
+   "POST"
+  ],
+  "/support/tickets/{ticket_id}/messages/multipart": [
+   "POST"
+  ],
+  "/system/config": [
+   "GET"
+  ],
+  "/system/config/{key}": [
+   "GET",
+   "PATCH"
+  ],
+  "/tags": [
+   "GET",
+   "POST"
+  ],
+  "/tags/assignments": [
+   "GET",
+   "PUT"
+  ],
+  "/tags/bulk/delete": [
+   "POST"
+  ],
+  "/tags/bulk/move": [
+   "POST"
+  ],
+  "/tags/count": [
+   "GET"
+  ],
+  "/tags/tree": [
+   "GET"
+  ],
+  "/tags/{tag_id}": [
+   "DELETE",
+   "GET",
+   "PATCH"
+  ],
+  "/tags/{tag_id}/move": [
+   "PATCH"
+  ],
+  "/telemetry/batch": [
+   "POST"
+  ],
+  "/users": [
+   "GET",
+   "POST"
+  ],
+  "/users/bulk/activate": [
+   "POST"
+  ],
+  "/users/bulk/change-role": [
+   "POST"
+  ],
+  "/users/bulk/suspend": [
+   "POST"
+  ],
+  "/users/export.csv": [
+   "GET"
+  ],
+  "/users/{user_id}": [
+   "DELETE",
+   "GET",
+   "PATCH"
+  ],
+  "/users/{user_id}/access-grants": [
+   "GET",
+   "PUT"
+  ],
+  "/users/{user_id}/access-grants/{grant_id}": [
+   "DELETE"
+  ],
+  "/users/{user_id}/lock": [
+   "PUT"
+  ],
+  "/users/{user_id}/reset-password": [
+   "POST"
+  ],
+  "/users/{user_id}/revoke-sessions": [
+   "POST"
+  ],
+  "/users/{user_id}/transfer": [
+   "POST"
+  ],
+  "/users/{user_id}/unlock": [
+   "PUT"
+  ],
+  "/webhooks/cli-published": [
+   "POST"
+  ],
+  "/webhooks/git/{provider}": [
+   "POST"
+  ],
+  "/webhooks/github-app": [
+   "POST"
+  ]
+ }
+}

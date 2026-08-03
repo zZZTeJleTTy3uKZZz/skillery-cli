@@ -40,6 +40,7 @@ from skillery_cli.core import (
     cli_package_install,
     linker,
     project_manifest,
+    route_health,
     tooling_install,
 )
 from skillery_cli.core.agents import (
@@ -1792,6 +1793,10 @@ def cmd_status(
     from skillery_cli.core import shim_collisions
 
     collisions = [c.as_dict() for c in shim_collisions.detect()]
+    # #1441: расхождение контракта CLI↔backend (404/405 на фоновом пути демона).
+    # Тихий отказ здесь неотличим от «нет заданий», поэтому флаг обязан быть
+    # виден в обычном статусе — это единственное место, куда смотрят.
+    stale_routes = route_health.unknown_routes()
     payload = {
         "agent": target.name,
         "global_skills_dir": str(target.base_dir()),
@@ -1804,6 +1809,7 @@ def cmd_status(
         "installed_project": project_items,
         "pending_onboarding": pending,
         "shim_collisions": collisions,
+        "stale_routes": stale_routes,
     }
 
     def _render(p: dict) -> None:
@@ -1820,6 +1826,22 @@ def cmd_status(
             f"Installed:       global={len(p['installed_global'])}  "
             f"project={len(p['installed_project'])}"
         )
+        stale = p.get("stale_routes") or []
+        if stale:
+            console.print("")
+            console.print(
+                f"[bold red]⚠ Backend не знает {len(stale)} маршрут(ов) — "
+                "устройство МОЖЕТ НЕ ПОЛУЧАТЬ задания:[/]"
+            )
+            for r in stale:
+                console.print(
+                    f"  • [bold]{r.get('route')}[/] → {r.get('status')} "
+                    f"(раз: {r.get('count')}, последний: {r.get('last_seen')})"
+                )
+            console.print(
+                "  Починить: [bold]skillery self upgrade[/] "
+                "— CLI отстал от хаба по контракту API"
+            )
         coll = p.get("shim_collisions") or []
         if coll:
             console.print("")
@@ -3807,9 +3829,34 @@ async def _reconcile_device_queue(
                         auto_update=cfg.auto_update, wait=wait, supports_removal=True,
                     )
                     resp = {"items": items, "device_tasks": []}
+            except ApiError as exc:
+                # #1441: 404/405 — это НЕ «заданий нет» и не сетевой сбой, а
+                # расхождение контракта (путь очереди переименован на backend).
+                # Раньше оно уходило в общий `except Exception: return report`, и
+                # устройство просто замолкало: ни падения, ни строчки в логе, ни
+                # признака в статусе. Теперь — WARNING в daemon.log + видимый флаг
+                # в `skillery status`.
+                if exc.status_code in route_health.CONTRACT_STATUSES:
+                    with suppress(Exception):
+                        route_health.record_unknown_route(
+                            "GET", "/me/device-queue", exc.status_code,
+                            source="daemon.reconcile",
+                        )
+                    with suppress(Exception):
+                        _ilog.warning(
+                            "очередь устройства недоступна: backend не знает "
+                            "маршрут — обнови CLI (skillery self upgrade)",
+                            extra={"context": {
+                                "status": exc.status_code, "code": exc.code,
+                            }},
+                        )
+                return report
             except Exception:
                 # Старый backend / нет устройства в UA — молча уступаем legacy-пути.
                 return report
+            else:
+                with suppress(Exception):
+                    route_health.record_ok("GET", "/me/device-queue")
         queue = list(resp.get("items") or [])
         device_tasks = list(resp.get("device_tasks") or [])
 
