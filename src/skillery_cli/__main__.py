@@ -1993,7 +1993,7 @@ def cmd_list(
     channel: str = typer.Option("published"),
     installed: bool = typer.Option(
         False, "--installed",
-        help="[устаревшее] Псевдоним «skillery installed» — та же выдача "
+        help="[устаревшее] Псевдоним «skillery skill installed» — та же выдача "
              "(центральный стор + project scope), тот же --scope.",
     ),
     project: Optional[Path] = typer.Option(
@@ -2018,7 +2018,7 @@ def cmd_list(
         payload = collect_installed(cfg, scope=scope or "all", project=project)
         emit_message(
             "«list --installed» — устаревший псевдоним; используйте "
-            "«skillery installed»",
+            "«skillery skill installed»",
             level="warn",
         )
         emit_data(payload, text_renderer=lambda p: render_installed(console, p))
