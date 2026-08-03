@@ -25,7 +25,14 @@ class _FakeInstaller:
         self.local_src_existed = Path(kw["local_src"]).is_dir()
         return object()
 
-    def install(self, **kw: Any):
+    def install(self, request: Any = None, **kw: Any):
+        # #1405: навык-в-подпапке ставится ЧЕРЕЗ install(InstallRequest) — только
+        # так у меты появляется явная метка происхождения source_label="hub".
+        if request is not None:
+            self.calls.append("path")
+            self.request = request
+            self.local_src_existed = Path(request.source.local_src).is_dir()
+            return object()
         self.calls.append("clone")
         return object()
 
@@ -105,6 +112,11 @@ async def test_subdir_skill_installs_from_snapshot_subdir(tmp_path) -> None:
     assert installer.calls == ["path"]         # из подпапки снапшота, НЕ clone
     assert installer.local_src_existed is True
     assert client.download_calls == [("hello", "1.0.0")]  # снапшот запрошен
+    # #1405 КОРЕНЬ БАГА «установка из Хаба не становится главной»: подпапку
+    # снапшота ставили как ЛОКАЛЬНУЮ папку, и кит писал в мету source=local-path
+    # — навык навсегда выпадал из автообновления и выглядел локальным. Метка
+    # происхождения обязана быть явной.
+    assert installer.request.source_label == "hub"
 
 
 @pytest.mark.asyncio

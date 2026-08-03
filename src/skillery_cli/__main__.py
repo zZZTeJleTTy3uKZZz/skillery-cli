@@ -50,6 +50,7 @@ from skillery_cli.core.agents import (
     get_target,
 )
 from skillery_cli.core.installer import SkillInstaller, read_meta
+from skillery_cli.core.store_backup import iter_store_skill_dirs
 from skillery_cli.core.manifest_builder import build_manifest, git_commit_sha
 from skillery_cli.core.secret_scan import scan_dir as secret_scan_dir
 from skillery_cli.daemon.instrumentation import track_skill_event
@@ -1990,7 +1991,11 @@ def _fmt_version_semvers(raw: object) -> str:
 
 def cmd_list(
     channel: str = typer.Option("published"),
-    installed: bool = typer.Option(False, "--installed"),
+    installed: bool = typer.Option(
+        False, "--installed",
+        help="[устаревшее] Псевдоним «skillery installed» — та же выдача "
+             "(центральный стор + project scope), тот же --scope.",
+    ),
     project: Optional[Path] = typer.Option(
         None, "--project", help="Project root для скана project-scope установок"
     ),
@@ -1998,50 +2003,25 @@ def cmd_list(
         None, "--scope", help="global | project | all (default: all для --installed)"
     ),
 ) -> None:
-    """Список доступных skills (RBAC), либо --installed (global + project)."""
+    """Список доступных skills (RBAC), либо --installed (псевдоним `installed`).
+
+    #1405: ``--installed`` больше НЕ отдельный сканер. Раньше он ходил по
+    каталогам агента, а ``skillery installed`` — по центральному стору, и один
+    вопрос получал два разных ответа (16 записей против 8) — как будто навыки
+    потерялись. Теперь оба ответа собирает ``commands.installed``, а scope
+    подписан в заголовке.
+    """
     cfg = ClientConfig.load()
     if installed:
-        target = get_target(cfg.agent)
-        wanted_scope = scope or "all"
-        actual_project = (
-            project
-            or (Path(cfg.default_project_dir) if cfg.default_project_dir else None)
-            or Path.cwd()
+        from skillery_cli.commands.installed import collect_installed, render_installed
+
+        payload = collect_installed(cfg, scope=scope or "all", project=project)
+        emit_message(
+            "«list --installed» — устаревший псевдоним; используйте "
+            "«skillery installed»",
+            level="warn",
         )
-        items: list[dict] = []
-        if wanted_scope in ("global", "all"):
-            items.extend(_scan_installed(target, project=None))
-        if wanted_scope in ("project", "all"):
-            items.extend(_scan_installed(target, project=actual_project))
-        # Не задваивать: project scope, резолвящийся в ту же физическую папку,
-        # что и global (cwd=home / junction), не должен дублировать навыки.
-        items = _dedupe_installed_by_realpath(items)
-
-        def _render(rows: list) -> None:
-            if not rows:
-                console.print(
-                    f"[yellow]Ничего не установлено[/] "
-                    f"(scope={wanted_scope}, project={actual_project})"
-                )
-                return
-            table = Table(title=f"Установленные ({target.name})")
-            table.add_column("id-или-slug")
-            table.add_column("version")
-            table.add_column("scope")
-            table.add_column("mount")
-            table.add_column("path", overflow="fold")
-            for s in rows:
-                table.add_row(
-                    # slug может быть None у slug-less skill — показываем ref (id).
-                    s.get("slug") or s.get("ref") or "—",
-                    s["version"] or "—",
-                    s["scope"],
-                    "📎 link" if s.get("linked") else "📄 copy",
-                    s["path"],
-                )
-            console.print(table)
-
-        emit_data(items, text_renderer=_render)
+        emit_data(payload, text_renderer=lambda p: render_installed(console, p))
         return
 
     _maybe_auto_update(cfg, project=project)
@@ -2762,6 +2742,105 @@ def _extract_snapshot_subdir(
     return sub, root
 
 
+#: Источники, которые хаб-установка ВЫТЕСНЯЕТ (предварительно сохранив в резерв).
+_FOREIGN_SOURCES = ("local-path", "git-url")
+
+
+def _backup_foreign_before_hub(
+    store_root: Path, dir_name: str
+) -> Optional[dict]:
+    """Убрать в резерв каталог стора, занятый навыком ИЗ ДРУГОГО ИСТОЧНИКА.
+
+    #1405. Установка из Хаба главнее локальной, но «главнее» не значит «затирает
+    молча». Раньше хаб-установка поверх ``install --path`` попадала в ветку
+    ИНКРЕМЕНТАЛЬНОГО обновления кита (стор уже наш ⇒ ``_do_update``) и
+    перезаписывала чужое дерево поверх — вернуться было некуда. Теперь прежний
+    каталог целиком уезжает в ``<стор>/.backups/``, а хаб ставится с чистого
+    листа.
+
+    ``None`` — вытеснять нечего: каталога нет, он уже хабовый или это не наша
+    установка (без ``_skill_meta.json`` кит и сам решает сам, мы не лезем).
+    Никогда не бросает: сорванный резерв не имеет права отменить установку —
+    но тогда и вытеснения не будет (вызывающий получит ``None``).
+    """
+    from skillery_cli.core.store_backup import backup_store_skill
+
+    target = Path(store_root) / dir_name
+    if not target.is_dir():
+        return None
+    try:
+        meta = read_meta(target)
+    except Exception:  # noqa: BLE001 — битая мета: решает кит, не мы
+        return None
+    if not meta or str(meta.get("source") or "") not in _FOREIGN_SOURCES:
+        return None
+    try:
+        return backup_store_skill(
+            store_root, dir_name, reason="hub-takeover", meta=meta
+        )
+    except Exception:  # noqa: BLE001 — не смогли зарезервировать → не вытесняем
+        return None
+
+
+def _announce_takeover(record: dict, *, slug: str, version: str, headless: bool) -> None:
+    """Сказать пользователю, что версия подменена и как откатиться."""
+    text = (
+        f"Навык «{slug}»: прежняя версия ({record.get('source')} "
+        f"v{record.get('version') or '—'}) сохранена в резерв "
+        f"{record.get('id')}; активна версия из Хаба v{version}. "
+        f"Откат: skillery store restore {slug} --backup {record.get('id')}"
+    )
+    if not headless:
+        emit_message(text, level="warn")
+
+
+def _install_hub_subdir(
+    installer,  # SkillInstaller
+    *,
+    slug: str | None,
+    version: str,
+    commit_sha: str,
+    local_src: Path,
+    manifest: dict,
+    project: Optional[Path],
+    force: bool,
+    skill_id,
+):
+    """Поставить навык-в-подпапке из РАСПАКОВАННОГО снапшота хаба.
+
+    #1405, КОРЕНЬ ПРОБЛЕМЫ «установка из Хаба не становится главной». Снапшот
+    монорепо-навыка мы распаковываем сами (кит не принимает ``skill_path``) и
+    раньше ставили его как ЛОКАЛЬНУЮ ПАПКУ — ``install_from_path``. Кит честно
+    выводил происхождение по типу источника и писал в мету
+    ``source="local-path"``, хотя навык приехал из хаба. Последствия ровно те,
+    что видел владелец: ``installed`` показывает local-path, автообновление
+    (оно отбирает строго ``source == "hub"``) навык не трогает, а разовая
+    миграция меты (``store_migrations``) его не спасает — она отрабатывает один
+    раз на профиль и требует ``skill_id``, а метка регрессировала при КАЖДОЙ
+    следующей установке.
+
+    Лечится явной меткой происхождения: ``InstallRequest.source_label="hub"``
+    сильнее вывода по типу источника (ровно так кит помечает свой
+    ``SnapshotSource``). Старый кит без ``InstallRequest`` — откат на прежний
+    вызов: хуже метка, но установка не падает.
+    """
+    try:
+        from skillkit.installer import InstallRequest, LocalPathSource
+    except ImportError:  # старый кит — прежнее поведение
+        return installer.install_from_path(
+            slug=slug, version=version, commit_sha=commit_sha,
+            local_src=local_src, manifest=manifest, project=project,
+            force=force, skill_id=skill_id,
+        )
+    return installer.install(
+        InstallRequest(
+            slug=slug, version=version, commit_sha=commit_sha, manifest=manifest,
+            source=LocalPathSource(Path(local_src)), source_label="hub",
+            project=project, force=force, skill_id=skill_id,
+        )
+    )
+
+
 async def _materialize_from_bundle(
     installer,  # SkillInstaller
     client: HubClient,
@@ -2821,7 +2900,8 @@ async def _materialize_from_bundle(
                     extracted = _extract_snapshot_subdir(archive, tmp_dir, skill_path)
                     if extracted is not None:
                         sub, repo_root = extracted
-                        result = installer.install_from_path(
+                        result = _install_hub_subdir(
+                            installer,
                             slug=dep_slug or None,
                             version=dep_version,
                             commit_sha=commit_sha,
@@ -2944,6 +3024,16 @@ async def _install_chain(
                 finally:
                     await sub.close()
             dep_id = dep_bundle.get("skill_id")
+            # #1405: имя стора занято навыком из ДРУГОГО источника (локальная
+            # папка / произвольный git) → прячем его в резерв ДО материализации.
+            # Так хаб ставится начисто (а не патчем поверх чужого дерева), и
+            # прежнюю версию можно вернуть `store restore`.
+            from skillkit.installer import skill_dir_name as _dir_name
+
+            _store_root = cfg.effective_store_dir()
+            replaced = _backup_foreign_before_hub(
+                _store_root, _dir_name(dep_slug or None, dep_id)
+            )
             # Content-serving: снапшот с бэкенда (без клиентских git-кред) →
             # fallback на git clone. См. _materialize_from_bundle.
             result = await _materialize_from_bundle(
@@ -2952,6 +3042,36 @@ async def _install_chain(
                 dep_repo=dep_repo, dep_id=dep_id, project_path=project_path,
                 force=force,
             )
+            if replaced is not None:
+                # Состояние пользователя (.env / _local/ / профили браузера +
+                # preserved_paths) переезжает в свежую установку: иначе «главной
+                # стала хабовая» означало бы «навык перестал работать».
+                with suppress(Exception):
+                    from skillery_cli.core.store_backup import carry_over_user_state
+
+                    replaced["carried_over"] = carry_over_user_state(
+                        replaced,
+                        Path(result.store_dir or (_store_root / _dir_name(
+                            dep_slug or None, dep_id))),
+                        extra_preserved=tuple(
+                            (dep_bundle.get("manifest") or {}).get("preserved_paths")
+                            or ()
+                        ),
+                    )
+                _announce_takeover(
+                    replaced, slug=str(dep_slug or dep_id), version=dep_version,
+                    headless=headless,
+                )
+                with suppress(Exception):
+                    ilog.info("прежняя версия навыка убрана в резерв", extra={
+                        "context": {
+                            "step": "takeover", "slug": str(dep_slug or dep_id),
+                            "backup_id": replaced.get("id"),
+                            "replaced_source": replaced.get("source"),
+                            "replaced_version": replaced.get("version"),
+                            "carried_over": replaced.get("carried_over") or [],
+                            "initiator": initiator,
+                        }})
             entry = {
                 "slug": dep_slug, "skill_id": result.skill_id,
                 "version": dep_version, "is_update": result.is_update,
@@ -2964,6 +3084,9 @@ async def _install_chain(
             if result.skipped:
                 entry["skipped"] = True
                 entry["skip_reason"] = result.skip_reason
+            if replaced is not None:
+                # В JSON-ответе факт вытеснения виден явно (веб/скрипты).
+                entry["replaced"] = replaced
             installed_chain.append(entry)
             # Аудит материализации (SK-5): что и как легло в стор. ``initiator``
             # (C2) — чьё это действие: cli / web-queue / daemon-auto.
@@ -3513,11 +3636,21 @@ async def _reconcile_hub_installs(
             continue
         local_meta = read_meta(store_root / ref) or {}
         local_version = local_meta.get("version")
-        if local_meta and local_version and not force:
-            # Уже в сторе: качаем только если remote СТРОГО новее.
+        local_source = str(local_meta.get("source") or "")
+        # #1405: сравнение версий имеет смысл только между ОДНОРОДНЫМИ
+        # установками. Раньше локальный `install --path` со своей версией
+        # (напр. atlas v0.3.9) глушил хаб-установку той же/меньшей версии —
+        # веб рапортовал успех, а на устройстве оставалась локальная версия и
+        # исполнялась именно она. Чужой источник ⇒ хаб забирает имя себе
+        # (прежняя версия уедет в резерв внутри _install_chain).
+        foreign = bool(local_meta) and local_source in _FOREIGN_SOURCES
+        if local_meta and local_version and not force and not foreign:
+            # Уже в сторе хаб-версия: качаем только если remote СТРОГО новее.
             if not remote_version or not _is_newer(remote_version, local_version):
                 report["skipped"].append(ref)
                 continue
+            bucket = "updated"
+        elif local_meta:
             bucket = "updated"
         else:
             bucket = "downloaded"
@@ -4393,15 +4526,13 @@ def cmd_store_list() -> None:
     cfg = ClientConfig.load()
     store_root = cfg.effective_store_dir()
     items: list[dict] = []
-    if store_root.exists():
-        for d in sorted(store_root.iterdir(), key=lambda p: p.name):
-            if not d.is_dir():
-                continue
-            meta = read_meta(d) or {}
-            items.append({
-                "name": d.name, "slug": meta.get("slug"),
-                "version": meta.get("version"), "path": str(d),
-            })
+    # Служебная зона стора (.backups) — не навык: перечисляем через единую точку.
+    for d in iter_store_skill_dirs(store_root):
+        meta = read_meta(d) or {}
+        items.append({
+            "name": d.name, "slug": meta.get("slug"),
+            "version": meta.get("version"), "path": str(d),
+        })
 
     def _render(rows: list) -> None:
         if not rows:
@@ -4416,6 +4547,86 @@ def cmd_store_list() -> None:
         console.print(table)
 
     emit_data(items, text_renderer=_render)
+
+
+def cmd_store_backups(
+    slug: Optional[str] = typer.Argument(
+        None, metavar="[НАВЫК]", help="Показать резервы только этого навыка"
+    ),
+) -> None:
+    """Резервные копии навыков в сторе (#1405).
+
+    Резерв создаётся, когда установка из Хаба забирает имя, занятое навыком из
+    другого источника (локальная папка / произвольный git): прежний каталог не
+    затирается, а целиком уезжает в служебную зону стора. Вернуть —
+    ``skillery store restore <навык> [--backup <id>]``.
+    """
+    from skillery_cli.core.store_backup import list_backups
+
+    cfg = ClientConfig.load()
+    if not isinstance(slug, str):
+        slug = None
+    items = list_backups(cfg.effective_store_dir(), slug)
+
+    def _render(rows: list) -> None:
+        if not rows:
+            console.print("[dim]Резервных копий нет.[/]")
+            return
+        table = Table(title="Резервы навыков (свежие сверху)")
+        table.add_column("навык")
+        table.add_column("id")
+        table.add_column("источник")
+        table.add_column("version")
+        table.add_column("причина")
+        for r in rows:
+            table.add_row(
+                str(r.get("dir_name") or "—"), str(r.get("id") or "—"),
+                str(r.get("source") or "—"), str(r.get("version") or "—"),
+                str(r.get("reason") or "—"),
+            )
+        console.print(table)
+        console.print(
+            "[dim]Откат: skillery store restore <навык> --backup <id>[/]"
+        )
+
+    emit_data(items, text_renderer=_render)
+
+
+def cmd_store_restore(
+    slug: str = typer.Argument(..., metavar="НАВЫК", help="Имя навыка в сторе"),
+    backup: Optional[str] = typer.Option(
+        None, "--backup", help="id резерва (по умолчанию — самый свежий)"
+    ),
+) -> None:
+    """Вернуть навык из резерва (откат вытеснения хаб-установкой, #1405).
+
+    Откат сам обратим: то, что стоит сейчас, не удаляется, а уезжает в новый
+    резерв — вернуться обратно можно этой же командой.
+    """
+    from skillery_cli.core.store_backup import BackupError, restore_backup
+
+    cfg = ClientConfig.load()
+    if not isinstance(backup, str):
+        backup = None
+    try:
+        result = restore_backup(cfg.effective_store_dir(), slug, backup)
+    except BackupError as exc:
+        emit_error("NOT_FOUND", str(exc))
+        raise typer.Exit(1) from exc
+
+    def _render(p: dict) -> None:
+        rec = p["restored"]
+        console.print(
+            f"[green]✓[/] Навык [bold]{slug}[/] возвращён из резерва "
+            f"{rec.get('id')} ({rec.get('source')} v{rec.get('version') or '—'})"
+        )
+        if p.get("replaced"):
+            console.print(
+                f"[dim]Прежняя установка сохранена в резерв "
+                f"{p['replaced'].get('id')}[/]"
+            )
+
+    emit_data(result, text_renderer=_render)
 
 
 def cmd_store_path() -> None:
@@ -4472,15 +4683,15 @@ def cmd_store_gc(
                     referenced.add(os.path.normcase(str(tgt)))
 
     candidates: list[str] = []
-    if store_root.exists():
-        for d in sorted(store_root.iterdir(), key=lambda p: p.name):
-            if not d.is_dir():
-                continue
-            key = os.path.normcase(os.path.abspath(d))
-            if key not in referenced:
-                candidates.append(d.name)
-                if do_delete:
-                    _force_rmtree(d)
+    # #1405: резервы (.backups) ссылками не адресуются НИКОГДА — попади они в
+    # обход, gc снёс бы ровно то, ради чего резерв и делается. Перечисление —
+    # через единую точку, которая служебную зону не отдаёт.
+    for d in iter_store_skill_dirs(store_root):
+        key = os.path.normcase(os.path.abspath(d))
+        if key not in referenced:
+            candidates.append(d.name)
+            if do_delete:
+                _force_rmtree(d)
 
     def _render(p: dict) -> None:
         verb = "Удалено из стора" if p["deleted"] else "Кандидаты на удаление"
@@ -5634,6 +5845,9 @@ def build_app() -> typer.Typer:
     store_app.command("list")(cmd_store_list)
     store_app.command("path")(cmd_store_path)
     store_app.command("gc")(cmd_store_gc)
+    # #1405: резерв вытесненной установки и откат к ней.
+    store_app.command("backups")(cmd_store_backups)
+    store_app.command("restore")(cmd_store_restore)
     # --- P1 local-collections ---
     # Единый collection sub-app — ALWAYS-ON: все глаголы (list/show/install/
     # create/add/remove/delete/tags) регистрируются всегда; create/add/remove/

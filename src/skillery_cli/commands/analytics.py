@@ -32,12 +32,11 @@ console = Console()
 
 def _scan_store(store_root: Path) -> list[dict[str, Any]]:
     """Навыки в центральном сторе + meta (agent/source/version)."""
+    from skillery_cli.core.store_backup import iter_store_skill_dirs
+
     items: list[dict[str, Any]] = []
-    if not store_root.exists():
-        return items
-    for d in sorted(store_root.iterdir(), key=lambda p: p.name):
-        if not d.is_dir():
-            continue
+    # Служебная зона стора (.backups) — не навык (#1405).
+    for d in iter_store_skill_dirs(store_root):
         meta = read_meta(d) or {}
         items.append(
             {
