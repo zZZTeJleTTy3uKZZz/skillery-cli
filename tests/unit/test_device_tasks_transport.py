@@ -14,11 +14,27 @@ from httpx import Response
 
 from skillery_cli.core.transport import HubClient
 
+# #1452: очередь адресуется устройством (``/devices/{cdid}/tasks``), а не
+# ``/me/device-queue`` — путь строится из того же ``device_uid()``, что и в
+# транспорте, иначе мок не совпадёт с реальным запросом.
+from skillery_cli.core.identity import device_uid as _device_uid
+
+def _queue_path() -> str:
+    # Считаем в момент ВЫЗОВА, а не на импорте: соседние тесты подменяют
+    # SKILLERY_HOME/HOME, и закэшированный на импорте uid разъезжается с тем,
+    # что реально уйдёт в запрос (в одиночном прогоне это не видно).
+    return f"/devices/{_device_uid()}/tasks"
+
+
+def _stream_path() -> str:
+    return _queue_path() + "/stream"
+
+
 
 async def test_full_response_carries_items_and_device_tasks() -> None:
     """Полный ответ несёт и skill-очередь, и device_tasks из ОДНОГО запроса."""
     with respx.mock(base_url="http://localhost:8000") as router:
-        router.get("/me/device-queue").mock(
+        router.get(_queue_path()).mock(
             return_value=Response(
                 200,
                 json={
@@ -49,7 +65,7 @@ async def test_full_response_carries_items_and_device_tasks() -> None:
 async def test_full_response_defaults_device_tasks_on_old_backend() -> None:
     """Старый backend без device_tasks → пустой список (не падаем)."""
     with respx.mock(base_url="http://localhost:8000") as router:
-        router.get("/me/device-queue").mock(
+        router.get(_queue_path()).mock(
             return_value=Response(200, json={"items": [{"slug": "atlas"}]})
         )
         client = HubClient(base_url="http://localhost:8000", access_token="t")
@@ -64,7 +80,7 @@ async def test_full_response_defaults_device_tasks_on_old_backend() -> None:
 async def test_thin_wrapper_still_returns_only_items() -> None:
     """``fetch_device_queue`` — совместимость: только items (device_tasks игнор)."""
     with respx.mock(base_url="http://localhost:8000") as router:
-        router.get("/me/device-queue").mock(
+        router.get(_queue_path()).mock(
             return_value=Response(
                 200,
                 json={

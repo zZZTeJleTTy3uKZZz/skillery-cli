@@ -2,41 +2,6 @@
  "source": "skillery-backend create_app().openapi()",
  "title": "Skillery",
  "paths": {
-  "/admin/cli/update-all": [
-   "POST"
-  ],
-  "/admin/device-tasks": [
-   "GET"
-  ],
-  "/admin/device-tasks/bulk-cancel": [
-   "POST"
-  ],
-  "/admin/device-tasks/bulk-delete": [
-   "POST"
-  ],
-  "/admin/device-tasks/bulk-retry": [
-   "POST"
-  ],
-  "/admin/device-tasks/{task_id}": [
-   "DELETE",
-   "GET"
-  ],
-  "/admin/device-tasks/{task_id}/cancel": [
-   "POST"
-  ],
-  "/admin/device-tasks/{task_id}/history": [
-   "GET"
-  ],
-  "/admin/device-tasks/{task_id}/retry": [
-   "POST"
-  ],
-  "/admin/webhook-keys": [
-   "GET",
-   "POST"
-  ],
-  "/admin/webhook-keys/{key_pk}": [
-   "DELETE"
-  ],
   "/advisor/conversations": [
    "GET"
   ],
@@ -210,6 +175,15 @@
   "/dashboard/summary": [
    "GET"
   ],
+  "/devices/{client_device_id}/skills/{slug}/report": [
+   "POST"
+  ],
+  "/devices/{client_device_id}/tasks": [
+   "GET"
+  ],
+  "/devices/{client_device_id}/tasks/stream": [
+   "GET"
+  ],
   "/devices/{client_device_id}/tasks/{task_id}/report": [
    "POST"
   ],
@@ -258,18 +232,9 @@
   "/me/avatar-source": [
    "PUT"
   ],
-  "/me/device-queue": [
-   "GET"
-  ],
-  "/me/device-queue/report": [
-   "POST"
-  ],
   "/me/devices": [
    "GET",
    "POST"
-  ],
-  "/me/devices/queue/stream": [
-   "GET"
   ],
   "/me/devices/{device_id}": [
    "DELETE",
@@ -307,6 +272,9 @@
   "/memberships": [
    "DELETE"
   ],
+  "/moderation/skills": [
+   "GET"
+  ],
   "/notifications": [
    "GET"
   ],
@@ -326,6 +294,9 @@
   ],
   "/readyz": [
    "GET"
+  ],
+  "/repo-probes": [
+   "POST"
   ],
   "/role-assignments": [
    "POST"
@@ -347,6 +318,9 @@
    "GET"
   ],
   "/share-links/{token}/add": [
+   "POST"
+  ],
+  "/skill-searches": [
    "POST"
   ],
   "/skills": [
@@ -389,7 +363,8 @@
    "GET"
   ],
   "/skills/{skill_id}/star": [
-   "POST"
+   "DELETE",
+   "PUT"
   ],
   "/skills/{slug}": [
    "GET",
@@ -535,6 +510,32 @@
   "/tags/{tag_id}/move": [
    "PATCH"
   ],
+  "/tasks": [
+   "GET",
+   "POST"
+  ],
+  "/tasks/bulk/cancel": [
+   "POST"
+  ],
+  "/tasks/bulk/delete": [
+   "POST"
+  ],
+  "/tasks/bulk/retry": [
+   "POST"
+  ],
+  "/tasks/{task_id}": [
+   "DELETE",
+   "GET"
+  ],
+  "/tasks/{task_id}/cancel": [
+   "POST"
+  ],
+  "/tasks/{task_id}/history": [
+   "GET"
+  ],
+  "/tasks/{task_id}/retry": [
+   "POST"
+  ],
   "/telemetry/batch": [
    "POST"
   ],
@@ -580,6 +581,13 @@
   ],
   "/users/{user_id}/unlock": [
    "PUT"
+  ],
+  "/webhook-keys": [
+   "GET",
+   "POST"
+  ],
+  "/webhook-keys/{key_pk}": [
+   "DELETE"
   ],
   "/webhooks/cli-published": [
    "POST"

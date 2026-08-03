@@ -3794,6 +3794,8 @@ async def _reconcile_device_queue(
     # чтобы причина невыполненной веб-задачи была видна и на стандартном ERROR.
     _rlog = get_logger("reconcile")
     _ilog = install_logger("daemon.log")
+    from skillery_cli.core.identity import device_uid
+
     store_root = cfg.effective_store_dir()
     report: dict[str, list] = {"applied": [], "failed": [], "skipped": []}
     # Long-poll держит коннект до <wait>с — HTTP-таймаут клиента ОБЯЗАН быть
@@ -3839,7 +3841,7 @@ async def _reconcile_device_queue(
                 if exc.status_code in route_health.CONTRACT_STATUSES:
                     with suppress(Exception):
                         route_health.record_unknown_route(
-                            "GET", "/me/device-queue", exc.status_code,
+                            "GET", f"/devices/{device_uid()}/tasks", exc.status_code,
                             source="daemon.reconcile",
                         )
                     with suppress(Exception):
@@ -3856,7 +3858,7 @@ async def _reconcile_device_queue(
                 return report
             else:
                 with suppress(Exception):
-                    route_health.record_ok("GET", "/me/device-queue")
+                    route_health.record_ok("GET", f"/devices/{device_uid()}/tasks")
         queue = list(resp.get("items") or [])
         device_tasks = list(resp.get("device_tasks") or [])
 

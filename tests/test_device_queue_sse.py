@@ -24,11 +24,25 @@ import respx
 from httpx import Response
 
 from skillery_cli.core.transport import HubClient
+from skillery_cli.core.identity import device_uid as _device_uid
 from skillery_cli.daemon.queue_stream import (
     DeviceQueueStream,
     default_cursor_path,
     read_cursor,
 )
+
+# #1452: очередь адресуется устройством (``/devices/{cdid}/tasks``), а не
+# ``/me/device-queue`` — путь строится из того же ``device_uid()``, что и в
+# транспорте, иначе мок не совпадёт с реальным запросом.
+def _queue_path() -> str:
+    # Считаем в момент ВЫЗОВА, а не на импорте: соседние тесты подменяют
+    # SKILLERY_HOME/HOME, и закэшированный на импорте uid разъезжается с тем,
+    # что реально уйдёт в запрос (в одиночном прогоне это не видно).
+    return f"/devices/{_device_uid()}/tasks"
+
+
+def _stream_path() -> str:
+    return _queue_path() + "/stream"
 
 BASE = "http://localhost:8000"
 
@@ -50,7 +64,7 @@ class TestStreamTransport:
     async def test_parses_queue_and_ping_with_cursor(self) -> None:
         """Событие ``queue`` отдаётся с телом и курсором; ``ping`` — как есть."""
         with respx.mock(base_url=BASE) as router:
-            route = router.get("/me/devices/queue/stream").mock(
+            route = router.get(_stream_path()).mock(
                 return_value=Response(
                     200, text=_QUEUE_SSE,
                     headers={"content-type": "text/event-stream"},
@@ -82,7 +96,7 @@ class TestStreamTransport:
         from skillery_cli.core.transport import ApiError
 
         with respx.mock(base_url=BASE) as router:
-            router.get("/me/devices/queue/stream").mock(
+            router.get(_stream_path()).mock(
                 return_value=Response(404, json={"detail": "Not Found"})
             )
             client = HubClient(base_url=BASE, access_token="t")
@@ -97,7 +111,7 @@ class TestStreamTransport:
         from librarykit.errors import TransportError
 
         with respx.mock(base_url=BASE) as router:
-            router.get("/me/devices/queue/stream").mock(
+            router.get(_stream_path()).mock(
                 side_effect=httpx.ConnectError("boom")
             )
             client = HubClient(base_url=BASE, access_token="t")
@@ -173,7 +187,7 @@ class TestRunOnce:
         cur = tmp_path / "cursor.json"
         stream = DeviceQueueStream(wait=25, cursor_path=cur)
         with respx.mock(base_url=BASE) as router:
-            router.get("/me/devices/queue/stream").mock(
+            router.get(_stream_path()).mock(
                 return_value=Response(
                     200, text=_QUEUE_SSE,
                     headers={"content-type": "text/event-stream"},
@@ -201,7 +215,7 @@ class TestRunOnce:
         cur = tmp_path / "cursor.json"
         stream = DeviceQueueStream(wait=25, cursor_path=cur)
         with respx.mock(base_url=BASE) as router:
-            route = router.get("/me/devices/queue/stream").mock(
+            route = router.get(_stream_path()).mock(
                 return_value=Response(
                     200, text=_QUEUE_SSE,
                     headers={"content-type": "text/event-stream"},
@@ -223,7 +237,7 @@ class TestRunOnce:
         """(в) 404 старого backend'а → long-poll в ТОМ ЖЕ такте, демон жив."""
         stream = DeviceQueueStream(wait=25)
         with respx.mock(base_url=BASE) as router:
-            sse = router.get("/me/devices/queue/stream").mock(
+            sse = router.get(_stream_path()).mock(
                 return_value=Response(404, json={"detail": "Not Found"})
             )
             res = await stream.run_once(
@@ -249,7 +263,7 @@ class TestRunOnce:
             wait=25, monotonic=lambda: clock["t"]
         )
         with respx.mock(base_url=BASE) as router:
-            sse = router.get("/me/devices/queue/stream").mock(
+            sse = router.get(_stream_path()).mock(
                 side_effect=httpx.ConnectError("boom")
             )
             res = await stream.run_once(
@@ -277,7 +291,7 @@ class TestRunOnce:
         cur = tmp_path / "cursor.json"
         stream = DeviceQueueStream(wait=25, cursor_path=cur)
         with respx.mock(base_url=BASE) as router:
-            router.get("/me/devices/queue/stream").mock(
+            router.get(_stream_path()).mock(
                 return_value=Response(
                     200, text="event: ping\ndata: {}\n\n",
                     headers={"content-type": "text/event-stream"},
@@ -341,7 +355,7 @@ class TestLongLivedSession:
         body = _LiveStream(head=_QUEUE_SSE.split("event: ping")[0])
         try:
             with respx.mock(base_url=BASE) as router:
-                route = router.get("/me/devices/queue/stream").mock(
+                route = router.get(_stream_path()).mock(
                     return_value=_live_response(body)
                 )
                 first = await stream.run_once(
@@ -370,7 +384,7 @@ class TestLongLivedSession:
         body = _LiveStream()
         try:
             with respx.mock(base_url=BASE) as router:
-                router.get("/me/devices/queue/stream").mock(
+                router.get(_stream_path()).mock(
                     return_value=_live_response(body)
                 )
                 await stream.run_once(
@@ -408,7 +422,7 @@ class TestLongLivedSession:
         body = _LiveStream(head=_QUEUE_SSE.split("event: ping")[0])
         try:
             with respx.mock(base_url=BASE) as router:
-                router.get("/me/devices/queue/stream").mock(
+                router.get(_stream_path()).mock(
                     return_value=_live_response(body)
                 )
                 await stream.run_once(
@@ -452,7 +466,7 @@ class TestLongLivedSession:
         body = _LiveStream(head=_QUEUE_SSE.split("event: ping")[0])
         try:
             with respx.mock(base_url=BASE) as router:
-                router.get("/me/devices/queue/stream").mock(
+                router.get(_stream_path()).mock(
                     return_value=_live_response(body)
                 )
                 await stream.run_once(

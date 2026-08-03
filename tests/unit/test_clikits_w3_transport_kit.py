@@ -25,6 +25,22 @@ from librarykit.transport import HttpxTransport
 
 from skillery_cli.core.transport import USER_AGENT, ApiError, HubClient
 
+# #1452: очередь адресуется устройством (``/devices/{cdid}/tasks``), а не
+# ``/me/device-queue`` — путь строится из того же ``device_uid()``, что и в
+# транспорте, иначе мок не совпадёт с реальным запросом.
+from skillery_cli.core.identity import device_uid as _device_uid
+
+def _queue_path() -> str:
+    # Считаем в момент ВЫЗОВА, а не на импорте: соседние тесты подменяют
+    # SKILLERY_HOME/HOME, и закэшированный на импорте uid разъезжается с тем,
+    # что реально уйдёт в запрос (в одиночном прогоне это не видно).
+    return f"/devices/{_device_uid()}/tasks"
+
+
+def _stream_path() -> str:
+    return _queue_path() + "/stream"
+
+
 
 def test_hubclient_network_layer_is_librarykit_transport() -> None:
     """Сетевой слой HubClient — librarykit ``HttpxTransport`` (не голый httpx)."""
@@ -140,7 +156,7 @@ async def test_device_queue_longpoll_wait_routes_through_transport() -> None:
     Per-request timeout НЕ передаём; таймаут задаётся при создании HubClient.
     """
     with respx.mock(base_url="http://localhost:8000") as router:
-        route = router.get("/me/device-queue").mock(
+        route = router.get(_queue_path()).mock(
             return_value=Response(200, json={"items": [{"slug": "atlas"}]})
         )
         # timeout>wait как в демоне (транспорт держит коннект дольше long-poll'а).

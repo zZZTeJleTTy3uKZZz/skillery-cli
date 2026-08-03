@@ -57,6 +57,19 @@ def _build_user_agent() -> str:
 
 USER_AGENT = _build_user_agent()
 
+
+def _device_id() -> str:
+    """Стабильный ``client_device_id`` этой машины (``~/.skillery``).
+
+    #1452: с переездом очереди в device-пространство идентификатор стал частью
+    ПУТИ (``/devices/{cdid}/tasks``), а не маркером в User-Agent. Тот же
+    источник, что и при регистрации устройства и в рапортах, — иначе демон
+    ходил бы в очередь одной машины, а рапортовал за другую.
+    """
+    from skillery_cli.core.identity import device_uid
+
+    return device_uid()
+
 # cli-kits W1: только эти HTTP-методы идемпотентны → их безопасно повторять.
 # Мутации (POST/PATCH/PUT/DELETE) НЕ ретраим — повтор рискует двойным эффектом.
 _IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
@@ -571,7 +584,7 @@ class HubClient:
         wait: int = 0,
         supports_removal: bool = True,
     ) -> dict[str, Any]:
-        """GET /me/device-queue — ПОЛНЫЙ ответ очереди устройства (#905/#1102).
+        """GET /devices/{cdid}/tasks — ПОЛНЫЙ ответ очереди устройства (#905/#1102).
 
         Ответ: ``{"items": [...skill-очередь...], "device_tasks": [...]}``.
 
@@ -582,8 +595,11 @@ class HubClient:
         ``payload = {"target_version": "x.y.z"}``. Задача переотдаётся, пока не
         отрапортован терминальный статус (см. :meth:`report_device_task`).
 
-        Устройство backend определяет по ``id:{cdid}`` в User-Agent, поэтому
-        отдельный параметр не нужен.
+        #1452: устройство — СЕГМЕНТ ПУТИ, а не догадка сервера по ``id:{cdid}``
+        в User-Agent. Очередь принадлежит машине, а не человеку: машин
+        несколько, у каждой своя, и прежний ``/me/device-queue`` вообще не умел
+        адресовать вторую. ``client_device_id`` демон и так знает — им же он
+        регистрируется и рапортует.
 
         #919: заодно сообщаем, включено ли автообновление НА ЭТОЙ машине.
 
@@ -607,7 +623,7 @@ class HubClient:
             params["wait"] = str(int(wait))
         if supports_removal:
             params["supports_removal"] = "true"
-        path = "/me/device-queue"
+        path = f"/devices/{_device_id()}/tasks"
         if params:
             path += "?" + urlencode(params)
         # ⚠️ per-request timeout НЕ пробрасываем через транспорт кита
@@ -648,7 +664,7 @@ class HubClient:
         auto_update: bool | None = None,
         supports_removal: bool = True,
     ) -> AsyncIterator[tuple[str, dict[str, Any], str | None]]:
-        """GET /me/devices/queue/stream (SSE) → поток ``(event, data, event_id)`` (#1191).
+        """GET /devices/{cdid}/tasks/stream (SSE) → ``(event, data, event_id)`` (#1191).
 
         PUSH-канал очереди устройства вместо постоянного long-poll'а:
 
@@ -679,7 +695,7 @@ class HubClient:
             params["auto_update"] = "true" if auto_update else "false"
         if supports_removal:
             params["supports_removal"] = "true"
-        path = "/me/devices/queue/stream"
+        path = f"/devices/{_device_id()}/tasks/stream"
         if params:
             path += "?" + urlencode(params)
         client = self._transport._client  # httpx.AsyncClient кита (base_url задан)
@@ -752,17 +768,28 @@ class HubClient:
         version: str | None = None,
         error: str | None = None,
     ) -> dict[str, Any]:
-        """POST /me/device-queue/report — рапорт о ФАКТЕ применения (#905).
+        """POST /devices/{cdid}/skills/{slug}/report — рапорт о ФАКТЕ (#905).
 
         Успех обязан нести версию, которая реально легла на диск; провал —
         текст ошибки (задание останется в очереди и повторится).
+
+        #1452: переехал из ``/me/device-queue/report`` в device-пространство
+        вместе с очередью, навык — из тела в путь.
+
+        ⚠️ Это НЕ дубль :meth:`report_device_task` и объединять их нельзя:
+        здесь рапортуется состояние НАВЫКА на машине (``device_skill_state`` —
+        какая версия легла на диск), там — исход типизированной задачи
+        (``device_task``: ``cli_upgrade`` и прочие, у них навыка нет вовсе).
+        Демон зовёт оба.
         """
         body: dict[str, Any] = {"ok": bool(ok), "slug": slug}
         if version:
             body["version"] = version
         if error:
             body["error"] = error[:500]
-        return await self._request("POST", "/me/device-queue/report", json=body)
+        return await self._request(
+            "POST", f"/devices/{_device_id()}/skills/{slug}/report", json=body
+        )
 
     async def report_device_task(
         self,
@@ -2613,14 +2640,6 @@ class HubClient:
         method = "PUT" if starred else "DELETE"
         return await self._request(method, f"/skills/{skill_id}/star")
 
-    async def star_skill(self, skill_id: str) -> dict[str, Any]:
-        """POST /skills/{skill_id}/star — ПЕРЕКЛЮЧАТЕЛЬ звезды (deprecated).
-
-        ⚠️ Не идемпотентен: ретрай снимает только что поставленную звезду
-        (#1437). Оставлен для совместимости со старым backend'ом, у которого
-        ещё нет PUT/DELETE. Новый код — :meth:`set_skill_star`.
-        """
-        return await self._request("POST", f"/skills/{skill_id}/star")
 
     # --- коллекции: перемещение и статистика ---
     async def update_collection(

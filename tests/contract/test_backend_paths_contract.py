@@ -40,9 +40,12 @@ _SNAPSHOT = Path(__file__).with_name("backend-paths.json")
 #: перестанет получать задания.
 DAEMON_CRITICAL: frozenset[tuple[str, str]] = frozenset(
     {
-        ("GET", "/me/device-queue"),
-        ("GET", "/me/devices/queue/stream"),
-        ("POST", "/me/device-queue/report"),
+        ("GET", "/devices/{}/tasks"),
+        ("GET", "/devices/{}/tasks/stream"),
+        # ⚠️ Два РАЗНЫХ рапорта, не дубли: первый — состояние навыка на машине
+        # (device_skill_state), второй — исход типизированной задачи
+        # (device_task, у неё навыка нет вовсе). Демон зовёт оба.
+        ("POST", "/devices/{}/skills/{}/report"),
         ("POST", "/devices/{}/tasks/{}/report"),
         ("POST", "/me/devices"),
         ("GET", "/me/installs"),
@@ -143,10 +146,10 @@ def test_backend_rename_breaks_the_contract(
     сверяет.
     """
     mutated = dict(backend_paths)
-    victim = "/me/device-queue"
+    victim = "/devices/{}/tasks"
     assert victim in mutated, "снимок backend устарел — пересними контракт"
     del mutated[victim]
-    mutated["/me/devices/{}/tasks"] = {"GET"}
+    mutated["/devices/{}/queue"] = {"GET"}
 
     found = violations(transport_uses, mutated)
     assert any(victim in item for item in found), (

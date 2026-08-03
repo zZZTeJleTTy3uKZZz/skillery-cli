@@ -406,29 +406,6 @@ async def test_set_skill_star_uses_idempotent_verbs() -> None:
 
 
 @pytest.mark.asyncio
-async def test_legacy_star_skill_still_posts() -> None:
-    """Старый toggle оставлен для backend'а без PUT/DELETE."""
-    with respx.mock(base_url=_BASE) as router:
-        router.post("/skills/12/star").mock(
-            return_value=Response(
-                200,
-                json={
-                    "is_starred": False,
-                    "hub_star_count": 3,
-                    "repo_star_count": 0,
-                    "total_star_count": 3,
-                },
-            )
-        )
-        client = HubClient(base_url=_BASE)
-        try:
-            resp = await client.star_skill("12")
-        finally:
-            await client.close()
-    assert resp["is_starred"] is False
-
-
-@pytest.mark.asyncio
 async def test_list_events_always_sends_page_and_size() -> None:
     """Offset-режим обязателен: в курсорном ``total`` считает лишь страницу."""
     with respx.mock(base_url=_BASE) as router:
