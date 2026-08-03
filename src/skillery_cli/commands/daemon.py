@@ -167,7 +167,12 @@ def _build_runner(
         # #1191: канал доставки очереди — SSE-push с прозрачным откатом на
         # long-poll. Объект ЖИВЁТ МЕЖДУ ТАКТАМИ (курсор, признак «сервер не умеет
         # SSE», окно backoff'а) — поэтому создаётся здесь, а не внутри `_reconcile`.
-        queue_stream = DeviceQueueStream(wait=_LONGPOLL_WAIT_SEC)
+        # #1438: замок, разводящий фоновую SSE-сессию и тяжёлый проход такта.
+        # Владеет им такт (он координирует), стриму — передаётся.
+        reconcile_lock = asyncio.Lock()
+        queue_stream = DeviceQueueStream(
+            wait=_LONGPOLL_WAIT_SEC, reconcile_lock=reconcile_lock
+        )
         # #1102: каденс self-upgrade CLI — старт (force, один раз) + раз в час.
         self_upgrade: dict[str, float | bool] = {"at": 0.0, "started": False}
 
@@ -193,6 +198,10 @@ def _build_runner(
             #    прежний long-poll, доставка не проседает. Применяем и РАПОРТУЕМ
             #    факт (skill-очередь + #1102 device_tasks: cli_upgrade и пр.).
             #    Живой коннект держит last_seen свежим («на связи» в вебе).
+            #    #1438: сессия SSE живёт МЕЖДУ тактами (фоновая задача) — такт
+            #    лишь поднимает её, если она упала, и изредка страхуется
+            #    long-poll'ом. Раньше сессия равнялась такту и рвалась каждые
+            #    30 секунд (дедлайн 25с + heartbeat 15с).
             await queue_stream.run_once(
                 cfg, access, channel="published", agent_target=target,
             )
@@ -206,13 +215,18 @@ def _build_runner(
             now = _time.monotonic()
             if now - last_heavy["at"] >= _HEAVY_RECONCILE_SEC:
                 last_heavy["at"] = now
-                await main_mod._reconcile_hub_installs(
-                    cfg, access, channel="published", agent_target=target,
-                    initiator="web-queue",
-                )
-                await main_mod._auto_update_hub_installs(
-                    cfg, access, agent_target=target, channel="published",
-                )
+                # #1438: SSE-сессия живёт ФОНОВОЙ задачей и применяет очередь
+                # параллельно такту — до развязки оба прохода шли строго друг
+                # за другом внутри одного такта и пересечься не могли. Общий
+                # замок возвращает эту гарантию.
+                async with reconcile_lock:
+                    await main_mod._reconcile_hub_installs(
+                        cfg, access, channel="published", agent_target=target,
+                        initiator="web-queue",
+                    )
+                    await main_mod._auto_update_hub_installs(
+                        cfg, access, agent_target=target, channel="published",
+                    )
             # 3) #1102 каденс-fallback авто-апгрейда CLI: при СТАРТЕ демона —
             #    принудительно (конвергируем на известный latest), далее раз в час
             #    (сам PyPI-запрос гейтит суточный cooldown). Push через device_tasks

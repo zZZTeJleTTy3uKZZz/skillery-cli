@@ -15,6 +15,7 @@ HTTP мокаем через ``respx`` (как в ``tests/unit/test_device_tasks
 """
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import httpx
@@ -291,3 +292,177 @@ class TestRunOnce:
         assert read_cursor(cur) is None
         assert len(spy) == 1
         assert spy[0].get("payload") is None  # это long-poll, не SSE-применение
+
+
+# ——— #1438: соединение живёт МЕЖДУ тактами ——————————————————————————
+
+
+class _LiveStream(httpx.AsyncByteStream):
+    """SSE-поток, который НЕ заканчивается — как настоящий сервер.
+
+    Именно на таком потоке виден дефект #1438: сервер держит коннект и шлёт
+    heartbeat, а клиент всё равно уходил на переподключение (дедлайн сессии 25с
+    проверялся после каждого события, поэтому выход случался на первом ping'е
+    после порога — ровно на 30-й секунде).
+    """
+
+    def __init__(self, *, head: str = "") -> None:
+        self._head = head
+        self.pings = 0
+
+    async def __aiter__(self):  # type: ignore[no-untyped-def]
+        if self._head:
+            yield self._head.encode()
+        while True:
+            self.pings += 1
+            yield b"event: ping\ndata: {}\n\n"
+            await asyncio.sleep(0.01)
+
+    async def aclose(self) -> None:
+        return None
+
+
+def _live_response(stream: _LiveStream) -> Response:
+    return Response(
+        200, stream=stream, headers={"content-type": "text/event-stream"}
+    )
+
+
+class TestLongLivedSession:
+    async def test_session_survives_across_ticks_without_reconnect(
+        self, cfg, spy, tmp_path: Path
+    ) -> None:
+        """#1438: 10 тактов демона = ОДИН коннект, а не десять.
+
+        До правки каждый такт открывал свою сессию и закрывал её на 30-й
+        секунде: 422 запроса за 2 часа на проде.
+        """
+        stream = DeviceQueueStream(wait=25, cursor_path=tmp_path / "c.json")
+        body = _LiveStream(head=_QUEUE_SSE.split("event: ping")[0])
+        try:
+            with respx.mock(base_url=BASE) as router:
+                route = router.get("/me/devices/queue/stream").mock(
+                    return_value=_live_response(body)
+                )
+                first = await stream.run_once(
+                    cfg, "tok", channel="published", agent_target=_Agent()
+                )
+                assert first == {"mode": "sse", "live": True}
+                for _ in range(9):
+                    res = await stream.run_once(
+                        cfg, "tok", channel="published", agent_target=_Agent()
+                    )
+                    assert res["live"] is True
+                    assert stream.live
+                assert len(route.calls) == 1
+        finally:
+            await stream.aclose()
+
+    async def test_live_session_does_not_longpoll_every_tick(
+        self, cfg, spy, tmp_path: Path
+    ) -> None:
+        """Пока push жив, опрос — редкая страховка, а не канал доставки."""
+        clock = {"t": 1000.0}
+        stream = DeviceQueueStream(
+            wait=25, cursor_path=tmp_path / "c.json",
+            monotonic=lambda: clock["t"],
+        )
+        body = _LiveStream()
+        try:
+            with respx.mock(base_url=BASE) as router:
+                router.get("/me/devices/queue/stream").mock(
+                    return_value=_live_response(body)
+                )
+                await stream.run_once(
+                    cfg, "tok", channel="published", agent_target=_Agent()
+                )
+                for _ in range(20):
+                    clock["t"] += 2.0  # такт демона — раз в 2 секунды
+                    await stream.run_once(
+                        cfg, "tok", channel="published", agent_target=_Agent()
+                    )
+                # 40 секунд живого канала — ни одного long-poll'а.
+                assert spy == []
+
+                # А вот через 10 минут страховка срабатывает ровно один раз.
+                clock["t"] += 601.0
+                res = await stream.run_once(
+                    cfg, "tok", channel="published", agent_target=_Agent()
+                )
+                assert res.get("safety_poll") is True
+                assert len(spy) == 1
+                clock["t"] += 2.0
+                await stream.run_once(
+                    cfg, "tok", channel="published", agent_target=_Agent()
+                )
+                assert len(spy) == 1
+        finally:
+            await stream.aclose()
+
+    async def test_queue_event_is_applied_from_background_session(
+        self, cfg, spy, tmp_path: Path
+    ) -> None:
+        """Задание доезжает БЕЗ участия такта — это и есть push."""
+        cur = tmp_path / "c.json"
+        stream = DeviceQueueStream(wait=25, cursor_path=cur)
+        body = _LiveStream(head=_QUEUE_SSE.split("event: ping")[0])
+        try:
+            with respx.mock(base_url=BASE) as router:
+                router.get("/me/devices/queue/stream").mock(
+                    return_value=_live_response(body)
+                )
+                await stream.run_once(
+                    cfg, "tok", channel="published", agent_target=_Agent()
+                )
+                # Даём фоновой задаче доработать событие.
+                for _ in range(50):
+                    if spy:
+                        break
+                    await asyncio.sleep(0.01)
+        finally:
+            await stream.aclose()
+
+        assert len(spy) == 1
+        assert spy[0]["payload"]["items"][0]["slug"] == "atlas"
+        assert read_cursor(cur) == "42"
+
+    async def test_reconcile_lock_serialises_with_heavy_pass(
+        self, cfg, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Фоновая сессия и тяжёлый reconcile такта не идут одновременно.
+
+        До #1438 они были последовательны конструктивно (оба внутри одного
+        такта); развязка эту гарантию сняла — её возвращает общий замок.
+        """
+        import skillery_cli.__main__ as m
+
+        overlap = {"max": 0, "cur": 0}
+
+        async def _fake(cfg, access, **kw):  # type: ignore[no-untyped-def]
+            overlap["cur"] += 1
+            overlap["max"] = max(overlap["max"], overlap["cur"])
+            await asyncio.sleep(0.02)
+            overlap["cur"] -= 1
+            return {"applied": [], "failed": [], "skipped": []}
+
+        monkeypatch.setattr(m, "_reconcile_device_queue", _fake)
+        monkeypatch.setattr(m, "_make_refresh_callback", lambda cfg: None)
+
+        stream = DeviceQueueStream(wait=25, cursor_path=tmp_path / "c.json")
+        body = _LiveStream(head=_QUEUE_SSE.split("event: ping")[0])
+        try:
+            with respx.mock(base_url=BASE) as router:
+                router.get("/me/devices/queue/stream").mock(
+                    return_value=_live_response(body)
+                )
+                await stream.run_once(
+                    cfg, "tok", channel="published", agent_target=_Agent()
+                )
+                # «Тяжёлый проход» такта под тем же замком.
+                async with stream.reconcile_lock:
+                    await asyncio.sleep(0.05)
+                await asyncio.sleep(0.05)
+        finally:
+            await stream.aclose()
+
+        assert overlap["max"] <= 1
