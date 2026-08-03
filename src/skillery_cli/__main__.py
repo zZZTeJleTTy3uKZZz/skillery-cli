@@ -3036,12 +3036,27 @@ async def _install_chain(
             )
             # Content-serving: снапшот с бэкенда (без клиентских git-кред) →
             # fallback на git clone. См. _materialize_from_bundle.
-            result = await _materialize_from_bundle(
-                installer, client,
-                dep_slug=dep_slug, dep_version=dep_version, dep_bundle=dep_bundle,
-                dep_repo=dep_repo, dep_id=dep_id, project_path=project_path,
-                force=force,
-            )
+            try:
+                result = await _materialize_from_bundle(
+                    installer, client,
+                    dep_slug=dep_slug, dep_version=dep_version, dep_bundle=dep_bundle,
+                    dep_repo=dep_repo, dep_id=dep_id, project_path=project_path,
+                    force=force,
+                )
+            except BaseException:
+                # Вытеснение НЕ ИМЕЕТ ПРАВА оставить пользователя без навыка:
+                # если хаб-версия не встала (нет снапшота, отвалился clone), тут
+                # же возвращаем прежнюю из резерва — иначе рабочий локальный
+                # навык исчезал бы из-за неудачной чужой установки.
+                if replaced is not None:
+                    with suppress(Exception):
+                        from skillery_cli.core.store_backup import restore_backup
+
+                        restore_backup(
+                            _store_root, _dir_name(dep_slug or None, dep_id),
+                            replaced.get("id"),
+                        )
+                raise
             if replaced is not None:
                 # Состояние пользователя (.env / _local/ / профили браузера +
                 # preserved_paths) переезжает в свежую установку: иначе «главной

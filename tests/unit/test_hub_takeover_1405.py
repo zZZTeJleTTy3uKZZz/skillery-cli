@@ -153,6 +153,25 @@ class TestHubBeatsLocal:
         # Откат сам обратим: вытесненная хаб-версия не удалена, а зарезервирована.
         assert any(b["source"] == "hub" for b in list_backups(store, "demo"))
 
+    async def test_failed_hub_install_restores_previous(self, env, monkeypatch) -> None:
+        """Провал хаб-установки НЕ имеет права оставить пользователя без навыка."""
+        cfg, target, store, tmp = env
+        _install_local(target, store, tmp)
+
+        async def _boom(*a, **kw):
+            raise RuntimeError("clone упал")
+
+        monkeypatch.setattr(m, "_materialize_from_bundle", _boom, raising=False)
+
+        with pytest.raises(RuntimeError):
+            await _install_from_hub(cfg, target)
+
+        meta = read_meta(store / "demo")
+        assert meta is not None, "прежний навык обязан вернуться из резерва"
+        assert meta["source"] == "local-path"
+        assert meta["version"] == _LOCAL_VERSION
+        assert list_backups(store, "demo") == []
+
     async def test_backup_is_not_a_skill_and_survives_gc(self, env) -> None:
         """Служебная зона резервов не выдаётся за навык (иначе её снёс бы gc)."""
         from skillery_cli.commands.analytics import _scan_store
