@@ -321,7 +321,11 @@ async def test_yank_skill_version_posts_yank_endpoint() -> None:
     from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
-        route = router.put("/skills/demo/versions/1.1.0/yanked").mock(
+        # REST-20 (#1452): путь мутации — числовой id, slug резолвится.
+        router.get("/skills/demo").mock(
+            return_value=Response(200, json={"id": "3", "slug": "demo"})
+        )
+        route = router.put("/skills/3/versions/1.1.0/yanked").mock(
             return_value=Response(204)
         )
         client = HubClient(base_url="http://localhost:8000")
@@ -334,7 +338,7 @@ async def test_yank_skill_version_posts_yank_endpoint() -> None:
         assert route.called
         assert (
             route.calls.last.request.url.path
-            == "/skills/demo/versions/1.1.0/yanked"
+            == "/skills/3/versions/1.1.0/yanked"
         )
 
 
@@ -346,7 +350,10 @@ async def test_unyank_posts_unyank_endpoint() -> None:
     from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
-        route = router.put("/skills/demo/versions/1.1.0/yanked").mock(
+        router.get("/skills/demo").mock(
+            return_value=Response(200, json={"id": "3", "slug": "demo"})
+        )
+        route = router.put("/skills/3/versions/1.1.0/yanked").mock(
             return_value=Response(204)
         )
         client = HubClient(base_url="http://localhost:8000")

@@ -118,7 +118,19 @@ async def test_create_collection_omits_none_optionals() -> None:
 
 async def test_add_skill_to_collection_posts_skill_id() -> None:
     with respx.mock(base_url=_BASE) as router:
-        route = router.post("/collections/team-kit/skills").mock(
+        # REST-20 (#1452): мутации коллекции — строго по числовому id;
+        # slug транспорт резолвит одним ``GET /collections/{slug}``.
+        router.get("/collections/team-kit").mock(
+            return_value=Response(
+                200,
+                json={
+                    "collection": {"id": "10", "slug": "team-kit"},
+                    "skills": [],
+                    "tags": [],
+                },
+            )
+        )
+        route = router.post("/collections/10/skills").mock(
             return_value=Response(
                 201,
                 json={
@@ -140,7 +152,19 @@ async def test_add_skill_to_collection_posts_skill_id() -> None:
 
 async def test_remove_skill_from_collection_deletes() -> None:
     with respx.mock(base_url=_BASE) as router:
-        route = router.delete("/collections/team-kit/skills/42").mock(
+        # REST-20 (#1452): мутации коллекции — строго по числовому id;
+        # slug транспорт резолвит одним ``GET /collections/{slug}``.
+        router.get("/collections/team-kit").mock(
+            return_value=Response(
+                200,
+                json={
+                    "collection": {"id": "10", "slug": "team-kit"},
+                    "skills": [],
+                    "tags": [],
+                },
+            )
+        )
+        route = router.delete("/collections/10/skills/42").mock(
             return_value=Response(204)
         )
         client = HubClient(base_url=_BASE, access_token="t")
@@ -155,7 +179,19 @@ async def test_remove_skill_from_collection_deletes() -> None:
 
 async def test_set_collection_tags_puts_tag_ids() -> None:
     with respx.mock(base_url=_BASE) as router:
-        route = router.put("/collections/team-kit/tags").mock(
+        # REST-20 (#1452): мутации коллекции — строго по числовому id;
+        # slug транспорт резолвит одним ``GET /collections/{slug}``.
+        router.get("/collections/team-kit").mock(
+            return_value=Response(
+                200,
+                json={
+                    "collection": {"id": "10", "slug": "team-kit"},
+                    "skills": [],
+                    "tags": [],
+                },
+            )
+        )
+        route = router.put("/collections/10/tags").mock(
             return_value=Response(204)
         )
         client = HubClient(base_url=_BASE, access_token="t")
@@ -443,3 +479,64 @@ async def test_list_collections_omits_paging_when_unset() -> None:
         assert "size" not in params
         assert "sort" not in params
         assert "q" not in params
+
+
+# ===================== REST-20 (#1452): ref → числовой id =====================
+#
+# Мутирующие роуты навыка/коллекции адресуются СТРОГО числовым id (не-число →
+# 422 ``INVALID_ID``), а UX CLI остался слаговым. Резолв живёт в ОДНОМ месте
+# транспорта, поэтому проверяем именно его, а не два десятка вызовов.
+
+
+async def test_mutation_resolves_slug_to_numeric_id() -> None:
+    """Slug → один ``GET /skills/{slug}``, мутация идёт по числовому id."""
+    with respx.mock(base_url=_BASE) as router:
+        resolve = router.get("/skills/my-skill").mock(
+            return_value=Response(200, json={"id": "42", "slug": "my-skill"})
+        )
+        patch = router.patch("/skills/42").mock(
+            return_value=Response(200, json={"id": "42", "title": "T"})
+        )
+        client = HubClient(base_url=_BASE, access_token="t")
+        try:
+            await client.update_skill("my-skill", {"title": "T"})
+        finally:
+            await client.close()
+        assert resolve.call_count == 1
+        assert patch.called
+
+
+async def test_mutation_with_numeric_ref_makes_no_extra_request() -> None:
+    """Числовой ref — fast-path: лишнего ``GET`` нет вовсе."""
+    with respx.mock(base_url=_BASE) as router:
+        delete = router.delete("/skills/42").mock(return_value=Response(204))
+        client = HubClient(base_url=_BASE, access_token="t")
+        try:
+            await client.delete_skill("42")
+        finally:
+            await client.close()
+        assert delete.called
+        # Единственный запрос за всю операцию — сама мутация.
+        assert len(router.calls) == 1
+
+
+async def test_collection_mutation_reads_id_from_wrapped_detail() -> None:
+    """``GET /collections/{ref}`` отдаёт ``{collection: {...}}`` — id берём оттуда."""
+    with respx.mock(base_url=_BASE) as router:
+        router.get("/collections/pack").mock(
+            return_value=Response(
+                200,
+                json={
+                    "collection": {"id": "10", "slug": "pack"},
+                    "skills": [],
+                    "tags": [],
+                },
+            )
+        )
+        put = router.put("/collections/10/tags").mock(return_value=Response(204))
+        client = HubClient(base_url=_BASE, access_token="t")
+        try:
+            await client.set_collection_tags("pack", tag_ids=["1"])
+        finally:
+            await client.close()
+        assert put.called

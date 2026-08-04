@@ -3347,9 +3347,11 @@ def cmd_install(
                     if not ref or not ver or ref in reported:
                         continue
                     reported.add(str(ref))
+                    sid = item.get("skill_id")
                     with suppress(Exception):
                         await rep_client.report_device_apply(
-                            slug=str(ref), ok=True, version=str(ver)
+                            slug=str(ref), ok=True, version=str(ver),
+                            skill_id=str(sid) if sid is not None else None,
                         )
             finally:
                 await rep_client.close()
@@ -3878,6 +3880,9 @@ async def _reconcile_device_queue(
             slug = item.get("slug")
             skill_id = item.get("skill_id")
             ref = slug or (str(skill_id) if skill_id is not None else None)
+            # #1452: рапорт адресует навык числовым id в ТЕЛЕ (приоритетнее
+            # slug'а в пути) — задание очереди его уже несёт, лишнего запроса нет.
+            sid = str(skill_id) if skill_id is not None else None
             desired = str(item.get("desired_version") or "")
             if not ref:
                 continue
@@ -3918,7 +3923,9 @@ async def _reconcile_device_queue(
                         )
                     # Рапорт об успешном снятии — без версии (backend по
                     # action=remove удалит строку очереди).
-                    await client.report_device_apply(slug=str(ref), ok=True)
+                    await client.report_device_apply(
+                        slug=str(ref), ok=True, skill_id=sid
+                    )
                     with suppress(Exception):
                         await client.report_cli_log(
                             level="info",
@@ -3936,7 +3943,7 @@ async def _reconcile_device_queue(
                                         "initiator": "web-queue", "error": str(exc)}})
                     with suppress(Exception):
                         await client.report_device_apply(
-                            slug=str(ref), ok=False, error=str(exc)
+                            slug=str(ref), ok=False, error=str(exc), skill_id=sid
                         )
                     report["failed"].append(ref)
                 continue
@@ -3953,7 +3960,8 @@ async def _reconcile_device_queue(
                 )
                 applied = (read_meta(store_root / ref) or {}).get("version")
                 await client.report_device_apply(
-                    slug=str(ref), ok=True, version=str(applied or desired)
+                    slug=str(ref), ok=True, version=str(applied or desired),
+                    skill_id=sid,
                 )
                 # #1024: установка видна в вебе /logs с привязкой к пользователю.
                 with suppress(Exception):
@@ -3985,7 +3993,7 @@ async def _reconcile_device_queue(
                                     "error": str(exc)}})
                 try:
                     await client.report_device_apply(
-                        slug=str(ref), ok=False, error=msg
+                        slug=str(ref), ok=False, error=msg, skill_id=sid
                     )
                 except Exception:
                     pass  # сеть упала — сервер оставит задание в очереди

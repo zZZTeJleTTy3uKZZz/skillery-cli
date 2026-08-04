@@ -380,6 +380,53 @@ class HubClient:
             return None
         return resp.json()
 
+    # --- REST-20 (#1452): мутация адресуется ЧИСЛОВЫМ id ---
+    #
+    # Backend жёстко парсит id у мутирующих роутов навыка/коллекции: не-число →
+    # 422 ``INVALID_ID``. Чтение (``GET``) по-прежнему принимает id-или-slug.
+    # UX CLI при этом остался прежним — пользователь набирает slug
+    # (``skillery skill update my-skill``), поэтому ref резолвится ЗДЕСЬ, в
+    # одном месте, а не копипастой в каждой команде.
+    #
+    # Цена: ОДИН лишний GET на мутацию по slug. Если ref уже числовой —
+    # запроса нет вовсе (fast-path ``isdigit``), поэтому машинные вызовы
+    # (демон, скрипты по id) не платят ничего.
+
+    @staticmethod
+    def _extract_id(data: Any, ref: str, what: str, *, key: str | None = None) -> str:
+        # ``GET /skills/{ref}`` отдаёт bare-DTO, ``GET /collections/{ref}`` —
+        # обёртку ``{collection, skills, tags}``; ищем id в обоих формах.
+        if isinstance(data, dict) and key and isinstance(data.get(key), dict):
+            data = data[key]
+        sid = data.get("id") if isinstance(data, dict) else None
+        if sid is None or not str(sid).strip():
+            raise ApiError(
+                status_code=404,
+                code="NOT_FOUND",
+                message=f"Не удалось определить id ({what}): {ref}",
+            )
+        return str(sid)
+
+    async def _resolve_skill_id(self, ref: str) -> str:
+        """``slug|id`` → числовой ``id`` навыка (для мутирующих роутов).
+
+        Команды, которым id нужен и для тела запроса, резолвят его сами
+        (:func:`skillery_cli.commands._common.resolve_skill_id`) и передают
+        сюда уже число — fast-path ниже делает такой вызов бесплатным.
+        """
+        value = str(ref).strip()
+        if value.isdigit():
+            return value
+        return self._extract_id(await self.get_skill(value), value, "навык")
+
+    async def _resolve_collection_id(self, ref: str) -> str:
+        """``slug|id`` → числовой ``id`` коллекции (для мутирующих роутов)."""
+        value = str(ref).strip()
+        if value.isdigit():
+            return value
+        data = await self.get_collection(value)
+        return self._extract_id(data, value, "коллекция", key="collection")
+
     async def login_invite(
         self, *, invite_token: str, email: str, display_name: str
     ) -> dict[str, Any]:
@@ -767,6 +814,7 @@ class HubClient:
         ok: bool,
         version: str | None = None,
         error: str | None = None,
+        skill_id: str | None = None,
     ) -> dict[str, Any]:
         """POST /devices/{cdid}/skills/{slug}/report — рапорт о ФАКТЕ (#905).
 
@@ -781,8 +829,19 @@ class HubClient:
         какая версия легла на диск), там — исход типизированной задачи
         (``device_task``: ``cli_upgrade`` и прочие, у них навыка нет вовсе).
         Демон зовёт оба.
+
+        ⚠️ ОСОЗНАННОЕ ИСКЛЮЧЕНИЕ из REST-20 (#1452): сегмент навыка в пути —
+        ``{id_or_slug}``, backend его НЕ ужесточал (иначе рапорт всех уже
+        установленных демонов сломался бы разом, а чинятся они через этот же
+        канал). Резолв slug→id тут НЕ делаем — это раундтрип на каждый рапорт.
+        Зато если id известен вызывающему (он приходит в задании очереди —
+        ``DeviceQueueItemDTO.skill_id``), шлём его в ТЕЛЕ: backend отдаёт
+        ``body.skill_id`` приоритет над путём, и рапорт перестаёт зависеть от
+        того, не переименовали ли slug.
         """
         body: dict[str, Any] = {"ok": bool(ok), "slug": slug}
+        if skill_id:
+            body["skill_id"] = str(skill_id)
         if version:
             body["version"] = version
         if error:
@@ -889,8 +948,9 @@ class HubClient:
         :meth:`install_bundle`. Ответ — ``{install_state: {...}}``. Право
         ``skill.install``.
         """
+        sid = await self._resolve_skill_id(slug)
         return await self._request(
-            "POST", f"/skills/{slug}/install", params={"channel": channel}
+            "POST", f"/skills/{sid}/install", params={"channel": channel}
         )
 
     async def download_snapshot(self, ref: str, semver: str) -> bytes | None:
@@ -1009,9 +1069,10 @@ class HubClient:
         (два кода на одном роуте не давали клиенту написать один разбор).
         Ответ ``{job_id, status}``; статус — :meth:`get_sync_job`.
         """
+        sid = await self._resolve_skill_id(slug)
         return await self._request(
             "POST",
-            f"/skills/{slug}/sync-jobs",
+            f"/skills/{sid}/sync-jobs",
             params={"channel": channel},
         )
 
@@ -1025,7 +1086,8 @@ class HubClient:
         приходит ТОЛЬКО в manual-режиме (в auto он уже у провайдера) и наружу
         из CLI не печатается — см. ``commands/webhook.py``.
         """
-        return await self._request("PUT", f"/skills/{slug}/webhook")
+        sid = await self._resolve_skill_id(slug)
+        return await self._request("PUT", f"/skills/{sid}/webhook")
 
     async def get_skill_webhook(self, slug: str) -> dict[str, Any]:
         """GET /skills/{slug}/webhook — ``{status: registered|manual|none,
@@ -1034,7 +1096,8 @@ class HubClient:
 
     async def delete_skill_webhook(self, slug: str) -> None:
         """DELETE /skills/{slug}/webhook — отозвать (204, идемпотентно)."""
-        await self._request("DELETE", f"/skills/{slug}/webhook")
+        sid = await self._resolve_skill_id(slug)
+        await self._request("DELETE", f"/skills/{sid}/webhook")
 
     async def yank_skill_version(
         self, *, slug: str, semver: str, yank: bool = True
@@ -1045,9 +1108,10 @@ class HubClient:
         ``PUT .../yanked`` с ``{value}`` вместо пары роутов-глаголов
         ``/yank`` + ``/unyank``.
         """
+        sid = await self._resolve_skill_id(slug)
         await self._request(
             "PUT",
-            f"/skills/{slug}/versions/{semver}/yanked",
+            f"/skills/{sid}/versions/{semver}/yanked",
             json={"value": yank},
         )
 
@@ -1180,13 +1244,14 @@ class HubClient:
     async def revoke_catalog_skill(
         self, company_id: str, id_or_slug: str
     ) -> None:
-        """DELETE /companies/{id}/catalog/skills/{slug} — отозвать навык (204).
+        """DELETE /companies/{id}/catalog/skills/{id} — отозвать навык (204).
 
-        Сверено с ``routes/catalog.py::revoke_skill``: path-сегмент принимает
-        id-ИЛИ-slug (backend резолвит через get_by_id_or_slug).
+        REST-20 (#1452): мутация адресуется ЧИСЛОВЫМ id навыка (не-число → 422
+        ``INVALID_ID``), поэтому slug резолвим (:meth:`_resolve_skill_id`).
         """
+        sid = await self._resolve_skill_id(id_or_slug)
         return await self._request(
-            "DELETE", f"/companies/{company_id}/catalog/skills/{id_or_slug}"
+            "DELETE", f"/companies/{company_id}/catalog/skills/{sid}"
         )
 
     async def grant_catalog_collection(
@@ -1211,9 +1276,10 @@ class HubClient:
         Сверено с ``routes/catalog.py::revoke_collection``: path — строго
         ЧИСЛОВОЙ collection_id (slug caller резолвит заранее).
         """
+        cid = await self._resolve_collection_id(collection_id)
         return await self._request(
             "DELETE",
-            f"/companies/{company_id}/catalog/collections/{collection_id}",
+            f"/companies/{company_id}/catalog/collections/{cid}",
         )
 
     async def issue_invite(
@@ -1589,9 +1655,10 @@ class HubClient:
         version: str | None = None,
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        sid = await self._resolve_skill_id(slug)
         return await self._request(
             "POST",
-            f"/skills/{slug}/issues",
+            f"/skills/{sid}/issues",
             json={
                 "skill_slug": slug,
                 "version": version,
@@ -1668,15 +1735,20 @@ class HubClient:
         self,
         skill_id: str,
         *,
-        limit: int = 50,
-        starting_after: str | None = None,
+        page: int = 1,
+        size: int = 50,
     ) -> dict[str, Any]:
-        """GET /skills/{skill_id}/comments — Stripe cursor page (public)."""
-        params: dict[str, Any] = {"limit": limit}
-        if starting_after:
-            params["starting_after"] = starting_after
+        """GET /skills/{skill_id}/comments — offset-страница (public).
+
+        REST-канон (#1452): Stripe-cursor (``limit``/``starting_after`` →
+        ``{data, object, has_more, next_cursor}``) СНЕСЁН. Осталась одна форма
+        страницы для всего API — запрос ``page``/``size``, ответ
+        ``{items, total, page, size}``.
+        """
         return await self._request(
-            "GET", f"/skills/{skill_id}/comments", params=params
+            "GET",
+            f"/skills/{skill_id}/comments",
+            params={"page": page, "size": size},
         )
 
     async def edit_comment(
@@ -1923,9 +1995,10 @@ class HubClient:
         ``CollectionSkillLinkResponse`` = ``{collection_slug, collection_id,
         skill_id}``.
         """
+        cid = await self._resolve_collection_id(slug)
         return await self._request(
             "POST",
-            f"/collections/{slug}/skills",
+            f"/collections/{cid}/skills",
             json={"skill_id": skill_id},
         )
 
@@ -1938,8 +2011,9 @@ class HubClient:
         (:831): path-сегмент ``{skill_id}`` принимает id-ИЛИ-slug (backend
         резолвит); idempotent (нет навыка → no-op 204). Ответ 204 → None.
         """
+        cid = await self._resolve_collection_id(slug)
         return await self._request(
-            "DELETE", f"/collections/{slug}/skills/{skill_id}"
+            "DELETE", f"/collections/{cid}/skills/{skill_id}"
         )
 
     async def set_collection_tags(
@@ -1952,9 +2026,10 @@ class HubClient:
         (бэк 422 на нечисловые). Replace-set (полная замена). Право
         ``collection.update``/owner/hub.admin. Ответ 204 → None.
         """
+        cid = await self._resolve_collection_id(slug)
         return await self._request(
             "PUT",
-            f"/collections/{slug}/tags",
+            f"/collections/{cid}/tags",
             json={"tag_ids": tag_ids},
         )
 
@@ -2241,9 +2316,10 @@ class HubClient:
         ``viewer|editor|admin``. Повторный PUT на тот же таргет возвращает
         существующий grant (тоже 201) — операция идемпотентна.
         """
+        sid = await self._resolve_skill_id(skill_id)
         return await self._request(
             "PUT",
-            f"/skills/{skill_id}/access-grants",
+            f"/skills/{sid}/access-grants",
             json={
                 "target_type": target_type,
                 "target_id": target_id,
@@ -2278,9 +2354,10 @@ class HubClient:
         Гейт у мутаций коллекции ДРУГОЙ, чем у навыка: владелец коллекции
         ИЛИ ``collection.update.any`` ИЛИ ``hub.admin``.
         """
+        cid = await self._resolve_collection_id(collection_id)
         return await self._request(
             "PUT",
-            f"/collections/{collection_id}/access-grants",
+            f"/collections/{cid}/access-grants",
             json={
                 "target_type": target_type,
                 "target_id": target_id,
@@ -2292,8 +2369,9 @@ class HubClient:
         self, collection_id: str, grant_id: str
     ) -> None:
         """DELETE /collections/{id}/access-grants/{grant_id} — отозвать (204)."""
+        cid = await self._resolve_collection_id(collection_id)
         await self._request(
-            "DELETE", f"/collections/{collection_id}/access-grants/{grant_id}"
+            "DELETE", f"/collections/{cid}/access-grants/{grant_id}"
         )
 
     # --- system config (routes/system_config.py) ---
@@ -2496,14 +2574,18 @@ class HubClient:
         short_description, icon/cover…), и дублировать их здесь именованными
         аргументами значило бы держать две расходящиеся копии схемы.
         """
-        return await self._request("PATCH", f"/skills/{slug}", json=payload)
+        sid = await self._resolve_skill_id(slug)
+        return await self._request("PATCH", f"/skills/{sid}", json=payload)
 
     async def delete_skill(self, id_or_slug: str) -> None:
-        """DELETE /skills/{id_or_slug} — удалить навык (204, soft-delete).
+        """DELETE /skills/{id} — удалить навык (204, soft-delete).
 
-        Принимает и числовой id, и slug. Право ``skill.manage``/``hub.admin``.
+        REST-20 (#1452): путь принимает ТОЛЬКО числовой id; slug, набранный
+        пользователем, резолвится :meth:`_resolve_skill_id`.
+        Право ``skill.manage``/``hub.admin``.
         """
-        await self._request("DELETE", f"/skills/{id_or_slug}")
+        sid = await self._resolve_skill_id(id_or_slug)
+        await self._request("DELETE", f"/skills/{sid}")
 
     async def publish_skill_version(
         self,
@@ -2521,9 +2603,10 @@ class HubClient:
         git-sync/webhook, а эта ручка регистрирует semver+commit+манифест.
         Право ``skill.publish``. Ответ ``{skill_id, version_id, is_new_skill}``.
         """
+        sid = await self._resolve_skill_id(slug)
         return await self._request(
             "POST",
-            f"/skills/{slug}/versions",
+            f"/skills/{sid}/versions",
             json={
                 "semver": semver,
                 "commit_sha": commit_sha,
@@ -2580,9 +2663,10 @@ class HubClient:
         ``SECRETS_DISABLED``, если у хаба не настроен ключ шифрования.
         Значение секрета НЕ логируем и НЕ печатаем.
         """
+        sid = await self._resolve_skill_id(slug)
         return await self._request(
             "PUT",
-            f"/skills/{slug}/repo-credential",
+            f"/skills/{sid}/repo-credential",
             json={
                 "provider": provider,
                 "secret_type": secret_type,
@@ -2592,7 +2676,8 @@ class HubClient:
 
     async def delete_repo_credential(self, slug: str) -> None:
         """DELETE /skills/{slug}/repo-credential — забыть credential (204)."""
-        await self._request("DELETE", f"/skills/{slug}/repo-credential")
+        sid = await self._resolve_skill_id(slug)
+        await self._request("DELETE", f"/skills/{sid}/repo-credential")
 
     async def get_repo_tree(
         self, slug: str, *, ref: str | None = None
@@ -2675,7 +2760,8 @@ class HubClient:
             payload["icon_color"] = icon_color
         if access_level is not None:
             payload["access_level"] = access_level
-        return await self._request("PATCH", f"/collections/{slug}", json=payload)
+        cid = await self._resolve_collection_id(slug)
+        return await self._request("PATCH", f"/collections/{cid}", json=payload)
 
     async def move_collection(
         self, slug: str, *, new_parent_id: str | None
@@ -2686,9 +2772,10 @@ class HubClient:
         Цикл/превышение глубины backend отбивает 409
         ``COLLECTION_HIERARCHY_ERROR``.
         """
+        cid = await self._resolve_collection_id(slug)
         return await self._request(
             "PATCH",
-            f"/collections/{slug}",
+            f"/collections/{cid}",
             json={"parent_id": new_parent_id},
         )
 

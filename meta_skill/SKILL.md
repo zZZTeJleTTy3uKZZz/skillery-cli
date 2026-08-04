@@ -216,7 +216,7 @@ prompt'а нет).
 | `skills-hub rate <id-или-slug> <1-5>`                  | Поставить / обновить свою оценку 1..5     |
 | `skills-hub rating-summary <id-или-slug>`              | Средний балл + распределение (если есть право `skill.read`) |
 | `skills-hub comment <id-или-slug> "<body>" [--screenshot path] [--parent <cmt_id>]` | Запостить коммент / ответ |
-| `skills-hub comments <id-или-slug> [--limit N] [--cursor X]` | Список комментариев skill'а          |
+| `skills-hub comments <id-или-slug> [--page N] [--size N]` | Список комментариев skill'а          |
 | `skills-hub comment-edit <cmt_id> "<new body>"`        | Редактировать свой коммент                |
 | `skills-hub comment-delete <cmt_id>`                   | Soft-delete (автор или hub-admin)         |
 | `skills-hub contributors <id-или-slug>`                | Авторы и количество коммитов (из git)     |

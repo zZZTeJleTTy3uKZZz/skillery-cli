@@ -90,23 +90,27 @@ async def test_hubclient_post_comment_multipart_sends_files() -> None:
 
 
 @pytest.mark.asyncio
-async def test_hubclient_list_comments_passes_cursor() -> None:
+async def test_hubclient_list_comments_passes_page_and_size() -> None:
+    """#1452: cursor-ветка (``limit``/``starting_after``) снесена — offset."""
     with respx.mock(base_url="http://localhost:8000") as router:
         route = router.get("/skills/slk_x/comments").mock(
             return_value=Response(
                 200,
-                json={"data": [], "has_more": False, "next_cursor": None, "object": "list"},
+                json={"items": [], "total": 0, "page": 2, "size": 25},
             )
         )
         client = HubClient(base_url="http://localhost:8000", access_token="t")
         try:
-            await client.list_comments("slk_x", limit=25, starting_after="cmt_abc")
+            await client.list_comments("slk_x", page=2, size=25)
         finally:
             await client.close()
         assert route.called
         params = dict(route.calls[0].request.url.params)
-        assert params.get("limit") == "25"
-        assert params.get("starting_after") == "cmt_abc"
+        assert params.get("page") == "2"
+        assert params.get("size") == "25"
+        # Cursor-параметров быть не должно вовсе.
+        assert "limit" not in params
+        assert "starting_after" not in params
 
 
 # ---------------------- cmd_comment_post ----------------------
@@ -278,14 +282,14 @@ def test_cmd_comments_list_calls_list(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _list(
         skill_id: str,
         *,
-        limit: int = 50,
-        starting_after: str | None = None,
+        page: int = 1,
+        size: int = 50,
     ) -> dict[str, Any]:
         captured["skill_id"] = skill_id
-        captured["limit"] = limit
-        captured["cursor"] = starting_after
+        captured["page"] = page
+        captured["size"] = size
         return {
-            "data": [
+            "items": [
                 {
                     "id": "cmt_1",
                     "user_id": "u_one",
@@ -293,8 +297,9 @@ def test_cmd_comments_list_calls_list(monkeypatch: pytest.MonkeyPatch) -> None:
                     "created_at": "2026-05-26T12:00:00Z",
                 }
             ],
-            "has_more": False,
-            "next_cursor": None,
+            "total": 1,
+            "page": page,
+            "size": size,
         }
 
     async def _close() -> None:
@@ -304,9 +309,9 @@ def test_cmd_comments_list_calls_list(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_client.close = _close
     _fake_factory(monkeypatch, fake_client)
 
-    comment_mod.cmd_comments_list(slug="my-skill", limit=25, starting_after="cmt_prev")
-    assert captured["limit"] == 25
-    assert captured["cursor"] == "cmt_prev"
+    comment_mod.cmd_comments_list(slug="my-skill", page_no=3, size=25)
+    assert captured["page"] == 3
+    assert captured["size"] == 25
 
 
 def test_comments_registered_with_skill_read_only(monkeypatch: pytest.MonkeyPatch) -> None:

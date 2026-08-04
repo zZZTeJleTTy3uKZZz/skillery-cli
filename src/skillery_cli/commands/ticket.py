@@ -131,9 +131,10 @@ def cmd_tickets_list(
 
         def _render(p: dict[str, Any]) -> None:
             items = p.get("items") or []
-            # Канон (волна 3): размер страницы = ``size``; ``page_size``
-            # сохранён бэкендом как deprecated-дубль (fallback).
-            eff_size = p.get("size") or p.get("page_size") or 1
+            # Канон (#1452): в ОТВЕТЕ размер страницы — только ``size``;
+            # дубли ``page_size``/``has_more`` снесены. Запросный query-параметр
+            # ``page_size`` бэкенд по-прежнему принимает (см. вызов выше).
+            eff_size = p.get("size") or 1
             table = Table(
                 title=(
                     f"Tickets (total={p.get('total')} page={p.get('page')}/"

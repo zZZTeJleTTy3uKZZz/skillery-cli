@@ -80,6 +80,10 @@
    "GET",
    "POST"
   ],
+  "/collections/{collection_id}": [
+   "DELETE",
+   "PATCH"
+  ],
   "/collections/{collection_id}/access-grants": [
    "GET",
    "PUT"
@@ -87,22 +91,20 @@
   "/collections/{collection_id}/access-grants/{grant_id}": [
    "DELETE"
   ],
-  "/collections/{slug}": [
-   "DELETE",
-   "GET",
-   "PATCH"
-  ],
-  "/collections/{slug}/skills": [
+  "/collections/{collection_id}/skills": [
    "POST"
   ],
-  "/collections/{slug}/skills/{skill_id}": [
+  "/collections/{collection_id}/skills/{skill_id}": [
    "DELETE"
+  ],
+  "/collections/{collection_id}/tags": [
+   "PUT"
+  ],
+  "/collections/{slug}": [
+   "GET"
   ],
   "/collections/{slug}/stats": [
    "GET"
-  ],
-  "/collections/{slug}/tags": [
-   "PUT"
   ],
   "/comments/{comment_id}": [
    "DELETE",
@@ -135,7 +137,7 @@
   "/companies/{company_id}/catalog/skills": [
    "POST"
   ],
-  "/companies/{company_id}/catalog/skills/{slug}": [
+  "/companies/{company_id}/catalog/skills/{skill_id}": [
    "DELETE"
   ],
   "/companies/{company_id}/invite-links": [
@@ -163,13 +165,13 @@
   "/dashboard/{kind}/stats": [
    "GET"
   ],
-  "/devices/{client_device_id}/skills/{slug}": [
-   "DELETE"
-  ],
-  "/devices/{client_device_id}/skills/{slug}/report": [
+  "/devices/{client_device_id}/skills/{id_or_slug}/report": [
    "POST"
   ],
-  "/devices/{client_device_id}/skills/{slug}/task": [
+  "/devices/{client_device_id}/skills/{skill_id}": [
+   "DELETE"
+  ],
+  "/devices/{client_device_id}/skills/{skill_id}/task": [
    "DELETE"
   ],
   "/devices/{client_device_id}/tasks": [
@@ -322,8 +324,9 @@
    "GET",
    "POST"
   ],
-  "/skills/{id_or_slug}": [
-   "DELETE"
+  "/skills/{skill_id}": [
+   "DELETE",
+   "PATCH"
   ],
   "/skills/{skill_id}/access-grants": [
    "GET",
@@ -339,19 +342,54 @@
   "/skills/{skill_id}/contributors": [
    "GET"
   ],
+  "/skills/{skill_id}/cover-image": [
+   "DELETE",
+   "PUT"
+  ],
+  "/skills/{skill_id}/install": [
+   "POST"
+  ],
+  "/skills/{skill_id}/issues": [
+   "POST"
+  ],
+  "/skills/{skill_id}/moderation/comments": [
+   "POST"
+  ],
   "/skills/{skill_id}/ratings": [
    "POST"
   ],
   "/skills/{skill_id}/ratings/summary": [
    "GET"
   ],
+  "/skills/{skill_id}/repo-credential": [
+   "DELETE",
+   "PUT"
+  ],
+  "/skills/{skill_id}/reviews": [
+   "POST"
+  ],
+  "/skills/{skill_id}/share-links": [
+   "POST"
+  ],
   "/skills/{skill_id}/star": [
    "DELETE",
    "PUT"
   ],
+  "/skills/{skill_id}/sync-jobs": [
+   "POST"
+  ],
+  "/skills/{skill_id}/versions": [
+   "POST"
+  ],
+  "/skills/{skill_id}/versions/{semver}/yanked": [
+   "PUT"
+  ],
+  "/skills/{skill_id}/webhook": [
+   "DELETE",
+   "PUT"
+  ],
   "/skills/{slug}": [
-   "GET",
-   "PATCH"
+   "GET"
   ],
   "/skills/{slug}/analytics": [
    "GET"
@@ -359,27 +397,14 @@
   "/skills/{slug}/collections": [
    "GET"
   ],
-  "/skills/{slug}/cover-image": [
-   "DELETE",
-   "PUT"
-  ],
-  "/skills/{slug}/install": [
-   "POST"
-  ],
   "/skills/{slug}/install-bundle": [
    "GET"
   ],
-  "/skills/{slug}/issues": [
-   "POST"
-  ],
   "/skills/{slug}/moderation/comments": [
-   "GET",
-   "POST"
+   "GET"
   ],
   "/skills/{slug}/repo-credential": [
-   "DELETE",
-   "GET",
-   "PUT"
+   "GET"
   ],
   "/skills/{slug}/repo/file": [
    "GET"
@@ -391,31 +416,16 @@
    "GET"
   ],
   "/skills/{slug}/reviews": [
-   "GET",
-   "POST"
-  ],
-  "/skills/{slug}/share-links": [
-   "POST"
-  ],
-  "/skills/{slug}/sync-jobs": [
-   "POST"
+   "GET"
   ],
   "/skills/{slug}/sync-jobs/{job_id}": [
    "GET"
   ],
-  "/skills/{slug}/versions": [
-   "POST"
-  ],
   "/skills/{slug}/versions/{semver}/snapshot": [
    "GET"
   ],
-  "/skills/{slug}/versions/{semver}/yanked": [
-   "PUT"
-  ],
   "/skills/{slug}/webhook": [
-   "DELETE",
-   "GET",
-   "PUT"
+   "GET"
   ],
   "/support/tickets": [
    "GET",

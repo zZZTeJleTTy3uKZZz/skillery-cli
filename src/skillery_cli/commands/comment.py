@@ -2,7 +2,7 @@
 
 - ``skillery comment <id-или-slug> "body" [--screenshot path] [--parent id]``
   — добавить comment. Если есть screenshot — multipart upload.
-- ``skillery comments <id-или-slug> [--limit N] [--cursor X]`` — list (public).
+- ``skillery comments <id-или-slug> [--page N] [--size N]`` — list (public).
 
 Permission: ``comment.post`` для post.
 """
@@ -94,12 +94,14 @@ def cmd_comments_list(
     slug: str = typer.Argument(
         ..., metavar="ID_ИЛИ_SLUG", help="id-или-slug скилла (backend принимает оба)"
     ),
-    limit: int = typer.Option(50, "--limit", min=1, max=200),
-    starting_after: str | None = typer.Option(
-        None, "--cursor", help="ID последнего comment'а с предыдущей страницы"
-    ),
+    page_no: int = typer.Option(1, "--page", min=1),
+    size: int = typer.Option(50, "--size", min=1, max=200),
 ) -> None:
-    """List комментариев (public + Stripe cursor pagination)."""
+    """List комментариев (public, offset-пагинация ``page``/``size``).
+
+    REST-канон (#1452): Stripe-cursor (``--limit``/``--cursor``) снесён —
+    у всех списков API одна форма страницы ``{items, total, page, size}``.
+    """
     cfg = ClientConfig.load()
     access = _common.get_access_token()
 
@@ -107,15 +109,18 @@ def cmd_comments_list(
         client = _common.make_client(cfg, access)
         try:
             skill_id = await _common.resolve_skill_id(client, slug)
-            page = await client.list_comments(
-                skill_id, limit=limit, starting_after=starting_after
-            )
+            page = await client.list_comments(skill_id, page=page_no, size=size)
         finally:
             await client.close()
 
         def _render(p: dict[str, Any]) -> None:
-            rows = p.get("data") or []
-            table = Table(title=f"Comments {skill_id} (has_more={p.get('has_more')})")
+            rows = p.get("items") or []
+            table = Table(
+                title=(
+                    f"Comments {skill_id} "
+                    f"(стр. {p.get('page', page_no)}, всего {p.get('total', len(rows))})"
+                )
+            )
             table.add_column("id")
             table.add_column("user_id")
             table.add_column("body", overflow="fold")
@@ -131,9 +136,12 @@ def cmd_comments_list(
                 console.print("[yellow]Комментариев нет[/]")
             else:
                 console.print(table)
-            if p.get("next_cursor"):
+            total = int(p.get("total") or 0)
+            eff_size = int(p.get("size") or size or 1)
+            cur = int(p.get("page") or page_no)
+            if cur * eff_size < total:
                 console.print(
-                    f"[dim]→ следующая страница: --cursor {p['next_cursor']}[/]"
+                    f"[dim]→ следующая страница: --page {cur + 1}[/]"
                 )
 
         emit_data(page, text_renderer=_render)

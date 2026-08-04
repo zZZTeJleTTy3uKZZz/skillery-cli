@@ -39,7 +39,8 @@ def cmd_contributors(
             await client.close()
 
         def _render(p: dict[str, Any]) -> None:
-            rows = p.get("data") or []
+            # Единая форма страницы (#1452): ``{items, total, page, size}``.
+            rows = p.get("items") or []
             table = Table(title=f"Contributors ({skill_id})")
             table.add_column("email")
             table.add_column("name")

@@ -367,15 +367,22 @@ async def test_grant_catalog_skill_posts_numeric_skill_id() -> None:
 
 
 @pytest.mark.asyncio
-async def test_revoke_catalog_skill_path_accepts_slug() -> None:
-    """DELETE /catalog/skills/{slug} — path принимает id-ИЛИ-slug (catalog.py:174)."""
+async def test_revoke_catalog_skill_resolves_slug_to_numeric_id() -> None:
+    """DELETE /catalog/skills/{id} — REST-20 (#1452): путь СТРОГО числовой.
+
+    UX не поменялся: наружу команда по-прежнему принимает slug, транспорт
+    резолвит его одним ``GET /skills/{slug}``.
+    """
     import respx
     from httpx import Response
 
     from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
-        route = router.delete("/companies/7/catalog/skills/demo-test").mock(
+        resolve = router.get("/skills/demo-test").mock(
+            return_value=Response(200, json={"id": "5", "slug": "demo-test"})
+        )
+        route = router.delete("/companies/7/catalog/skills/5").mock(
             return_value=Response(204)
         )
         client = HubClient(base_url="http://localhost:8000")
@@ -383,6 +390,7 @@ async def test_revoke_catalog_skill_path_accepts_slug() -> None:
             await client.revoke_catalog_skill("7", "demo-test")
         finally:
             await client.close()
+        assert resolve.called
         assert route.called
 
 

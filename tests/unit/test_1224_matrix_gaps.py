@@ -320,7 +320,12 @@ async def test_skill_analytics_uses_from_to_query_names() -> None:
 async def test_publish_skill_version_sends_json_not_multipart() -> None:
     """Версия регистрируется JSON'ом: файлы приезжают git-sync'ом, не сюда."""
     with respx.mock(base_url=_BASE) as router:
-        route = router.post("/skills/foo/versions").mock(
+        # REST-20 (#1452): мутация адресуется числовым id — транспорт сам
+        # резолвит переданный slug одним ``GET /skills/{slug}``.
+        router.get("/skills/foo").mock(
+            return_value=Response(200, json={"id": "7", "slug": "foo"})
+        )
+        route = router.post("/skills/7/versions").mock(
             return_value=Response(
                 201, json={"skill_id": "1", "version_id": "9", "is_new_skill": False}
             )
@@ -342,7 +347,10 @@ async def test_publish_skill_version_sends_json_not_multipart() -> None:
 async def test_repo_credential_response_never_carries_secret() -> None:
     """PUT отдаёт только метаданные — значение секрета не возвращается."""
     with respx.mock(base_url=_BASE) as router:
-        route = router.put("/skills/foo/repo-credential").mock(
+        router.get("/skills/foo").mock(
+            return_value=Response(200, json={"id": "7", "slug": "foo"})
+        )
+        route = router.put("/skills/7/repo-credential").mock(
             return_value=Response(
                 200,
                 json={
@@ -426,7 +434,13 @@ async def test_list_events_always_sends_page_and_size() -> None:
 @pytest.mark.asyncio
 async def test_move_collection_and_stats() -> None:
     with respx.mock(base_url=_BASE) as router:
-        move = router.patch("/collections/pack").mock(
+        router.get("/collections/pack").mock(
+            return_value=Response(
+                200,
+                json={"collection": {"id": "4", "slug": "pack"}, "skills": [], "tags": []},
+            )
+        )
+        move = router.patch("/collections/4").mock(
             return_value=Response(200, json={"slug": "pack", "parent_id": None})
         )
         stats = router.get("/collections/pack/stats").mock(

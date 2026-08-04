@@ -69,8 +69,10 @@ class TestReconcileDeviceQueue:
             cfg, "tok", channel="published", agent_target=object()
         )
         assert rep["applied"] == ["atlas"]
+        # #1452: рапорт несёт числовой ``skill_id`` из задания очереди —
+        # backend отдаёт ему приоритет над slug'ом в пути.
         assert fake.reports == [
-            {"slug": "atlas", "ok": True, "version": "0.4.0"}
+            {"slug": "atlas", "ok": True, "version": "0.4.0", "skill_id": "11"}
         ]
         assert fake.closed is True
 
@@ -159,7 +161,8 @@ class TestReconcileRemoval:
             "purge": True,
         }
         # рапорт об успешном снятии — БЕЗ версии.
-        assert fake.reports == [{"slug": "atlas", "ok": True}]
+        # skill_id=None — это задание очереди его не несло (slug-only).
+        assert fake.reports == [{"slug": "atlas", "ok": True, "skill_id": None}]
 
     async def test_removal_failure_reported(self, cfg, monkeypatch) -> None:
         fake = _FakeClient(

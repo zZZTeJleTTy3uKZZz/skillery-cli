@@ -223,6 +223,8 @@ class TestSkillQueueUntouched:
 
         # skill применён и отрапортован по-старому.
         assert rep["applied"] == ["atlas"]
-        assert fake.reports == [{"slug": "atlas", "ok": True, "version": "0.4.0"}]
+        assert fake.reports == [
+            {"slug": "atlas", "ok": True, "version": "0.4.0", "skill_id": "11"}
+        ]
         # device-task тоже обработан.
         assert fake.task_reports[0]["status"] == "applied"
