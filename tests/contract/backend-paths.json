@@ -100,7 +100,7 @@
   "/collections/{collection_id}/tags": [
    "PUT"
   ],
-  "/collections/{slug}": [
+  "/collections/{id_or_slug}": [
    "GET"
   ],
   "/collections/{slug}/stats": [
@@ -207,7 +207,11 @@
    "POST"
   ],
   "/invites": [
+   "GET",
    "POST"
+  ],
+  "/invites/{invite_id}": [
+   "DELETE"
   ],
   "/invites/{token}/acceptances": [
    "POST"
@@ -241,6 +245,9 @@
    "PATCH"
   ],
   "/me/installs": [
+   "GET"
+  ],
+  "/me/issues": [
    "GET"
   ],
   "/me/notifications/stream": [
@@ -296,7 +303,11 @@
    "POST"
   ],
   "/role-assignments": [
+   "GET",
    "POST"
+  ],
+  "/role-assignments/{assignment_id}": [
+   "DELETE"
   ],
   "/roles": [
    "GET",
@@ -324,6 +335,24 @@
    "GET",
    "POST"
   ],
+  "/skills/{id_or_slug}": [
+   "GET"
+  ],
+  "/skills/{id_or_slug}/moderation/comments": [
+   "GET"
+  ],
+  "/skills/{id_or_slug}/repo-credential": [
+   "GET"
+  ],
+  "/skills/{id_or_slug}/reviews": [
+   "GET"
+  ],
+  "/skills/{id_or_slug}/share-links": [
+   "GET"
+  ],
+  "/skills/{id_or_slug}/webhook": [
+   "GET"
+  ],
   "/skills/{skill_id}": [
    "DELETE",
    "PATCH"
@@ -350,6 +379,7 @@
    "POST"
   ],
   "/skills/{skill_id}/issues": [
+   "GET",
    "POST"
   ],
   "/skills/{skill_id}/moderation/comments": [
@@ -371,6 +401,9 @@
   "/skills/{skill_id}/share-links": [
    "POST"
   ],
+  "/skills/{skill_id}/share-links/{link_id}": [
+   "DELETE"
+  ],
   "/skills/{skill_id}/star": [
    "DELETE",
    "PUT"
@@ -388,9 +421,6 @@
    "DELETE",
    "PUT"
   ],
-  "/skills/{slug}": [
-   "GET"
-  ],
   "/skills/{slug}/analytics": [
    "GET"
   ],
@@ -398,12 +428,6 @@
    "GET"
   ],
   "/skills/{slug}/install-bundle": [
-   "GET"
-  ],
-  "/skills/{slug}/moderation/comments": [
-   "GET"
-  ],
-  "/skills/{slug}/repo-credential": [
    "GET"
   ],
   "/skills/{slug}/repo/file": [
@@ -415,16 +439,10 @@
   "/skills/{slug}/repo/tree": [
    "GET"
   ],
-  "/skills/{slug}/reviews": [
-   "GET"
-  ],
   "/skills/{slug}/sync-jobs/{job_id}": [
    "GET"
   ],
   "/skills/{slug}/versions/{semver}/snapshot": [
-   "GET"
-  ],
-  "/skills/{slug}/webhook": [
    "GET"
   ],
   "/support/tickets": [
