@@ -25,13 +25,13 @@
 #1174: очередь ровно ОДНА
 -------------------------
 До #1174 у синка была СВОЯ очередь ``~/.skillery/logs/sync.queue.jsonl`` и своя
-отправка на ``POST /cli-logs``, параллельно общему ``telemetrykit.outbox``, куда
+отправка на ``POST /client-logs``, параллельно общему ``telemetrykit.outbox``, куда
 навыки пишут ``kind="skill_run"``. Две очереди — это две разные гарантии
 доставки и два места, где записи теряются. Теперь запись идёт в общий outbox, а
 наследство перекладывается :func:`migrate_legacy_queue` при первом же старте
 (идемпотентно, без потерь). Заводить вторую очередь — нельзя.
 
-⚠️ Одиночный контракт ``HubClient.report_cli_log`` (``POST /cli-logs``) НЕ
+⚠️ Одиночный контракт ``HubClient.report_cli_log`` (``POST /client-logs``) НЕ
 тронут: на нём сидят старые CLI, и ломать их обратную совместимость эта задача
 не имеет права.
 
@@ -317,7 +317,7 @@ class LogSyncHandler(logging.Handler):
     def build_item(self, record: logging.LogRecord) -> dict[str, Any]:
         """LogRecord → payload конверта ``kind="log"``.
 
-        Форма payload'а — ТА ЖЕ, что раньше уходила элементом ``POST /cli-logs``
+        Форма payload'а — ТА ЖЕ, что раньше уходила элементом ``POST /client-logs``
         (level/logger/message/context/ts/stack): бэкенд разбирает её как и
         прежде, меняется только транспорт.
         """

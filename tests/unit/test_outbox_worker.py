@@ -8,7 +8,7 @@
 это разъехавшиеся гарантии доставки, поэтому логи переезжают в общий outbox
 (``kind="log"``), а доставку ВСЕГО делает один воркер в цикле демона.
 
-- батч уходит одним ``POST /telemetry/batch`` и подтверждается удалением;
+- батч уходит одним ``POST /telemetry/events`` и подтверждается удалением;
 - офлайн/5xx ⇒ конверты ОСТАЮТСЯ (ничего не теряем) + экспоненциальный backoff;
 - ``rejected`` удаляются с WARNING: повтор не сделает их валидными, а очередь,
   вставшая на одном битом конверте, — это потеря ВСЕЙ остальной телеметрии;
@@ -108,7 +108,7 @@ class _ApiError(RuntimeError):
 
 
 class _FakeClient:
-    """Приёмник ``POST /telemetry/batch`` с управляемым поведением."""
+    """Приёмник ``POST /telemetry/events`` с управляемым поведением."""
 
     def __init__(
         self,
@@ -532,7 +532,7 @@ class TestTransportContract:
         resp = await client.send_telemetry_batch(envs)
 
         assert sent["method"] == "POST"
-        assert sent["path"] == "/telemetry/batch"
+        assert sent["path"] == "/telemetry/events"
         assert sent["json"] == {"envelopes": envs}
         assert resp["accepted"] == ["a"]
         await client.close()

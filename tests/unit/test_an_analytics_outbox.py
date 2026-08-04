@@ -11,7 +11,7 @@
 
 - продюсер (инструментация / ``event track``) пишет конверт в общий файл;
 - ОТПРАВКА у аналитики своя ветка внутри того же воркера: ``POST /events``
-  принимает анонимно, ``POST /telemetry/batch`` требует Bearer (см.
+  принимает анонимно, ``POST /telemetry/events`` требует Bearer (см.
   ``test_an_anon_flush``);
 - ``EventGuard`` остался у продюсера: дедуп решает ДО публикации;
 - миграция старой очереди — идемпотентно, без потерь, битые записи не роняют.
@@ -127,7 +127,7 @@ class TestKindRouting:
 
         res = await ow.flush_outbox(client, force=True)
 
-        assert client.batches == [], "аналитика НЕ едет в /telemetry/batch"
+        assert client.batches == [], "аналитика НЕ едет в /telemetry/events"
         assert len(client.events) == 1
         assert client.events[0][0]["event_type"] == "skill.install"
         assert res.accepted == 1

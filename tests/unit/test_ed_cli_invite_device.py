@@ -66,15 +66,17 @@ async def test_hubclient_accept_invite_posts_token_with_auth() -> None:
     from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
-        route = router.post("/invites/accept").mock(return_value=Response(204))
+        route = router.post(
+            "/invites/INVITETOKEN12345678/acceptances"
+        ).mock(return_value=Response(204))
         client = HubClient(base_url="http://localhost:8000", access_token="acc")
         try:
             result = await client.accept_invite(token="INVITETOKEN12345678")
         finally:
             await client.close()
         assert route.called
-        sent = _json.loads(route.calls[0].request.content)
-        assert sent == {"token": "INVITETOKEN12345678"}
+        # REST-19 (#1452): токен адресует приглашение — он в пути, не в теле.
+        assert not route.calls[0].request.content
         assert result is None
         assert route.calls[0].request.headers["Authorization"] == "Bearer acc"
 

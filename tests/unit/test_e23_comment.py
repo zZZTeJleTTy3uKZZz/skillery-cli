@@ -57,7 +57,7 @@ async def test_hubclient_post_comment_json() -> None:
 @pytest.mark.asyncio
 async def test_hubclient_post_comment_multipart_sends_files() -> None:
     with respx.mock(base_url="http://localhost:8000") as router:
-        route = router.post("/skills/slk_x/comments/multipart").mock(
+        route = router.post("/skills/slk_x/comments").mock(
             return_value=Response(
                 201,
                 json={

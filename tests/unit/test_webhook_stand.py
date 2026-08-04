@@ -102,7 +102,7 @@ def _mock_hub() -> None:
             },
         )
     )
-    respx.post(f"{BASE}/skills/17/webhook").mock(
+    respx.put(f"{BASE}/skills/17/webhook").mock(
         return_value=httpx.Response(
             200,
             json={

@@ -455,24 +455,22 @@ class HubClient:
         ])
 
     async def report_cli_logs(self, items: list[dict]) -> dict:
-        """C3 (#1099): батч-отправка буферизованных логов CLI (``POST /cli-logs``).
+        """C3 (#1099): батч-отправка буферизованных логов CLI.
 
-        Один запрос на пачку записей. Бэкенд принимает до 200 элементов; лимит
-        батча держит клиент. Элемент может нести клиентский ``ts`` — время
-        СОБЫТИЯ, а не приёма (важно для записей, пролежавших в офлайн-буфере).
-        Старый бэкенд, не знающий ``ts``, просто игнорирует лишнее поле.
+        REST (#1452): дубль ``POST /cli-logs`` снесён — путь один
+        (``/client-logs``), тип клиента едет полем тела ``client="cli"``.
+        Бэкенд принимает до 200 элементов; лимит батча держит клиент. Элемент
+        может нести клиентский ``ts`` — время СОБЫТИЯ, а не приёма.
 
         ⚠️ #1174: CLI этим каналом БОЛЬШЕ НЕ ПОЛЬЗУЕТСЯ — логи едут конвертами
-        ``kind="log"`` через общий outbox на :meth:`send_telemetry_batch`. Метод
-        (и одиночный :meth:`report_cli_log`) оставлен как есть ради обратной
-        совместимости: на нём сидят уже установленные старые CLI.
+        ``kind="log"`` через общий outbox на :meth:`send_telemetry_batch`.
         """
         return await self._request(
-            "POST", "/cli-logs", json={"items": list(items)}
+            "POST", "/client-logs", json={"items": list(items), "client": "cli"}
         )
 
     async def send_telemetry_batch(self, envelopes: list[dict]) -> dict:
-        """#1174: батч ОБЩЕГО outbox'а одним запросом (``POST /telemetry/batch``).
+        """#1174: батч ОБЩЕГО outbox'а одним запросом (``POST /telemetry/events``).
 
         Единый канал исходящего для ВСЕХ локальных продюсеров: телеметрия
         вызовов навыков (``kind="skill_run"``, пишет ``telemetrykit``), логи CLI
@@ -487,10 +485,10 @@ class HubClient:
         повтора валидным не станет, а вставшая очередь теряет всё остальное).
 
         Не путать с :meth:`report_cli_logs` — тот исторический канал
-        ``POST /cli-logs`` остаётся ради обратной совместимости со старыми CLI.
+        (``POST /client-logs`` с ``client="cli"``).
         """
         data = await self._request(
-            "POST", "/telemetry/batch", json={"envelopes": list(envelopes)}
+            "POST", "/telemetry/events", json={"envelopes": list(envelopes)}
         )
         # 204/пустое тело у старого бэкенда → пустой словарь: воркер тогда
         # ничего не удалит и повторит батч, а не потеряет его молча.
@@ -543,25 +541,27 @@ class HubClient:
         )
 
     async def accept_invite_link(self, *, token: str) -> None:
-        """POST /invite-links/accept — залогиненный вступает в компанию по ссылке.
+        """POST /invite-links/{token}/acceptances — вступить по ссылке.
+
+        REST-19 (#1452): ``accept`` — глагол; токен переехал из тела в путь.
 
         Сверено с ``routes/company_invite_links.py::accept_invite_link``
         (line 207): body = ``{token}``, требуется auth (Bearer). Ответ —
         204 No Content (``_request`` вернёт None). Errors: 404 NOT_FOUND
         (невалидная ссылка); 409 LINK_UNUSABLE (исчерпана/отозвана).
-        После вступления переключение компании — POST /me/active-company.
+        После вступления переключение компании — PUT /me/active-company.
         """
         await self._request(
-            "POST", "/invite-links/accept", json={"token": token}
+            "POST", f"/invite-links/{token}/acceptances"
         )
 
     async def accept_invite(self, *, token: str) -> None:
-        """POST /invites/accept — залогиненный принимает ОДНОРАЗОВЫЙ invite.
+        """POST /invites/{token}/acceptances — принять ОДНОРАЗОВЫЙ invite.
 
         Сверено с ``routes/invites.py::accept_invite``: body ``{token}``,
         auth (Bearer), 204. Errors: 404 NOT_FOUND; 409 INVITE_UNUSABLE.
         """
-        await self._request("POST", "/invites/accept", json={"token": token})
+        await self._request("POST", f"/invites/{token}/acceptances")
 
     async def register_device(
         self, *, name: str, platform: str, client_device_id: str | None = None
@@ -1002,25 +1002,30 @@ class HubClient:
         return await self._request("POST", "/skills", json=payload)
 
     async def sync_skill(self, slug: str, channel: str = "published") -> dict[str, Any]:
-        # T5: бэкенд по умолчанию выполняет sync-from-git ФОНОМ (202 + job_id).
-        # CLI — разовый интерактивный вызов: форсим синхронный путь
-        # (`wait=true`), чтобы сразу получить полный SyncSkillResponse (200) —
-        # прежнее поведение/контракт сохранены без поллинга статус-эндпоинта.
+        """POST /skills/{slug}/sync-jobs — поставить фоновую синхронизацию.
+
+        REST-19/26 (#1452): ресурс sync-job вместо глагола ``sync-from-git``,
+        и код ВСЕГДА 202 — синхронного режима ``?wait=true`` больше нет
+        (два кода на одном роуте не давали клиенту написать один разбор).
+        Ответ ``{job_id, status}``; статус — :meth:`get_sync_job`.
+        """
         return await self._request(
             "POST",
-            f"/skills/{slug}/sync-from-git",
-            params={"channel": channel, "wait": "true"},
+            f"/skills/{slug}/sync-jobs",
+            params={"channel": channel},
         )
 
     # --- auto-sync: git-webhook навыка ---
     async def register_skill_webhook(self, slug: str) -> dict[str, Any]:
-        """POST /skills/{slug}/webhook — включить автосинк навыка.
+        """PUT /skills/{slug}/webhook — включить автосинк навыка.
+
+        REST-20 (#1452): webhook — синглтон навыка, значит ``PUT``, не ``POST``.
 
         Ответ: ``{mode: auto|manual, provider, url, secret?}``. ``secret``
         приходит ТОЛЬКО в manual-режиме (в auto он уже у провайдера) и наружу
         из CLI не печатается — см. ``commands/webhook.py``.
         """
-        return await self._request("POST", f"/skills/{slug}/webhook")
+        return await self._request("PUT", f"/skills/{slug}/webhook")
 
     async def get_skill_webhook(self, slug: str) -> dict[str, Any]:
         """GET /skills/{slug}/webhook — ``{status: registered|manual|none,
@@ -1036,15 +1041,15 @@ class HubClient:
     ) -> None:
         """#340: снять/вернуть версию навыка (yank/unyank). 204 без тела.
 
-        Путь пишется литералом на каждую ветку, а не собирается f-строкой с
-        ``{action}``: контрактный тест (#1441) разбирает transport.py статически,
-        и склеенный из переменной сегмент он видит как path-параметр — то есть
-        именно этот вызов оставался бы вне сверки с OpenAPI.
+        REST-19/27 (#1452): «снята» — ПОЛЕ версии, поэтому один идемпотентный
+        ``PUT .../yanked`` с ``{value}`` вместо пары роутов-глаголов
+        ``/yank`` + ``/unyank``.
         """
-        if yank:
-            await self._request("POST", f"/skills/{slug}/versions/{semver}/yank")
-        else:
-            await self._request("POST", f"/skills/{slug}/versions/{semver}/unyank")
+        await self._request(
+            "PUT",
+            f"/skills/{slug}/versions/{semver}/yanked",
+            json={"value": yank},
+        )
 
     async def create_company(self, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._request("POST", "/companies", json=payload)
@@ -1095,7 +1100,7 @@ class HubClient:
         )
 
     async def switch_active_company(self, company_id: str) -> dict[str, Any]:
-        """POST /me/active-company — переключить активную компанию.
+        """PUT /me/active-company — переключить активную компанию (синглтон).
 
         Сверено с ``routes/me.py::switch_active_company``: переключение
         возможно ТОЛЬКО в компанию с membership (иначе 403). Ответ —
@@ -1103,7 +1108,7 @@ class HubClient:
         permissions роли в целевой компании) — caller обязан сохранить пару.
         """
         return await self._request(
-            "POST", "/me/active-company", json={"company_id": company_id}
+            "PUT", "/me/active-company", json={"company_id": company_id}
         )
 
     async def list_invite_links(self, company_id: str) -> dict[str, Any]:
@@ -1634,7 +1639,10 @@ class HubClient:
         screenshots: list[tuple[str, bytes]],
         parent_id: str | None = None,
     ) -> dict[str, Any]:
-        """POST /skills/{skill_id}/comments/multipart — body + 0..N файлов.
+        """POST /skills/{skill_id}/comments (multipart) — body + 0..N файлов.
+
+        REST-25 (#1452): дубль ``/comments/multipart`` снесён — один роут
+        разбирает и JSON, и multipart по Content-Type.
 
         screenshots: список `(filename, content)`.
         """
@@ -1647,7 +1655,7 @@ class HubClient:
         ]
         resp = await self._transport.request(
             "POST",
-            f"/skills/{skill_id}/comments/multipart",
+            f"/skills/{skill_id}/comments",
             data=data,
             files=files,
             headers=self._auth_headers(),
@@ -1789,12 +1797,10 @@ class HubClient:
         body: str,
         screenshots: list[tuple[str, bytes]],
     ) -> dict[str, Any]:
-        """POST /support/tickets/{id}/messages/multipart — body + 0..N файлов.
+        """POST /support/tickets/{id}/messages (multipart) — body + 0..N файлов.
 
-        Сверено с ``post_message_multipart``: Form ``body`` + ``screenshots[]``
-        файлы. ``parent_id`` в multipart-варианте бэкендом НЕ принимается
-        (только в JSON-варианте) — поэтому отсутствует. ``screenshots``: список
-        ``(filename, content)``.
+        REST-25 (#1452): дубль ``.../messages/multipart`` снесён — один роут
+        разбирает оба типа тела. ``screenshots``: список ``(filename, content)``.
         """
         data: dict[str, str] = {"body": body}
         files: list[tuple[str, tuple[str, bytes, str]]] = [
@@ -1803,7 +1809,7 @@ class HubClient:
         ]
         resp = await self._transport.request(
             "POST",
-            f"/support/tickets/{ticket_id}/messages/multipart",
+            f"/support/tickets/{ticket_id}/messages",
             data=data,
             files=files,
             headers=self._auth_headers(),
@@ -1993,7 +1999,7 @@ class HubClient:
     async def search_skills_semantic(
         self, *, query: str, top_k: int = 10
     ) -> dict[str, Any]:
-        """POST /skills/search-semantic — семантический подбор навыков (#242).
+        """POST /skill-searches — семантический подбор навыков (#242).
 
         Сверено с ``routes/skills.py::search_skills_semantic``: тело
         ``{query, top_k}`` (``top_k`` капится бэком на 50), ответ —
@@ -2003,7 +2009,7 @@ class HubClient:
         """
         return await self._request(
             "POST",
-            "/skills/search-semantic",
+            "/skill-searches",
             json={"query": query, "top_k": top_k},
         )
 
@@ -2052,12 +2058,13 @@ class HubClient:
         return await self._request("GET", "/tags", params=params)
 
     async def get_tag_tree(self) -> dict[str, Any]:
-        """GET /tags/tree — иерархия тегов.
+        """GET /tags?view=tree — иерархия тегов.
 
-        Ответ ``TagTreeResponse{items: [{tag: TagDTO, children: [...]}]}`` —
-        рекурсивно, корни на верхнем уровне. Параметров нет.
+        REST-29 (#1452): литерал ``/tags/tree`` делил уровень с ``{tag_id}``;
+        дерево — представление той же коллекции. Ответ
+        ``TagTreeResponse{items: [{tag: TagDTO, children: [...]}]}``.
         """
-        return await self._request("GET", "/tags/tree")
+        return await self._request("GET", "/tags", params={"view": "tree"})
 
     async def get_tag(self, tag_id: str) -> dict[str, Any]:
         """GET /tags/{tag_id} — карточка тега (404 TAG_NOT_FOUND)."""
@@ -2071,8 +2078,12 @@ class HubClient:
         roots_only: bool = False,
         q: str | None = None,
     ) -> dict[str, Any]:
-        """GET /tags/count — ``{count}`` по тем же фильтрам, что ``GET /tags``."""
-        params: dict[str, Any] = {}
+        """Число тегов по фильтру — ``total`` страницы ``GET /tags``.
+
+        REST-29 (#1452): отдельного ``/tags/count`` больше нет — счётчик это
+        поле страницы. Просим минимальную страницу и читаем ``total``.
+        """
+        params: dict[str, Any] = {"page": 1, "size": 1}
         if parent_id is not None:
             params["parent_id"] = parent_id
         if include_descendants:
@@ -2081,7 +2092,8 @@ class HubClient:
             params["roots_only"] = True
         if q is not None:
             params["q"] = q
-        return await self._request("GET", "/tags/count", params=params)
+        page = await self._request("GET", "/tags", params=params)
+        return {"count": page.get("total", 0)}
 
     async def create_tag(
         self,
@@ -2136,15 +2148,16 @@ class HubClient:
     async def move_tag(
         self, tag_id: str, *, new_parent_id: str | None
     ) -> dict[str, Any]:
-        """PATCH /tags/{tag_id}/move — сменить родителя (``None`` = в корень).
+        """PATCH /tags/{tag_id} ``{parent_id}`` — сменить родителя.
 
-        ``new_parent_id`` шлём ВСЕГДА, в том числе ``null``: пропуск ключа и
+        REST-19/27 (#1452): перемещение — поле, а не роут-глагол ``/move``.
+        ``parent_id`` шлём ВСЕГДА, в том числе ``null``: пропуск ключа и
         ``null`` для backend значат разное (не менять / в корень).
         """
         return await self._request(
             "PATCH",
-            f"/tags/{tag_id}/move",
-            json={"new_parent_id": new_parent_id},
+            f"/tags/{tag_id}",
+            json={"parent_id": new_parent_id},
         )
 
     async def delete_tag(self, tag_id: str) -> None:
@@ -2176,27 +2189,27 @@ class HubClient:
     async def get_entity_tags(
         self, *, entity_type: str, entity_id: str
     ) -> dict[str, Any]:
-        """GET /tags/assignments — теги, навешенные на сущность.
+        """GET /entity-tags — теги, навешенные на сущность (REST-29, #1452).
 
         ``entity_type`` ∈ ``skill|collection|company|user``. Ответ
         ``EntityTagsResponse{entity_type, entity_id, tags: [TagRef]}``.
         """
         return await self._request(
             "GET",
-            "/tags/assignments",
+            "/entity-tags",
             params={"entity_type": entity_type, "entity_id": entity_id},
         )
 
     async def set_entity_tags(
         self, *, entity_type: str, entity_id: str, tag_ids: list[str]
     ) -> dict[str, Any]:
-        """PUT /tags/assignments — REPLACE-SET тегов сущности (не добавление).
+        """PUT /entity-tags — REPLACE-SET тегов сущности (не добавление).
 
         Пустой ``tag_ids`` снимает все теги. Право — как у создания тега.
         """
         return await self._request(
             "PUT",
-            "/tags/assignments",
+            "/entity-tags",
             json={
                 "entity_type": entity_type,
                 "entity_id": entity_id,
@@ -2667,15 +2680,16 @@ class HubClient:
     async def move_collection(
         self, slug: str, *, new_parent_id: str | None
     ) -> dict[str, Any]:
-        """PATCH /collections/{slug}/move — сменить родителя (``None`` = корень).
+        """PATCH /collections/{slug} ``{parent_id}`` — сменить родителя.
 
+        REST-19/27 (#1452): перемещение — поле, роут ``/move`` снят.
         Цикл/превышение глубины backend отбивает 409
         ``COLLECTION_HIERARCHY_ERROR``.
         """
         return await self._request(
             "PATCH",
-            f"/collections/{slug}/move",
-            json={"new_parent_id": new_parent_id},
+            f"/collections/{slug}",
+            json={"parent_id": new_parent_id},
         )
 
     async def get_collection_stats(

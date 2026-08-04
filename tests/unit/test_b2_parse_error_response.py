@@ -228,7 +228,7 @@ async def test_parse_429_rate_limited_from_top_level() -> None:
 @pytest.mark.asyncio
 async def test_post_comment_multipart_unwraps_detail_dict() -> None:
     with respx.mock(base_url="http://localhost:8000") as router:
-        router.post("/skills/5/comments/multipart").mock(
+        router.post("/skills/5/comments").mock(
             return_value=Response(
                 403,
                 json={
@@ -254,7 +254,7 @@ async def test_post_comment_multipart_unwraps_detail_dict() -> None:
 @pytest.mark.asyncio
 async def test_reply_ticket_multipart_unwraps_detail_dict() -> None:
     with respx.mock(base_url="http://localhost:8000") as router:
-        router.post("/support/tickets/42/messages/multipart").mock(
+        router.post("/support/tickets/42/messages").mock(
             return_value=Response(
                 429,
                 json={

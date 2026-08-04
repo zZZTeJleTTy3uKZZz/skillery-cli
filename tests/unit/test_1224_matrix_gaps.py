@@ -82,7 +82,7 @@ async def test_move_tag_sends_explicit_null_parent() -> None:
     Пропусти CLI ключ — команда молча ничего бы не делала.
     """
     with respx.mock(base_url=_BASE) as router:
-        route = router.patch("/tags/3/move").mock(
+        route = router.patch("/tags/3").mock(
             return_value=Response(200, json=_tag_dto())
         )
         client = HubClient(base_url=_BASE)
@@ -91,14 +91,14 @@ async def test_move_tag_sends_explicit_null_parent() -> None:
         finally:
             await client.close()
     body = json.loads(route.calls[0].request.content)
-    assert body == {"new_parent_id": None}
+    assert body == {"parent_id": None}
 
 
 @pytest.mark.asyncio
 async def test_set_entity_tags_is_replace_set() -> None:
-    """PUT /tags/assignments — полная замена набора (пустой список = снять всё)."""
+    """PUT /entity-tags — полная замена набора (пустой список = снять всё)."""
     with respx.mock(base_url=_BASE) as router:
-        route = router.put("/tags/assignments").mock(
+        route = router.put("/entity-tags").mock(
             return_value=Response(
                 200,
                 json={"entity_type": "skill", "entity_id": "9", "tags": []},
@@ -426,7 +426,7 @@ async def test_list_events_always_sends_page_and_size() -> None:
 @pytest.mark.asyncio
 async def test_move_collection_and_stats() -> None:
     with respx.mock(base_url=_BASE) as router:
-        move = router.patch("/collections/pack/move").mock(
+        move = router.patch("/collections/pack").mock(
             return_value=Response(200, json={"slug": "pack", "parent_id": None})
         )
         stats = router.get("/collections/pack/stats").mock(
@@ -448,7 +448,7 @@ async def test_move_collection_and_stats() -> None:
             resp = await client.get_collection_stats("pack")
         finally:
             await client.close()
-    assert json.loads(move.calls[0].request.content) == {"new_parent_id": None}
+    assert json.loads(move.calls[0].request.content) == {"parent_id": None}
     assert resp["installs_total"] == 7
     assert stats.calls[0].request.url.params["days"] == "30"
 

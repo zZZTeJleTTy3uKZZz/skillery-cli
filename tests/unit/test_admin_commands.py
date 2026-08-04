@@ -321,7 +321,7 @@ async def test_yank_skill_version_posts_yank_endpoint() -> None:
     from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
-        route = router.post("/skills/demo/versions/1.1.0/yank").mock(
+        route = router.put("/skills/demo/versions/1.1.0/yanked").mock(
             return_value=Response(204)
         )
         client = HubClient(base_url="http://localhost:8000")
@@ -334,7 +334,7 @@ async def test_yank_skill_version_posts_yank_endpoint() -> None:
         assert route.called
         assert (
             route.calls.last.request.url.path
-            == "/skills/demo/versions/1.1.0/yank"
+            == "/skills/demo/versions/1.1.0/yanked"
         )
 
 
@@ -346,7 +346,7 @@ async def test_unyank_posts_unyank_endpoint() -> None:
     from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
-        route = router.post("/skills/demo/versions/1.1.0/unyank").mock(
+        route = router.put("/skills/demo/versions/1.1.0/yanked").mock(
             return_value=Response(204)
         )
         client = HubClient(base_url="http://localhost:8000")

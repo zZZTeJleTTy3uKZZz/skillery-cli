@@ -13,12 +13,6 @@
   "/advisor/messages": [
    "POST"
   ],
-  "/auth/exchange/create": [
-   "POST"
-  ],
-  "/auth/exchange/redeem": [
-   "POST"
-  ],
   "/auth/exchanges": [
    "POST"
   ],
@@ -79,9 +73,6 @@
   "/auth/signup/verify": [
    "GET"
   ],
-  "/cli-logs": [
-   "POST"
-  ],
   "/client-logs": [
    "POST"
   ],
@@ -99,9 +90,6 @@
   "/collections/{slug}": [
    "DELETE",
    "GET",
-   "PATCH"
-  ],
-  "/collections/{slug}/move": [
    "PATCH"
   ],
   "/collections/{slug}/skills": [
@@ -166,17 +154,23 @@
   "/companies/{company_id}/skill-usage": [
    "GET"
   ],
-  "/dashboard/entity/{kind}/stats": [
-   "GET"
-  ],
   "/dashboard/series": [
    "GET"
   ],
   "/dashboard/summary": [
    "GET"
   ],
+  "/dashboard/{kind}/stats": [
+   "GET"
+  ],
+  "/devices/{client_device_id}/skills/{slug}": [
+   "DELETE"
+  ],
   "/devices/{client_device_id}/skills/{slug}/report": [
    "POST"
+  ],
+  "/devices/{client_device_id}/skills/{slug}/task": [
+   "DELETE"
   ],
   "/devices/{client_device_id}/tasks": [
    "GET"
@@ -186,6 +180,10 @@
   ],
   "/devices/{client_device_id}/tasks/{task_id}/report": [
    "POST"
+  ],
+  "/entity-tags": [
+   "GET",
+   "PUT"
   ],
   "/events": [
    "GET",
@@ -203,13 +201,13 @@
   "/install.ps1": [
    "GET"
   ],
-  "/invite-links/accept": [
+  "/invite-links/{token}/acceptances": [
    "POST"
   ],
   "/invites": [
    "POST"
   ],
-  "/invites/accept": [
+  "/invites/{token}/acceptances": [
    "POST"
   ],
   "/logs": [
@@ -223,7 +221,7 @@
    "PATCH"
   ],
   "/me/active-company": [
-   "POST"
+   "PUT"
   ],
   "/me/avatar": [
    "DELETE",
@@ -269,20 +267,17 @@
   "/me/skills/usage": [
    "GET"
   ],
-  "/memberships": [
-   "DELETE"
-  ],
   "/moderation/skills": [
    "GET"
   ],
   "/notifications": [
    "GET"
   ],
-  "/notifications/read-all": [
+  "/notifications/bulk/read": [
    "POST"
   ],
-  "/notifications/{notification_id}/read": [
-   "POST"
+  "/notifications/{notification_id}": [
+   "PATCH"
   ],
   "/permissions": [
    "GET",
@@ -317,7 +312,7 @@
   "/share-links/{token}": [
    "GET"
   ],
-  "/share-links/{token}/add": [
+  "/share-links/{token}/redemptions": [
    "POST"
   ],
   "/skill-searches": [
@@ -325,15 +320,6 @@
   ],
   "/skills": [
    "GET",
-   "POST"
-  ],
-  "/skills/moderation-queue": [
-   "GET"
-  ],
-  "/skills/probe-repo": [
-   "POST"
-  ],
-  "/skills/search-semantic": [
    "POST"
   ],
   "/skills/{id_or_slug}": [
@@ -348,9 +334,6 @@
   ],
   "/skills/{skill_id}/comments": [
    "GET",
-   "POST"
-  ],
-  "/skills/{skill_id}/comments/multipart": [
    "POST"
   ],
   "/skills/{skill_id}/contributors": [
@@ -373,21 +356,12 @@
   "/skills/{slug}/analytics": [
    "GET"
   ],
-  "/skills/{slug}/approve": [
-   "POST"
-  ],
   "/skills/{slug}/collections": [
    "GET"
   ],
   "/skills/{slug}/cover-image": [
    "DELETE",
    "PUT"
-  ],
-  "/skills/{slug}/devices/{client_device_id}/cancel-task": [
-   "POST"
-  ],
-  "/skills/{slug}/devices/{client_device_id}/uninstall": [
-   "POST"
   ],
   "/skills/{slug}/install": [
    "POST"
@@ -400,9 +374,6 @@
   ],
   "/skills/{slug}/moderation/comments": [
    "GET",
-   "POST"
-  ],
-  "/skills/{slug}/reject": [
    "POST"
   ],
   "/skills/{slug}/repo-credential": [
@@ -419,23 +390,18 @@
   "/skills/{slug}/repo/tree": [
    "GET"
   ],
-  "/skills/{slug}/revision": [
+  "/skills/{slug}/reviews": [
+   "GET",
    "POST"
   ],
-  "/skills/{slug}/share-link": [
+  "/skills/{slug}/share-links": [
    "POST"
   ],
-  "/skills/{slug}/submit-review": [
-   "POST"
-  ],
-  "/skills/{slug}/sync-from-git": [
+  "/skills/{slug}/sync-jobs": [
    "POST"
   ],
   "/skills/{slug}/sync-jobs/{job_id}": [
    "GET"
-  ],
-  "/skills/{slug}/transfer-ownership": [
-   "POST"
   ],
   "/skills/{slug}/versions": [
    "POST"
@@ -443,16 +409,13 @@
   "/skills/{slug}/versions/{semver}/snapshot": [
    "GET"
   ],
-  "/skills/{slug}/versions/{semver}/unyank": [
-   "POST"
-  ],
-  "/skills/{slug}/versions/{semver}/yank": [
-   "POST"
+  "/skills/{slug}/versions/{semver}/yanked": [
+   "PUT"
   ],
   "/skills/{slug}/webhook": [
    "DELETE",
    "GET",
-   "POST"
+   "PUT"
   ],
   "/support/tickets": [
    "GET",
@@ -461,18 +424,12 @@
   "/support/tickets/bulk/update": [
    "POST"
   ],
-  "/support/tickets/multipart": [
-   "POST"
-  ],
   "/support/tickets/{ticket_id}": [
    "GET",
    "PATCH"
   ],
   "/support/tickets/{ticket_id}/messages": [
    "GET",
-   "POST"
-  ],
-  "/support/tickets/{ticket_id}/messages/multipart": [
    "POST"
   ],
   "/system/config": [
@@ -486,28 +443,15 @@
    "GET",
    "POST"
   ],
-  "/tags/assignments": [
-   "GET",
-   "PUT"
-  ],
   "/tags/bulk/delete": [
    "POST"
   ],
   "/tags/bulk/move": [
    "POST"
   ],
-  "/tags/count": [
-   "GET"
-  ],
-  "/tags/tree": [
-   "GET"
-  ],
   "/tags/{tag_id}": [
    "DELETE",
    "GET",
-   "PATCH"
-  ],
-  "/tags/{tag_id}/move": [
    "PATCH"
   ],
   "/tasks": [
@@ -536,7 +480,7 @@
   "/tasks/{task_id}/retry": [
    "POST"
   ],
-  "/telemetry/batch": [
+  "/telemetry/events": [
    "POST"
   ],
   "/users": [

@@ -6,7 +6,7 @@ install/uninstall из веб-очереди), всегда ``level=info`` и т
 не синкался вовсе. Здесь закреплено обратное.
 
 #1174: транспорт сменился — записи ложатся конвертом ``kind="log"`` в ОБЩИЙ
-outbox, а доставку делает воркер (``POST /telemetry/batch``). Поэтому проверяем
+outbox, а доставку делает воркер (``POST /telemetry/events``). Поэтому проверяем
 две вещи: (1) провал реально попадает в очередь с инициатором и причиной,
 (2) доставка/её отсутствие не меняет исход install и не теряет запись.
 """
@@ -70,12 +70,12 @@ class _CapturingClient:
         self._queue = queue or []
         self.closed = False
 
-    # --- /telemetry/batch ---
+    # --- /telemetry/events ---
     async def send_telemetry_batch(self, envelopes: list[dict]) -> dict:
         self.batches.append([dict(e) for e in envelopes])
         return {"accepted": [e["id"] for e in envelopes], "rejected": []}
 
-    # --- /cli-logs (исторический одиночный контракт, не трогаем) ---
+    # --- /client-logs (исторический одиночный контракт, не трогаем) ---
     async def report_cli_logs(self, items: list[dict]) -> dict:
         return {"accepted": len(items)}
 
@@ -262,8 +262,10 @@ class TestLegacyContract:
             context={"device": "pc"},
         )
         assert sent["method"] == "POST"
-        assert sent["path"] == "/cli-logs"
+        assert sent["path"] == "/client-logs"
+        # #1452: путь один (/client-logs), тип клиента — поле тела.
         assert sent["json"] == {
+            "client": "cli",
             "items": [{
                 "level": "info",
                 "message": "CLI: вход выполнен",

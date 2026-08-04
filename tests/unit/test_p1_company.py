@@ -186,7 +186,7 @@ async def test_switch_active_company_posts_me_active_company() -> None:
     from skillery_cli.core.transport import HubClient
 
     with respx.mock(base_url="http://localhost:8000") as router:
-        route = router.post("/me/active-company").mock(
+        route = router.put("/me/active-company").mock(
             return_value=Response(
                 200,
                 json={

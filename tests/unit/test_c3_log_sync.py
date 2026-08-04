@@ -11,7 +11,7 @@
 Здесь закреплено:
 - WARNING/ERROR уходят ВСЕГДА (в т.ч. провал install и провал device-task);
 - payload несёт level/logger/message/context(initiator, skill, error)/ts/
-  client_device_id — та же форма, что и раньше на ``POST /cli-logs``;
+  client_device_id — та же форма, что и раньше на ``POST /client-logs``;
 - секреты маскируются, длинные сообщения обрезаются;
 - шторм ошибок упирается в rate-limit, и факт отбрасывания виден.
 """

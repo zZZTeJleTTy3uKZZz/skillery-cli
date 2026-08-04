@@ -26,7 +26,7 @@ from skillery_cli.daemon.event_sender import OutboxSender
 
 
 class _Client:
-    """Приёмник обеих веток: ``/events`` и ``/telemetry/batch``."""
+    """Приёмник обеих веток: ``/events`` и ``/telemetry/events``."""
 
     def __init__(self, *, fail: Exception | None = None) -> None:
         self.events: list[list[dict]] = []

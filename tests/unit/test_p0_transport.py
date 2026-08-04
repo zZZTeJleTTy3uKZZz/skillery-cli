@@ -82,7 +82,7 @@ async def test_reply_ticket_json_passes_parent_id() -> None:
 @pytest.mark.asyncio
 async def test_reply_ticket_multipart_sends_files() -> None:
     with respx.mock(base_url="http://localhost:8000") as router:
-        route = router.post("/support/tickets/42/messages/multipart").mock(
+        route = router.post("/support/tickets/42/messages").mock(
             return_value=Response(
                 201,
                 json={

@@ -129,7 +129,7 @@ async def _hub_candidates(
 async def _hub_candidates_semantic(
     cfg: ClientConfig, access: str, query: str, limit: int
 ) -> tuple[list[dict[str, Any]], bool]:
-    """#242 AI-ветка: один POST /skills/search-semantic вместо per-term поиска.
+    """#242 AI-ветка: один POST /skill-searches вместо per-term поиска.
 
     Возвращает ``(candidates, degraded)``. Каждый кандидат несёт ``score`` и
     ``reason`` ОТ БЭКА (семантическая объяснимость), а также ``matched_on=[]``
@@ -240,7 +240,7 @@ def cmd_suggest(
         False,
         "--ai",
         help=(
-            "#242: семантический подбор по хабу (POST /skills/search-semantic) "
+            "#242: семантический подбор по хабу (POST /skill-searches) "
             "вместо лексического. Требует логина; локальный стор остаётся на "
             "лексике (оффлайн-фолбэк). При ошибке/без логина — деградирует."
         ),

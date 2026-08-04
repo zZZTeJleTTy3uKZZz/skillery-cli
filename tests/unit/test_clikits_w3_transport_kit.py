@@ -178,7 +178,7 @@ async def test_device_queue_longpoll_wait_routes_through_transport() -> None:
 async def test_multipart_still_routes_through_transport() -> None:
     """multipart-комментарий ходит через тот же транспорт (data + files)."""
     with respx.mock(base_url="http://localhost:8000") as router:
-        route = router.post("/skills/5/comments/multipart").mock(
+        route = router.post("/skills/5/comments").mock(
             return_value=Response(201, json={"comment": {"id": "c1"}})
         )
         client = HubClient(base_url="http://localhost:8000", access_token="t")
