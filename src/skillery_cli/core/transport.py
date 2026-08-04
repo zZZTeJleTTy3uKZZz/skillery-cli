@@ -2299,8 +2299,13 @@ class HubClient:
         Право: ``skill.manage``/``hub.admin`` (эта GET-ручка гейтится, в
         отличие от большинства чтений). Ответ
         ``{skill_id, grants: [SkillAccessGrantDTO]}``.
+
+        #1479: путь строгий по id (``parse_skill_id`` → 422 на slug), поэтому
+        резолвим здесь — иначе ``access list --skill vk`` отвечал 422 вместо
+        списка. Числовой ref проходит fast-path'ом, без лишнего запроса.
         """
-        return await self._request("GET", f"/skills/{skill_id}/access-grants")
+        sid = await self._resolve_skill_id(skill_id)
+        return await self._request("GET", f"/skills/{sid}/access-grants")
 
     async def grant_skill_access(
         self,
@@ -2328,18 +2333,23 @@ class HubClient:
         )
 
     async def revoke_skill_access(self, skill_id: str, grant_id: str) -> None:
-        """DELETE /skills/{skill_id}/access-grants/{grant_id} — отозвать (204)."""
-        await self._request(
-            "DELETE", f"/skills/{skill_id}/access-grants/{grant_id}"
-        )
+        """DELETE /skills/{skill_id}/access-grants/{grant_id} — отозвать (204).
+
+        #1479: как и чтение — путь строг по id, slug резолвим здесь.
+        """
+        sid = await self._resolve_skill_id(skill_id)
+        await self._request("DELETE", f"/skills/{sid}/access-grants/{grant_id}")
 
     async def list_collection_access_grants(
         self, collection_id: str
     ) -> dict[str, Any]:
-        """GET /collections/{id}/access-grants — кому выдан доступ к коллекции."""
-        return await self._request(
-            "GET", f"/collections/{collection_id}/access-grants"
-        )
+        """GET /collections/{id}/access-grants — кому выдан доступ к коллекции.
+
+        #1479: путь строг по id (``parse_collection_id``) — резолвим slug, как
+        это уже делали PUT/DELETE соседних ручек.
+        """
+        cid = await self._resolve_collection_id(collection_id)
+        return await self._request("GET", f"/collections/{cid}/access-grants")
 
     async def grant_collection_access(
         self,

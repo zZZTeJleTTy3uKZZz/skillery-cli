@@ -76,7 +76,7 @@ def _grants_table(grants: list[dict[str, Any]]) -> Table:
 def cmd_access_list(
     skill: str | None = typer.Option(None, "--skill", help="Навык (id или slug)"),
     collection: str | None = typer.Option(
-        None, "--collection", help="Коллекция (id)"
+        None, "--collection", help="Коллекция (id или slug)"
     ),
 ) -> None:
     """Кому выдан доступ к навыку/коллекции (GET …/access-grants).
@@ -116,7 +116,7 @@ def cmd_access_list(
 def cmd_access_grant(
     skill: str | None = typer.Option(None, "--skill", help="Навык (id или slug)"),
     collection: str | None = typer.Option(
-        None, "--collection", help="Коллекция (id)"
+        None, "--collection", help="Коллекция (id или slug)"
     ),
     target_type: str = typer.Option(
         ..., "--to", help=f"Кому: {' | '.join(TARGET_TYPES)}"
@@ -178,7 +178,7 @@ def cmd_access_revoke(
     grant_id: str = typer.Argument(..., help="ID гранта (см. `access list`)"),
     skill: str | None = typer.Option(None, "--skill", help="Навык (id или slug)"),
     collection: str | None = typer.Option(
-        None, "--collection", help="Коллекция (id)"
+        None, "--collection", help="Коллекция (id или slug)"
     ),
 ) -> None:
     """Отозвать доступ (DELETE …/access-grants/{grant_id})."""

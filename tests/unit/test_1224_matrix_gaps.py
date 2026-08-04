@@ -673,3 +673,84 @@ def test_api_error_keeps_stdout_clean(
     assert result.exit_code == 1
     assert result.stdout.strip() == ""
     assert json.loads(result.stderr.strip().splitlines()[-1])["event"] == "error"
+
+
+# ——— #1479: строгие по id роуты не должны получать slug ————————————————
+
+
+@pytest.mark.asyncio
+async def test_list_skill_access_grants_resolves_slug_to_id() -> None:
+    """GET /skills/{skill_id}/access-grants парсит id строго → slug = 422.
+
+    Мутации (PUT/DELETE) резолв уже делали, а чтение и отзыв — нет: тот же
+    ``access list --skill vk`` уходил slug'ом и возвращал 422 вместо списка.
+    """
+    with respx.mock(base_url=_BASE) as router:
+        router.get("/skills/vk").mock(
+            return_value=Response(200, json={"id": "12", "slug": "vk"})
+        )
+        route = router.get("/skills/12/access-grants").mock(
+            return_value=Response(200, json={"skill_id": "12", "grants": []})
+        )
+        client = HubClient(base_url=_BASE)
+        try:
+            await client.list_skill_access_grants("vk")
+        finally:
+            await client.close()
+    assert route.called
+
+
+@pytest.mark.asyncio
+async def test_revoke_skill_access_resolves_slug_to_id() -> None:
+    with respx.mock(base_url=_BASE) as router:
+        router.get("/skills/vk").mock(
+            return_value=Response(200, json={"id": "12", "slug": "vk"})
+        )
+        route = router.delete("/skills/12/access-grants/7").mock(
+            return_value=Response(204)
+        )
+        client = HubClient(base_url=_BASE)
+        try:
+            await client.revoke_skill_access("vk", "7")
+        finally:
+            await client.close()
+    assert route.called
+
+
+@pytest.mark.asyncio
+async def test_list_collection_access_grants_resolves_slug_to_id() -> None:
+    """У коллекции ровно та же строгость — и та же дыра в чтении."""
+    with respx.mock(base_url=_BASE) as router:
+        router.get("/collections/top").mock(
+            return_value=Response(
+                200, json={"collection": {"id": "4", "slug": "top"}}
+            )
+        )
+        route = router.get("/collections/4/access-grants").mock(
+            return_value=Response(200, json={"collection_id": "4", "grants": []})
+        )
+        client = HubClient(base_url=_BASE)
+        try:
+            await client.list_collection_access_grants("top")
+        finally:
+            await client.close()
+    assert route.called
+
+
+@pytest.mark.asyncio
+async def test_numeric_ref_costs_no_extra_request() -> None:
+    """Числовой ref — fast-path: лишнего GET на резолв нет."""
+    with respx.mock(base_url=_BASE) as router:
+        route = router.get("/skills/12/access-grants").mock(
+            return_value=Response(200, json={"skill_id": "12", "grants": []})
+        )
+        client = HubClient(base_url=_BASE)
+        try:
+            await client.list_skill_access_grants("12")
+        finally:
+            await client.close()
+        paths = [call.request.url.path for call in router.calls]
+    assert route.called
+    assert paths == ["/skills/12/access-grants"], (
+        f"на числовом ref резолв обязан быть бесплатным, а ушло: {paths}"
+    )
