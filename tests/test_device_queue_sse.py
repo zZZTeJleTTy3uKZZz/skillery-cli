@@ -480,3 +480,85 @@ class TestLongLivedSession:
             await stream.aclose()
 
         assert overlap["max"] <= 1
+
+
+# ——— рассинхрон контракта на push-канале (#1479) ——————————————————————
+
+
+class TestContractDesyncIsLoud:
+    """404/405 на SSE-пути — это тоже расхождение контракта, а не «нет задач».
+
+    Fallback на long-poll спасает доставку, но только пока ВТОРОЙ путь жив. Если
+    backend переименовал оба (ровно это и случилось при переезде
+    ``/me/device-queue`` → ``/devices/{cdid}/tasks``), молчаливый латч
+    ``_sse_unsupported`` превращал рассинхрон в «устройство просто офлайн».
+    Поэтому push-канал обязан поднимать тот же видимый флаг, что и long-poll.
+    """
+
+    async def test_sse_404_raises_route_health_flag(
+        self, cfg, spy, monkeypatch, tmp_path: Path
+    ) -> None:
+        from skillery_cli.core import route_health
+
+        monkeypatch.setenv("SKILLERY_HOME", str(tmp_path / ".skillery"))
+        route_health.clear()
+
+        stream = DeviceQueueStream(wait=25, cursor_path=tmp_path / "c.json")
+        with respx.mock(base_url=BASE) as router:
+            router.get(_stream_path()).mock(
+                return_value=Response(404, json={"detail": "Not Found"})
+            )
+            await stream.run_once(
+                cfg, "tok", channel="published", agent_target=_Agent()
+            )
+
+        routes = [item["route"] for item in route_health.unknown_routes()]
+        assert routes == [f"GET {_stream_path()}"], (
+            "404 на push-канале не оставил следа: владелец увидит «онлайн», "
+            "а задания не поедут"
+        )
+
+    async def test_network_failure_is_not_a_contract_flag(
+        self, cfg, spy, monkeypatch, tmp_path: Path
+    ) -> None:
+        """Обрыв сети — не переименование роута: флаг не поднимаем."""
+        from skillery_cli.core import route_health
+
+        monkeypatch.setenv("SKILLERY_HOME", str(tmp_path / ".skillery"))
+        route_health.clear()
+
+        stream = DeviceQueueStream(wait=25, cursor_path=tmp_path / "c.json")
+        with respx.mock(base_url=BASE) as router:
+            router.get(_stream_path()).mock(
+                side_effect=httpx.ConnectError("boom")
+            )
+            await stream.run_once(
+                cfg, "tok", channel="published", agent_target=_Agent()
+            )
+
+        assert route_health.unknown_routes() == []
+
+    async def test_live_stream_clears_stale_flag(
+        self, cfg, spy, monkeypatch, tmp_path: Path
+    ) -> None:
+        """Канал ожил после апдейта CLI — флаг снимается сам."""
+        from skillery_cli.core import route_health
+
+        monkeypatch.setenv("SKILLERY_HOME", str(tmp_path / ".skillery"))
+        route_health.clear()
+        route_health.record_unknown_route("GET", _stream_path(), 404)
+
+        stream = DeviceQueueStream(wait=25, cursor_path=tmp_path / "c.json")
+        body = _LiveStream(head=_QUEUE_SSE.split("event: ping")[0])
+        try:
+            with respx.mock(base_url=BASE) as router:
+                router.get(_stream_path()).mock(
+                    return_value=_live_response(body)
+                )
+                await stream.run_once(
+                    cfg, "tok", channel="published", agent_target=_Agent()
+                )
+        finally:
+            await stream.aclose()
+
+        assert route_health.unknown_routes() == []

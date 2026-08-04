@@ -59,6 +59,8 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
+from skillery_cli.core import route_health
+
 # #1438: потолок ЖИЗНИ одной сессии. Это гигиена (свежий токен, чистый TCP,
 # защита от полудохлого коннекта после сна ноутбука), а НЕ ритм доставки: такт
 # демона сессию больше не ждёт, она живёт фоновой задачей. Полчаса вместо
@@ -199,9 +201,29 @@ class DeviceQueueStream:
                 }},
             )
 
+    @staticmethod
+    def _stream_route() -> str:
+        """Путь push-канала — тот же, что строит транспорт (ключ route_health)."""
+        from skillery_cli.core.identity import device_uid
+
+        return f"/devices/{device_uid()}/tasks/stream"
+
     def _note_unsupported(self, log: Any, status: int | None) -> None:
-        """Backend без эндпоинта — навсегда long-poll (в этом процессе)."""
+        """Backend без эндпоинта — навсегда long-poll (в этом процессе).
+
+        #1479: 404/405 здесь — не только «старый сервер», но и **расхождение
+        контракта** (путь стрима переименован). Fallback на long-poll спасает
+        доставку лишь пока жив второй путь; при переезде обоих
+        (``/me/device-queue`` → ``/devices/{cdid}/tasks``) молчаливый латч
+        превращал рассинхрон в «устройство просто офлайн». Поэтому поднимаем тот
+        же видимый флаг, что и long-poll — его печатает ``skillery status``.
+        """
         self._sse_unsupported = True
+        if status in route_health.CONTRACT_STATUSES:
+            with suppress(Exception):
+                route_health.record_unknown_route(
+                    "GET", self._stream_route(), int(status), source="daemon.sse"
+                )
         if not self._logged_fallback:
             self._logged_fallback = True
             with suppress(Exception):
@@ -364,6 +386,11 @@ class DeviceQueueStream:
                 async for event, data, event_id in stream:
                     # Канал ожил — такт может отпускать сессию в фон.
                     self._first_event.set()
+                    # #1479: и снимаем флаг рассинхрона, если он был поднят
+                    # прошлой (устаревшей) версией CLI — «починилось после
+                    # апдейта» не должно требовать ручной уборки.
+                    with suppress(Exception):
+                        route_health.record_ok("GET", self._stream_route())
                     if event == "queue":
                         # #1438: замок против тяжёлого reconcile такта — они
                         # больше не последовательны (сессия ушла в фон).
