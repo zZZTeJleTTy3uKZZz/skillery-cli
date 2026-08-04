@@ -162,7 +162,7 @@ async def test_transport_bulk_change_role_body() -> None:
 
 async def test_transport_lock_user_sends_reason() -> None:
     with respx.mock(base_url="http://localhost:8000") as router:
-        route = router.put("/users/5/lock").mock(
+        route = router.patch("/users/5").mock(
             return_value=Response(200, json=_user_item(is_locked=True))
         )
         client = HubClient(base_url="http://localhost:8000")
@@ -171,14 +171,14 @@ async def test_transport_lock_user_sends_reason() -> None:
         finally:
             await client.close()
         body = _json.loads(route.calls.last.request.content)
-        assert body == {"reason": "нарушение"}
+        assert body == {"is_locked": True, "lock_reason": "нарушение"}
         assert resp["is_locked"] is True
 
 
 async def test_transport_lock_user_without_reason_sends_empty_body() -> None:
-    """reason опционален (LockUserRequest.reason=None) — без него body={}."""
+    """reason опционален — без него в теле только сам флаг."""
     with respx.mock(base_url="http://localhost:8000") as router:
-        route = router.put("/users/5/lock").mock(
+        route = router.patch("/users/5").mock(
             return_value=Response(200, json=_user_item(is_locked=True))
         )
         client = HubClient(base_url="http://localhost:8000")
@@ -186,12 +186,14 @@ async def test_transport_lock_user_without_reason_sends_empty_body() -> None:
             await client.lock_user("5")
         finally:
             await client.close()
-        assert _json.loads(route.calls.last.request.content) == {}
+        assert _json.loads(route.calls.last.request.content) == {
+            "is_locked": True
+        }
 
 
 async def test_transport_unlock_user_posts() -> None:
     with respx.mock(base_url="http://localhost:8000") as router:
-        route = router.put("/users/5/unlock").mock(
+        route = router.patch("/users/5").mock(
             return_value=Response(200, json=_user_item(is_locked=False))
         )
         client = HubClient(base_url="http://localhost:8000")
@@ -205,7 +207,7 @@ async def test_transport_unlock_user_posts() -> None:
 
 async def test_transport_reset_user_password_posts() -> None:
     with respx.mock(base_url="http://localhost:8000") as router:
-        route = router.post("/users/5/reset-password").mock(
+        route = router.post("/users/5/password-resets").mock(
             return_value=Response(
                 200,
                 json={

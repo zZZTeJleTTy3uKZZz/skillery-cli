@@ -9,13 +9,13 @@
   ``DELETE /collections/{slug}/skills/{id}`` / ``PUT /collections/{slug}/tags``
   (``routes/collections.py``).
 - M-3: ``POST /users/bulk/suspend`` / ``/bulk/activate`` (body
-  ``BulkUserIdsRequest{user_ids}``) + ``POST /users/{id}/revoke-sessions``
+  ``BulkUserIdsRequest{user_ids}``) + ``DELETE /users/{id}/sessions``
   (``routes/users.py`` :1250/:1277/:1009).
 - M-4: ``GET /permissions`` / ``GET /roles/{id}/permissions`` (плоский list) /
   ``PUT /roles/{id}/permissions`` (body ``{permission_slugs}``,
   ``routes/permissions.py`` :111/:169/:253).
 - M-5: ``POST /users`` / ``PATCH /users/{id}`` / ``DELETE /users/{id}`` /
-  ``POST /users/{id}/transfer`` / ``GET /users/export.csv`` (CSV-текст).
+  ``POST /users/{id}/memberships`` / ``GET /users?format=csv`` (CSV-текст).
 - M-6: ``GET /collections`` с ``page/size/sort/q``.
 """
 from __future__ import annotations
@@ -201,19 +201,19 @@ async def test_bulk_activate_posts_user_ids() -> None:
         assert body == {"user_ids": ["5", "6"]}
 
 
-async def test_revoke_user_sessions_posts() -> None:
+async def test_revoke_user_sessions_deletes_collection() -> None:
+    """REST-19 (#1452): отзыв всех сессий — DELETE коллекции, 204 без тела."""
     with respx.mock(base_url=_BASE) as router:
-        route = router.post("/users/5/revoke-sessions").mock(
-            return_value=Response(200, json=_user_dto())
+        route = router.delete("/users/5/sessions").mock(
+            return_value=Response(204)
         )
         client = HubClient(base_url=_BASE, access_token="t")
         try:
-            r = await client.revoke_user_sessions("5")
+            await client.revoke_user_sessions("5")
         finally:
             await client.close()
         assert route.called
-        assert route.calls.last.request.method == "POST"
-        assert r["id"] == "5"
+        assert route.calls.last.request.method == "DELETE"
 
 
 # ===================== M-4 — permissions / role permissions =====================
@@ -361,7 +361,7 @@ async def test_delete_user_deletes() -> None:
 
 async def test_transfer_user_posts_body() -> None:
     with respx.mock(base_url=_BASE) as router:
-        route = router.post("/users/5/transfer").mock(
+        route = router.post("/users/5/memberships").mock(
             return_value=Response(200, json=_user_dto())
         )
         client = HubClient(base_url=_BASE, access_token="t")
@@ -373,20 +373,20 @@ async def test_transfer_user_posts_body() -> None:
             await client.close()
         body = _json.loads(route.calls.last.request.content)
         assert body == {
-            "new_company_id": "9",
-            "new_role_id": "2",
-            "keep_old_membership": False,
+            "company_id": "9",
+            "role_id": "2",
+            "keep_previous": False,
         }
 
 
 async def test_export_users_returns_csv_text() -> None:
-    """export.csv — text/csv, не JSON: метод возвращает СЫРОЙ текст."""
+    """?format=csv — text/csv, не JSON: метод возвращает СЫРОЙ текст."""
     csv_body = (
         "id,email,first_name,last_name,status,last_login_at,created_at\n"
         "5,m@acme.ru,,,active,,2026-06-01T10:00:00Z\n"
     )
     with respx.mock(base_url=_BASE) as router:
-        route = router.get("/users/export.csv").mock(
+        route = router.get("/users").mock(
             return_value=Response(
                 200, text=csv_body, headers={"content-type": "text/csv"}
             )
@@ -397,6 +397,7 @@ async def test_export_users_returns_csv_text() -> None:
         finally:
             await client.close()
         params = route.calls.last.request.url.params
+        assert params["format"] == "csv"
         assert params["email"] == "acme"  # q → email фильтр export'а
         assert params["status"] == "active"
         assert isinstance(text, str)

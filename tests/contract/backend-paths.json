@@ -552,9 +552,6 @@
   "/users/bulk/suspend": [
    "POST"
   ],
-  "/users/export.csv": [
-   "GET"
-  ],
   "/users/{user_id}": [
    "DELETE",
    "GET",
@@ -567,20 +564,14 @@
   "/users/{user_id}/access-grants/{grant_id}": [
    "DELETE"
   ],
-  "/users/{user_id}/lock": [
-   "PUT"
-  ],
-  "/users/{user_id}/reset-password": [
+  "/users/{user_id}/memberships": [
    "POST"
   ],
-  "/users/{user_id}/revoke-sessions": [
+  "/users/{user_id}/password-resets": [
    "POST"
   ],
-  "/users/{user_id}/transfer": [
-   "POST"
-  ],
-  "/users/{user_id}/unlock": [
-   "PUT"
+  "/users/{user_id}/sessions": [
+   "DELETE"
   ],
   "/webhook-keys": [
    "GET",

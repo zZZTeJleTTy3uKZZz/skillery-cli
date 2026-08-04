@@ -478,13 +478,14 @@ def cmd_member_revoke_sessions(
     async def _do() -> None:
         client = _common.make_client(cfg, access)
         try:
-            u = await client.revoke_user_sessions(user_id)
+            await client.revoke_user_sessions(user_id)
         finally:
             await client.close()
+        # REST-10 (#1452): DELETE отдаёт 204 без тела — печатаем сам факт.
         emit_data(
-            u,
+            {"user_id": user_id, "revoked": True},
             text_renderer=lambda p: console.print(
-                f"[green]✓[/] Сессии отозваны: {p.get('email') or user_id} "
+                f"[green]✓[/] Сессии отозваны: {p['user_id']} "
                 "[dim](пользователь вышел со всех устройств)[/]"
             ),
         )

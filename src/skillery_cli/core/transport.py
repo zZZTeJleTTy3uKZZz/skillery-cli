@@ -1063,7 +1063,7 @@ class HubClient:
         offset-пагинация ``page/size/q`` → ``{items,total,page,size}``.
         Неуказанные параметры не шлём — backend применит свои дефолты.
         """
-        params: dict[str, Any] = {}
+        params: dict[str, Any] = {"format": "csv"}
         if q:
             params["q"] = q
         if page is not None:
@@ -1308,36 +1308,35 @@ class HubClient:
     async def lock_user(
         self, user_id: str, *, reason: str | None = None
     ) -> dict[str, Any]:
-        """PUT /users/{id}/lock — заблокировать вход.
+        """PATCH /users/{id} ``{is_locked:true}`` — заблокировать вход.
 
-        Канон (волна 3): метод PUT. Старый POST остаётся deprecated-алиасом.
-        Сверено с ``routes/users.py::lock_user`` (:842): body
-        ``LockUserRequest`` = ``{reason?}`` (опционален, ≤500 симв.; без
-        причины шлём ``{}``). Право hub.admin ИЛИ company-admin
+        REST-27 (#1452): «заблокирован» — ПОЛЕ сущности; роутов-глаголов
+        ``/lock`` и ``/unlock`` больше нет. Право hub.admin ИЛИ company-admin
         (``_can_admin_users``: user.lock/company.manage/...). Self-lock
         запрещён (409). Ответ — ``UserListItemDTO`` (``is_locked=True``);
         refresh-токены target'а revoked.
         """
-        body: dict[str, Any] = {}
+        body: dict[str, Any] = {"is_locked": True}
         if reason is not None:
-            body["reason"] = reason
+            body["lock_reason"] = reason
         return await self._request(
-            "PUT", f"/users/{user_id}/lock", json=body
+            "PATCH", f"/users/{user_id}", json=body
         )
 
     async def unlock_user(self, user_id: str) -> dict[str, Any]:
-        """PUT /users/{id}/unlock — снять блокировку.
+        """PATCH /users/{id} ``{is_locked:false}`` — снять блокировку.
 
-        Канон (волна 3): метод PUT. Старый POST остаётся deprecated-алиасом.
-        Сверено с ``routes/users.py::unlock_user`` (:888): без body, права
-        те же, что у /lock. Ответ — ``UserListItemDTO``.
+        REST-27 (#1452): парная ветка ``lock_user``; права те же.
+        Ответ — ``UserListItemDTO``.
         """
-        return await self._request("PUT", f"/users/{user_id}/unlock")
+        return await self._request(
+            "PATCH", f"/users/{user_id}", json={"is_locked": False}
+        )
 
     async def reset_user_password(self, user_id: str) -> dict[str, Any]:
-        """POST /users/{id}/reset-password — одноразовый пароль.
+        """POST /users/{id}/password-resets — одноразовый пароль.
 
-        Сверено с ``routes/users.py::reset_user_password`` (:1152): без
+        REST-19 (#1452): ресурс «сброс пароля», не глагол в пути. Без
         body; право hub.admin ИЛИ company.manage (target должен состоять в
         компании актора). Ответ ``ResetPasswordResponse`` =
         ``{temp_password, expires_hint, requires_password_change}``.
@@ -1345,7 +1344,7 @@ class HubClient:
         токены target'а revoked.
         """
         return await self._request(
-            "POST", f"/users/{user_id}/reset-password"
+            "POST", f"/users/{user_id}/password-resets"
         )
 
     # --- bulk suspend/activate + revoke-sessions ---
@@ -1374,15 +1373,15 @@ class HubClient:
         )
 
     async def revoke_user_sessions(self, user_id: str) -> dict[str, Any]:
-        """POST /users/{id}/revoke-sessions — «выйти со всех устройств».
+        """DELETE /users/{id}/sessions — «выйти со всех устройств».
 
-        Сверено с ``routes/users.py::revoke_user_sessions`` (:1009): без body;
-        бампает session-эпоху (живые access → 401) + отзывает refresh-токены,
+        REST-19 (#1452): сессии — коллекция, «отозвать все» — её DELETE.
+        Бампает session-эпоху (живые access → 401) + отзывает refresh-токены,
         статус НЕ меняется. Права: hub.admin (любого) / company-admin (member
-        своей компании) / self. Ответ — ``UserListItemDTO``.
+        своей компании) / self. Ответ — 204 без тела.
         """
         return await self._request(
-            "POST", f"/users/{user_id}/revoke-sessions"
+            "DELETE", f"/users/{user_id}/sessions"
         )
 
     # --- CRUD пользователей + transfer + export ---
@@ -1452,21 +1451,20 @@ class HubClient:
         new_role_id: str,
         keep_old_membership: bool = False,
     ) -> dict[str, Any]:
-        """POST /users/{id}/transfer — перенести в другую компанию.
+        """POST /users/{id}/memberships — перенести в другую компанию.
 
-        Сверено с ``routes/users.py::transfer_user`` (:881) +
-        ``TransferUserRequest``: body
-        ``{new_company_id, new_role_id, keep_old_membership}``; hub-admin only.
-        По умолчанию старые memberships удаляются (``keep_old_membership=False``).
+        REST-19 (#1452): «перенести» — глагол; ресурс здесь членство.
+        Body ``{company_id, role_id, keep_previous}``; hub-admin only.
+        По умолчанию старые memberships удаляются (``keep_previous=False``).
         Ответ — ``UserListItemDTO``.
         """
         return await self._request(
             "POST",
-            f"/users/{user_id}/transfer",
+            f"/users/{user_id}/memberships",
             json={
-                "new_company_id": new_company_id,
-                "new_role_id": new_role_id,
-                "keep_old_membership": keep_old_membership,
+                "company_id": new_company_id,
+                "role_id": new_role_id,
+                "keep_previous": keep_old_membership,
             },
         )
 
@@ -1478,9 +1476,9 @@ class HubClient:
         status: str | None = None,
         ids: list[str] | None = None,
     ) -> str:
-        """GET /users/export.csv — CSV-выгрузка пользователей (hub.admin).
+        """GET /users?format=csv — CSV-выгрузка пользователей (hub.admin).
 
-        Сверено с ``routes/users.py::export_users_csv`` (:1498): hub.admin only;
+        REST-42a (#1452): расширение файла — не часть пути. hub.admin only;
         фильтры зеркалят ``GET /users`` (``email``→``q`` по подстроке тут не
         поддержан — у export свой ``email`` query, поэтому ``q`` шлём как
         ``email``), ``status`` (alias), ``company_id``; ``ids`` (непустой) —
@@ -1489,7 +1487,7 @@ class HubClient:
         Columns: id, email, first_name, last_name, status, last_login_at,
         created_at.
         """
-        params: dict[str, Any] = {}
+        params: dict[str, Any] = {"format": "csv"}
         if q:
             params["email"] = q
         if status:
@@ -1500,7 +1498,7 @@ class HubClient:
             params["ids"] = ids
         resp = await self._transport.request(
             "GET",
-            "/users/export.csv",
+            "/users",
             params=params,
             headers=self._auth_headers(),
         )
