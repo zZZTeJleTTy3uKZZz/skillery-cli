@@ -1,7 +1,14 @@
 {
- "source": "C:/Users/79288/AppData/Local/Temp/claude/openapi-1440.json",
+ "source": "C:/Users/79288/AppData/Local/Temp/claude/openapi-canon.json",
  "title": "Skillery",
  "paths": {
+  "/account-deletion-requests": [
+   "GET",
+   "POST"
+  ],
+  "/account-deletion-requests/{request_id}": [
+   "GET"
+  ],
   "/advisor/conversations": [
    "GET",
    "POST"
@@ -238,6 +245,9 @@
   "/me/avatar-source": [
    "PUT"
   ],
+  "/me/deletion-preview": [
+   "GET"
+  ],
   "/me/devices": [
    "GET",
    "POST"
@@ -357,6 +367,9 @@
   "/skills/{id_or_slug}": [
    "GET"
   ],
+  "/skills/{id_or_slug}/analytics": [
+   "GET"
+  ],
   "/skills/{id_or_slug}/moderation/comments": [
    "GET"
   ],
@@ -364,7 +377,8 @@
    "GET"
   ],
   "/skills/{id_or_slug}/reviews": [
-   "GET"
+   "GET",
+   "POST"
   ],
   "/skills/{id_or_slug}/share-links": [
    "GET"
@@ -423,9 +437,6 @@
    "DELETE",
    "PUT"
   ],
-  "/skills/{skill_id}/reviews": [
-   "POST"
-  ],
   "/skills/{skill_id}/share-links": [
    "POST"
   ],
@@ -448,9 +459,6 @@
   "/skills/{skill_id}/webhook": [
    "DELETE",
    "PUT"
-  ],
-  "/skills/{slug}/analytics": [
-   "GET"
   ],
   "/skills/{slug}/collections": [
    "GET"
