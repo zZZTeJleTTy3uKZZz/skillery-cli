@@ -2631,19 +2631,34 @@ class HubClient:
         return await self._request("GET", f"/skills/{slug}/collections")
 
     async def get_skill_analytics(
-        self, slug: str, *, date_from: str | None = None, date_to: str | None = None
+        self,
+        slug: str,
+        *,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        days: int | None = None,
+        period: str | None = None,
     ) -> dict[str, Any]:
         """GET /skills/{slug}/analytics — установки/включения/DAU/ошибки.
 
         Query-параметры называются ``from``/``to`` (зарезервированные слова в
         Python — отсюда переименованные аргументы). ``top_companies`` придёт
         пустым, если прав не хватает: backend режет поле, а не весь ответ.
+
+        #1451/#1479: окно задаётся ЛЮБЫМ из трёх способов, приоритет разрешает
+        сервер (``from``/``to`` > ``days`` > ``period``), потолок — 365 дней.
+        Форма ОТВЕТА при переезде на конверт ``AnalyticsReport`` меняется, путь
+        — нет; разбор обеих форм живёт в ``core.analytics_contract``.
         """
         params: dict[str, Any] = {}
         if date_from is not None:
             params["from"] = date_from
         if date_to is not None:
             params["to"] = date_to
+        if days is not None:
+            params["days"] = days
+        if period is not None:
+            params["period"] = period
         return await self._request(
             "GET", f"/skills/{slug}/analytics", params=params
         )
