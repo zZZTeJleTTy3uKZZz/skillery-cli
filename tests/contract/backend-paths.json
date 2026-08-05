@@ -1,9 +1,10 @@
 {
- "source": "skillery-backend create_app().openapi()",
+ "source": "C:/Users/79288/AppData/Local/Temp/claude/openapi-1440.json",
  "title": "Skillery",
  "paths": {
   "/advisor/conversations": [
-   "GET"
+   "GET",
+   "POST"
   ],
   "/advisor/conversations/{conversation_id}": [
    "DELETE",
@@ -148,6 +149,7 @@
    "DELETE"
   ],
   "/companies/{company_id}/members": [
+   "GET",
    "POST"
   ],
   "/companies/{company_id}/members/{user_id}": [
@@ -240,8 +242,12 @@
    "GET",
    "POST"
   ],
+  "/me/devices/bulk/delete": [
+   "POST"
+  ],
   "/me/devices/{device_id}": [
    "DELETE",
+   "GET",
    "PATCH"
   ],
   "/me/installs": [
@@ -279,13 +285,20 @@
   "/moderation/skills": [
    "GET"
   ],
+  "/moderation/skills/bulk/decide": [
+   "POST"
+  ],
   "/notifications": [
    "GET"
+  ],
+  "/notifications/bulk/delete": [
+   "POST"
   ],
   "/notifications/bulk/read": [
    "POST"
   ],
   "/notifications/{notification_id}": [
+   "DELETE",
    "PATCH"
   ],
   "/permissions": [
@@ -313,6 +326,9 @@
    "GET",
    "POST"
   ],
+  "/roles/bulk/delete": [
+   "POST"
+  ],
   "/roles/{role_id}": [
    "DELETE",
    "GET",
@@ -335,6 +351,9 @@
    "GET",
    "POST"
   ],
+  "/skills/bulk/delete": [
+   "POST"
+  ],
   "/skills/{id_or_slug}": [
    "GET"
   ],
@@ -350,6 +369,12 @@
   "/skills/{id_or_slug}/share-links": [
    "GET"
   ],
+  "/skills/{id_or_slug}/sync-jobs": [
+   "GET"
+  ],
+  "/skills/{id_or_slug}/versions": [
+   "GET"
+  ],
   "/skills/{id_or_slug}/webhook": [
    "GET"
   ],
@@ -360,6 +385,9 @@
   "/skills/{skill_id}/access-grants": [
    "GET",
    "PUT"
+  ],
+  "/skills/{skill_id}/access-grants/bulk/grant": [
+   "POST"
   ],
   "/skills/{skill_id}/access-grants/{grant_id}": [
    "DELETE"
