@@ -297,6 +297,46 @@ def cmd_skill_collections(
     _common.run(_do())
 
 
+def _fmt_kpi(value: Any) -> str:
+    """``None`` — «не посчитано», и это НЕ ноль (см. analytics-contract §2)."""
+    if value is None:
+        return "—"
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def render_skill_analytics(payload: dict[str, Any], slug: str) -> None:
+    """Текстовый рендер поверх ЕДИНОГО вида (обе формы ответа, #1479)."""
+    from skillery_cli.core.analytics_contract import normalize_report
+
+    report = normalize_report(payload)
+    kpis = report["kpis"]
+    console.print(f"[bold]Аналитика {payload.get('skill_slug') or slug}[/]")
+    console.print(f"  Источник: {report.get('source') or '—'}")
+    window = report.get("window") or {}
+    if window.get("since") or window.get("until"):
+        console.print(
+            f"  Окно: {window.get('since') or '—'} → {window.get('until') or '—'}"
+            + (f" ({window['days']} дн.)" if window.get("days") else "")
+        )
+    console.print(
+        f"  Запусков: {_fmt_kpi(kpis.get('runs_total'))}, "
+        f"средн. {_fmt_kpi(kpis.get('avg_ms'))} мс, "
+        f"ошибок {_fmt_kpi(kpis.get('error_rate'))}"
+    )
+    for key, title in (("dau", "DAU"), ("wau", "WAU"), ("mau", "MAU")):
+        if key in kpis:
+            console.print(f"  {title}: {_fmt_kpi(kpis[key])}")
+    for metric, points in (report["series"] or {}).items():
+        console.print(f"  Точек по «{metric}»: {len(points)}")
+    for axis, buckets in (report["breakdowns"] or {}).items():
+        top = ", ".join(
+            f"{b.get('label') or b.get('key')}={b.get('count')}" for b in buckets[:3]
+        )
+        console.print(f"  Разрез «{axis}»: {top or '—'}")
+
+
 def cmd_skill_analytics(
     slug: str = typer.Argument(..., help="Slug навыка"),
     date_from: str | None = typer.Option(
@@ -305,12 +345,23 @@ def cmd_skill_analytics(
     date_to: str | None = typer.Option(
         None, "--to", help="Конец периода (ISO 8601)"
     ),
+    days: int | None = typer.Option(
+        None, "--days", help="Окно в днях назад, 1..365 (проигрывает --from/--to)"
+    ),
+    period: str | None = typer.Option(
+        None, "--period", help="Пресет окна: 24h | 7d | 30d | 90d | 365d"
+    ),
 ) -> None:
     """Аналитика навыка (GET /skills/{slug}/analytics).
 
-    ``top_companies`` придёт пустым, если прав не хватает: backend режет
-    именно это поле, а не весь ответ — пустой список тут не значит «нет
-    данных».
+    Окно задаётся любым из трёх способов (#1451): ``--from``/``--to`` >
+    ``--days`` > ``--period``; приоритет разрешает сервер, потолок — 365 дней.
+
+    Разрез по компаниям придёт пустым, если прав не хватает: backend режет
+    именно его, а не весь ответ — пустой список тут не значит «нет данных».
+
+    ``--json`` отдаёт ответ сервера КАК ЕСТЬ (форма — его контракт); приводит
+    к единому виду только текстовый рендер.
     """
     cfg = ClientConfig.load()
     access = _common.get_access_token()
@@ -319,29 +370,16 @@ def cmd_skill_analytics(
         client = _common.make_client(cfg, access)
         try:
             resp = await client.get_skill_analytics(
-                slug, date_from=date_from, date_to=date_to
+                slug,
+                date_from=date_from,
+                date_to=date_to,
+                days=days if isinstance(days, int) else None,
+                period=period if isinstance(period, str) else None,
             )
         finally:
             await client.close()
 
-        def _render(payload: dict[str, Any]) -> None:
-            console.print(f"[bold]Аналитика {payload.get('skill_slug') or slug}[/]")
-            console.print(f"  Источник: {payload.get('source') or '—'}")
-            stats = payload.get("run_stats") or {}
-            console.print(
-                f"  Запусков: {stats.get('total', 0)}, "
-                f"средн. {stats.get('avg_ms', 0)} мс, "
-                f"ошибок {stats.get('error_rate', 0)}"
-            )
-            installs = payload.get("installs_timeseries") or []
-            console.print(f"  Точек по установкам: {len(installs)}")
-            for row in payload.get("active_users") or []:
-                console.print(
-                    f"  {row.get('window') or row.get('kind') or '—'}: "
-                    f"{row.get('count', 0)}"
-                )
-
-        emit_data(resp, text_renderer=_render)
+        emit_data(resp, text_renderer=lambda p: render_skill_analytics(p, slug))
 
     _common.run(_do())
 
