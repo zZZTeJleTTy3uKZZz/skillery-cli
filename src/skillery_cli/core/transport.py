@@ -1180,7 +1180,8 @@ class HubClient:
 
         Сверено с ``routes/company_invite_links.py::list_invite_links``:
         гейт — hub.admin ИЛИ company-admin (role.manage|company.manage в этой
-        компании). Ответ ``{"links": [InviteLinkDTO]}``.
+        компании). Ответ ``{"items": [InviteLinkDTO], "total", "page", "size"}``
+        (#1427: дубль ``links`` снят — у списка было два имени).
         """
         return await self._request(
             "GET", f"/companies/{company_id}/invite-links"
@@ -1357,12 +1358,12 @@ class HubClient:
     ) -> dict[str, Any]:
         """POST /users/bulk/change-role — смена membership.role_id.
 
-        Канон (волна 3): kebab-путь ``/users/bulk/change-role``. Старый
-        ``/users/bulk/change_role`` остаётся deprecated-алиасом.
+        Канон: kebab-путь ``/users/bulk/change-role``; snake_case-алиас снесён.
         Сверено с ``routes/users.py::bulk_change_role`` (:1095): body
-        ``BulkChangeRoleRequest`` = ``{user_ids, role_id, company_id}``;
+        ``BulkChangeRoleRequest`` = ``{ids, role_id, company_id}`` (#1429:
+        селектор массовой операции во всём API называется ``ids``);
         право hub.admin ИЛИ role.manage в этой company. Ответ
-        ``BulkActionResponse`` = ``{updated_count, skipped_ids,
+        ``BulkActionResponse`` = ``{processed, updated, skipped_ids,
         results:[{id,outcome}], affected_count, dry_run}``. Не-assignable
         роль для company-admin → 422 ROLE_NOT_ASSIGNABLE_BY_COMPANY.
         """
@@ -1370,7 +1371,7 @@ class HubClient:
             "POST",
             "/users/bulk/change-role",
             json={
-                "user_ids": user_ids,
+                "ids": user_ids,
                 "role_id": role_id,
                 "company_id": company_id,
             },
@@ -1423,14 +1424,14 @@ class HubClient:
         """POST /users/bulk/suspend — массово suspend + revoke сессий.
 
         Сверено с ``routes/users.py::bulk_suspend`` (:1250): body
-        ``BulkUserIdsRequest`` = ``{user_ids}`` (selection-by-id; ``filters``/
+        ``BulkUserIdsRequest`` = ``{ids}`` (selection-by-id; ``filters``/
         ``dry_run`` — не используем из CLI). Право hub.admin ИЛИ company-admin
         (``user.lock``/``user.update``/``company.manage``) над своими.
-        Ответ ``BulkActionResponse`` = ``{updated_count, skipped_ids,
+        Ответ ``BulkActionResponse`` = ``{processed, updated, skipped_ids,
         results:[{id,outcome}], affected_count, dry_run}``.
         """
         return await self._request(
-            "POST", "/users/bulk/suspend", json={"user_ids": user_ids}
+            "POST", "/users/bulk/suspend", json={"ids": user_ids}
         )
 
     async def bulk_activate(self, *, user_ids: list[str]) -> dict[str, Any]:
@@ -1440,7 +1441,7 @@ class HubClient:
         ответ, что и у :meth:`bulk_suspend`.
         """
         return await self._request(
-            "POST", "/users/bulk/activate", json={"user_ids": user_ids}
+            "POST", "/users/bulk/activate", json={"ids": user_ids}
         )
 
     async def revoke_user_sessions(self, user_id: str) -> dict[str, Any]:
@@ -1671,10 +1672,19 @@ class HubClient:
 
     # === Skill review (ratings / comments / contributors) ===
     async def rate_skill(self, skill_id: str, score: int) -> dict[str, Any]:
-        """POST /skills/{skill_id}/ratings — upsert (skill_id, user_id) → score."""
+        """PUT /skills/{id}/ratings/me — своя оценка навыка (идемпотентный upsert).
+
+        Оценка — СОСТОЯНИЕ («моя оценка равна N»), а не событие, поэтому `PUT`
+        на именованный подресурс `me`, а не `POST` на коллекцию: повторный
+        вызов не плодит записей и безопасен при ретрае по таймауту.
+
+        Раньше здесь стоял `POST /skills/{id}/ratings` — такого адреса на
+        сервере нет, и выставление оценки из CLI молча отвечало 404. Поймал
+        контрактный гейт `tests/contract`, а не пользователь.
+        """
         return await self._request(
-            "POST",
-            f"/skills/{skill_id}/ratings",
+            "PUT",
+            f"/skills/{skill_id}/ratings/me",
             json={"score": score},
         )
 

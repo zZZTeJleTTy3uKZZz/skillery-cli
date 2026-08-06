@@ -266,7 +266,7 @@ def cmd_member_change_role(
         def _render(p: dict[str, Any]) -> None:
             results = p.get("results") or []
             outcome = results[0]["outcome"] if results else (
-                "updated" if p.get("updated_count") else "skipped"
+                "updated" if p.get("updated") else "skipped"
             )
             if outcome == "updated":
                 console.print(
@@ -387,11 +387,16 @@ def cmd_member_reset_password(
 
 
 def _bulk_status_outcome(p: dict[str, Any], user_id: str) -> str:
-    """Outcome для одиночной bulk-операции (suspend/activate) над user_id."""
+    """Outcome для одиночной bulk-операции (suspend/activate) над user_id.
+
+    #1429: запасная ветка читает ``updated`` — счётчик изменённых строк во
+    всех bulk-ответах API теперь называется одинаково (было ``updated_count``
+    только здесь).
+    """
     results = p.get("results") or []
     if results:
         return results[0].get("outcome", "—")
-    return "updated" if p.get("updated_count") else "skipped"
+    return "updated" if p.get("updated") else "skipped"
 
 
 def cmd_member_suspend(

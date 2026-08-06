@@ -9,7 +9,7 @@
   ``DELETE /collections/{slug}/skills/{id}`` / ``PUT /collections/{slug}/tags``
   (``routes/collections.py``).
 - M-3: ``POST /users/bulk/suspend`` / ``/bulk/activate`` (body
-  ``BulkUserIdsRequest{user_ids}``) + ``DELETE /users/{id}/sessions``
+  ``BulkUserIdsRequest{ids}``) + ``DELETE /users/{id}/sessions``
   (``routes/users.py`` :1250/:1277/:1009).
 - M-4: ``GET /permissions`` / ``GET /roles/{id}/permissions`` (плоский list) /
   ``PUT /roles/{id}/permissions`` (body ``{permission_slugs}``,
@@ -47,10 +47,13 @@ def _user_dto(uid: str = "5", email: str = "m@acme.ru") -> dict:
 
 
 def _bulk_resp() -> dict:
+    # #1429: канон-конверт массовой операции — processed/updated/…
     return {
-        "updated_count": 1,
+        "processed": 1,
+        "updated": 1,
         "skipped_ids": [],
-        "results": [{"id": "5", "outcome": "updated"}],
+        "errors": [],
+        "results": [{"id": "5", "ok": True, "outcome": "updated"}],
         "affected_count": 1,
         "dry_run": False,
     }
@@ -208,7 +211,7 @@ async def test_set_collection_tags_puts_tag_ids() -> None:
 
 
 # ===================== M-3 — bulk suspend/activate + revoke-sessions =====================
-async def test_bulk_suspend_posts_user_ids() -> None:
+async def test_bulk_suspend_posts_ids() -> None:
     with respx.mock(base_url=_BASE) as router:
         route = router.post("/users/bulk/suspend").mock(
             return_value=Response(200, json=_bulk_resp())
@@ -219,11 +222,11 @@ async def test_bulk_suspend_posts_user_ids() -> None:
         finally:
             await client.close()
         body = _json.loads(route.calls.last.request.content)
-        assert body == {"user_ids": ["5"]}
-        assert r["updated_count"] == 1
+        assert body == {"ids": ["5"]}
+        assert r["updated"] == 1
 
 
-async def test_bulk_activate_posts_user_ids() -> None:
+async def test_bulk_activate_posts_ids() -> None:
     with respx.mock(base_url=_BASE) as router:
         route = router.post("/users/bulk/activate").mock(
             return_value=Response(200, json=_bulk_resp())
@@ -234,7 +237,9 @@ async def test_bulk_activate_posts_user_ids() -> None:
         finally:
             await client.close()
         body = _json.loads(route.calls.last.request.content)
-        assert body == {"user_ids": ["5", "6"]}
+        # #1429: селектор массовой операции един для всех коллекций — `ids`.
+        # Прежний `user_ids` был четвёртой схемой bulk из четырёх.
+        assert body == {"ids": ["5", "6"]}
 
 
 async def test_revoke_user_sessions_deletes_collection() -> None:

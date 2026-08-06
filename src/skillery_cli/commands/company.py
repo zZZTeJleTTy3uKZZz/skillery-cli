@@ -309,7 +309,8 @@ def cmd_invite_links_list(
         def _render(p: dict[str, Any]) -> None:
             # Канон (волна 3): список = ``items``; ``links`` сохранён
             # бэкендом как deprecated-дубль (fallback).
-            links = p.get("items") or p.get("links") or []
+            # #1427: у списка одно имя — ``items``; дубль ``links`` снят.
+            links = p.get("items") or []
             if not links:
                 console.print(f"[yellow]Ссылок нет[/] (company={cid})")
                 return

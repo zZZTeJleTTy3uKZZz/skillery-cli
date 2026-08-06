@@ -26,9 +26,9 @@ def _fake_factory(monkeypatch: pytest.MonkeyPatch, fake_client: MagicMock) -> No
 
 # ---------------------- HubClient methods ----------------------
 @pytest.mark.asyncio
-async def test_hubclient_rate_skill_posts_score() -> None:
+async def test_hubclient_rate_skill_puts_score() -> None:
     with respx.mock(base_url="http://localhost:8000") as router:
-        route = router.post("/skills/slk_x/ratings").mock(
+        route = router.put("/skills/slk_x/ratings/me").mock(
             return_value=Response(
                 200,
                 json={
