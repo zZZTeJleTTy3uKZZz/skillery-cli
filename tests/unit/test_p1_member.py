@@ -12,7 +12,7 @@
 - ``DELETE /memberships`` (routes/memberships.py:32) — query
   ``user_id``+``company_id``, 204; право ``user.remove``.
 - ``POST /users/bulk/change-role`` (routes/users.py:1095) —
-  ``{user_ids,role_id,company_id}`` → ``BulkActionResponse``; право
+  ``{ids,role_id,company_id}`` → ``BulkActionResponse``; право
   ``role.manage``|hub.admin (kebab-канон волны 3; ``change_role`` deprecated).
 - ``PUT /users/{id}/lock|unlock`` (routes/users.py:842,888) — lock body
   ``{reason?}``; ответ ``UserListItemDTO`` (PUT-канон волны 3; POST deprecated).
@@ -134,15 +134,17 @@ async def test_transport_remove_membership_uses_canon_path() -> None:
 
 
 async def test_transport_bulk_change_role_body() -> None:
-    """POST /users/bulk/change-role — {user_ids:[id], role_id, company_id}."""
+    """POST /users/bulk/change-role — {ids:[id], role_id, company_id} (#1429)."""
     with respx.mock(base_url="http://localhost:8000") as router:
         route = router.post("/users/bulk/change-role").mock(
             return_value=Response(
                 200,
                 json={
-                    "updated_count": 1,
+                    "processed": 1,
+                    "updated": 1,
                     "skipped_ids": [],
-                    "results": [{"id": "5", "outcome": "updated"}],
+                    "errors": [],
+                    "results": [{"id": "5", "ok": True, "outcome": "updated"}],
                     "affected_count": 1,
                     "dry_run": False,
                 },
@@ -156,8 +158,8 @@ async def test_transport_bulk_change_role_body() -> None:
         finally:
             await client.close()
         body = _json.loads(route.calls.last.request.content)
-        assert body == {"user_ids": ["5"], "role_id": "2", "company_id": "7"}
-        assert resp["updated_count"] == 1
+        assert body == {"ids": ["5"], "role_id": "2", "company_id": "7"}
+        assert resp["updated"] == 1
 
 
 async def test_transport_lock_user_sends_reason() -> None:
@@ -516,9 +518,11 @@ def test_cmd_member_change_role_single_user_via_bulk(
             {"user_ids": user_ids, "role_id": role_id, "company_id": company_id}
         )
         return {
-            "updated_count": 1,
+            "processed": 1,
+            "updated": 1,
             "skipped_ids": [],
-            "results": [{"id": "5", "outcome": "updated"}],
+            "errors": [],
+            "results": [{"id": "5", "ok": True, "outcome": "updated"}],
             "affected_count": 1,
             "dry_run": False,
         }

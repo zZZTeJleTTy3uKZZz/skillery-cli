@@ -50,9 +50,11 @@ async def _noop_close() -> None:
 
 def _bulk_ok() -> dict[str, Any]:
     return {
-        "updated_count": 1,
+        "processed": 1,
+        "updated": 1,
         "skipped_ids": [],
-        "results": [{"id": "5", "outcome": "updated"}],
+        "errors": [],
+        "results": [{"id": "5", "ok": True, "outcome": "updated"}],
         "affected_count": 1,
         "dry_run": False,
     }

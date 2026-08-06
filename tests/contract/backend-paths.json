@@ -39,6 +39,9 @@
   "/auth/mfa": [
    "GET"
   ],
+  "/auth/mfa/backup-codes": [
+   "POST"
+  ],
   "/auth/mfa/disable": [
    "POST"
   ],
@@ -166,10 +169,10 @@
   "/dashboard/series": [
    "GET"
   ],
-  "/dashboard/summary": [
+  "/dashboard/stats": [
    "GET"
   ],
-  "/dashboard/{kind}/stats": [
+  "/dashboard/summary": [
    "GET"
   ],
   "/devices/{id}/skills/{skill_id}": [
@@ -198,7 +201,7 @@
    "GET",
    "POST"
   ],
-  "/files/{id}": [
+  "/files/{key}": [
    "GET"
   ],
   "/healthz": [
@@ -408,8 +411,8 @@
    "GET",
    "POST"
   ],
-  "/skills/{id}/ratings": [
-   "POST"
+  "/skills/{id}/ratings/me": [
+   "PUT"
   ],
   "/skills/{id}/ratings/summary": [
    "GET"
@@ -519,13 +522,13 @@
    "DELETE",
    "GET"
   ],
-  "/tasks/{id}/cancel": [
+  "/tasks/{id}/cancellations": [
    "POST"
   ],
   "/tasks/{id}/history": [
    "GET"
   ],
-  "/tasks/{id}/retry": [
+  "/tasks/{id}/retries": [
    "POST"
   ],
   "/telemetry/events": [
