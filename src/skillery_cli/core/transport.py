@@ -1672,10 +1672,19 @@ class HubClient:
 
     # === Skill review (ratings / comments / contributors) ===
     async def rate_skill(self, skill_id: str, score: int) -> dict[str, Any]:
-        """POST /skills/{skill_id}/ratings — upsert (skill_id, user_id) → score."""
+        """PUT /skills/{id}/ratings/me — своя оценка навыка (идемпотентный upsert).
+
+        Оценка — СОСТОЯНИЕ («моя оценка равна N»), а не событие, поэтому `PUT`
+        на именованный подресурс `me`, а не `POST` на коллекцию: повторный
+        вызов не плодит записей и безопасен при ретрае по таймауту.
+
+        Раньше здесь стоял `POST /skills/{id}/ratings` — такого адреса на
+        сервере нет, и выставление оценки из CLI молча отвечало 404. Поймал
+        контрактный гейт `tests/contract`, а не пользователь.
+        """
         return await self._request(
-            "POST",
-            f"/skills/{skill_id}/ratings",
+            "PUT",
+            f"/skills/{skill_id}/ratings/me",
             json={"score": score},
         )
 

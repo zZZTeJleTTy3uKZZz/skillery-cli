@@ -237,7 +237,9 @@ async def test_bulk_activate_posts_ids() -> None:
         finally:
             await client.close()
         body = _json.loads(route.calls.last.request.content)
-        assert body == {"user_ids": ["5", "6"]}
+        # #1429: селектор массовой операции един для всех коллекций — `ids`.
+        # Прежний `user_ids` был четвёртой схемой bulk из четырёх.
+        assert body == {"ids": ["5", "6"]}
 
 
 async def test_revoke_user_sessions_deletes_collection() -> None:
