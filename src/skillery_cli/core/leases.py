@@ -143,7 +143,7 @@ def current_subject(access_token: str | None = None) -> str | None:
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True, slots=True)
 class CapabilityRequirement:
-    """Одна строка реестра: способность, её носитель и нужен ли ей лиз."""
+    """Одна строка реестра: способность, её носитель, лиз и состояние права."""
 
     name: str
     requires_lease: bool = False
@@ -151,6 +151,22 @@ class CapabilityRequirement:
     skill_id: str = ""
     skill: str = ""
     """Slug навыка-носителя, если он известен (резолвится по ``/me/installs``)."""
+    granted: bool = True
+    """Действует ли право СЕЙЧАС — последнее, что сказал хаб.
+
+    #1486. Требование (``requires_lease``) липкое и не удаляется никогда, а
+    вот право приходит и уходит: способность пропала из ``/me/capabilities``
+    или попала в ``denied`` — значит гранта нет. Два разных факта в одной
+    строке нужны потому, что решения по ним ПРОТИВОПОЛОЖНЫ: гейт запуска
+    смотрит на требование (иначе отзыв снимал бы проверку), а снятие
+    навыка-носителя — на право (иначе отзыв одной способности сносил бы
+    навык, нужный другой, — прямо запрещено §6.3 контракта).
+
+    Дефолт ``True`` — осознанно: строка из файла старого CLI ключа не несёт, и
+    трактовать её как «право отозвано» значило бы дать разрешение на УДАЛЕНИЕ
+    файлов по умолчанию. Ошибка в эту сторону необратима, в обратную — навык
+    просто останется на диске до следующего такта.
+    """
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -158,6 +174,7 @@ class CapabilityRequirement:
             "capability_id": self.capability_id,
             "skill_id": self.skill_id,
             "skill": self.skill,
+            "granted": bool(self.granted),
         }
 
 
@@ -218,6 +235,9 @@ class RequirementsIndex:
                     capability_id=str(row.get("capability_id") or ""),
                     skill_id=str(row.get("skill_id") or ""),
                     skill=str(row.get("skill") or ""),
+                    # Ключа нет (файл прежнего CLI) ⇒ считаем право живым: см.
+                    # обоснование дефолта в :class:`CapabilityRequirement`.
+                    granted=bool(row.get("granted", True)),
                 )
         return idx
 
@@ -244,6 +264,75 @@ class RequirementsIndex:
         """Все способности реестра — набор для ``PUT /me/leases`` (см. lease_sync)."""
         return tuple(sorted(self.items))
 
+    def carried_by(self, slug: str, skill_id: str | None = None) -> tuple[str, ...]:
+        """Все способности навыка, что известны реестру (независимо от права)."""
+        wanted_id = str(skill_id or "").strip()
+        return tuple(
+            sorted(
+                name
+                for name, row in self.items.items()
+                if (slug and row.skill == slug) or (wanted_id and row.skill_id == wanted_id)
+            )
+        )
+
+    def held_by(
+        self,
+        slug: str,
+        skill_id: str | None = None,
+        *,
+        exclude: tuple[str, ...] | frozenset[str] = (),
+    ) -> tuple[str, ...]:
+        """#1486: способности, которые ДЕРЖАТ этот навык на диске.
+
+        Востребованной считается способность, право на которую по последним
+        данным хаба действует (``granted``). Именно этот набор запрещает
+        снятие навыка-носителя: пока он непуст, файлы обязаны лежать, потому
+        что их есть чем законно исполнять.
+
+        ``exclude`` — способность, которую снимают ПРЯМО СЕЙЧАС (``skillery
+        capability remove <name>``): она не может держать навык сама от себя,
+        иначе ни одно снятие никогда бы не прошло.
+        """
+        skip = frozenset(exclude)
+        return tuple(
+            name
+            for name in self.carried_by(slug, skill_id)
+            if name not in skip and self.items[name].granted
+        )
+
+    def revoke(self, name: str) -> bool:
+        """Пометить право одной способности снятым. ``True`` — если что-то изменилось."""
+        row = self.items.get(name)
+        if row is None or not row.granted:
+            return False
+        self.items[name] = CapabilityRequirement(
+            name=row.name,
+            requires_lease=row.requires_lease,
+            capability_id=row.capability_id,
+            skill_id=row.skill_id,
+            skill=row.skill,
+            granted=False,
+        )
+        return True
+
+    def mark_revoked(self, present: frozenset[str] | set[str]) -> tuple[str, ...]:
+        """Право отозвано у всех, кого хаб в ответе НЕ назвал. Вернёт их имена.
+
+        Зовётся только там, где хаб ЯВНО ответил (витрина ``/me/capabilities``,
+        ``denied`` батча) — недоступность сети сюда доходить не должна (§7):
+        «мы не знаем» и «права нет» — разные вещи, и спутать их значило бы
+        сносить навыки при каждом обрыве связи.
+
+        Строку НЕ удаляем: требование лиза липкое (см. docstring модуля), а
+        снятое право — это ровно то, что нужно помнить, чтобы гейт остался.
+        """
+        revoked = [
+            name
+            for name in list(self.items)
+            if name not in present and self.revoke(name)
+        ]
+        return tuple(sorted(revoked))
+
     # --- запись ---------------------------------------------------------
     def merge(self, rows: list[CapabilityRequirement]) -> RequirementsIndex:
         """Влить свежие строки из ``/me/capabilities``. Отсутствующие — НЕ трогать.
@@ -264,6 +353,9 @@ class RequirementsIndex:
                     capability_id=row.capability_id or old.capability_id,
                     skill_id=row.skill_id or old.skill_id,
                     skill=row.skill or old.skill,
+                    # Свежая строка приезжает ТОЛЬКО из явного ответа хаба —
+                    # значит она и есть последнее слово о праве.
+                    granted=row.granted,
                 )
             self.items[row.name] = merged
         return self
@@ -403,6 +495,27 @@ def check_skill_run(slug: str, *, skill_id: str | None = None) -> LeaseDenied | 
     return worst
 
 
+def removal_blockers(
+    slug: str,
+    *,
+    skill_id: str | None = None,
+    exclude: tuple[str, ...] = (),
+) -> tuple[str, ...]:
+    """#1486: кто держит навык на диске. Пусто ⇒ снимать можно.
+
+    ЕДИНСТВЕННАЯ реализация правила §6.3 контракта — её зовут ОБА пути снятия
+    (задание ``action=remove`` из очереди устройства и ручной ``skillery
+    capability remove``). Вторая копия этого условия разъехалась бы молча: в
+    одном из путей отзыв одной способности снова начал бы сносить навык,
+    нужный другой, и заметил бы это только пользователь.
+
+    Битый/отсутствующий реестр даёт пустой список, то есть снятие проходит.
+    Направление ошибки то же, что у :meth:`RequirementsIndex.load`: гарантию
+    «нельзя исполнять» даёт лиз, а не наличие файлов на диске.
+    """
+    return RequirementsIndex.load().held_by(slug, skill_id, exclude=exclude)
+
+
 __all__ = [
     "LEASE_REFRESH_FRACTION",
     "REQUIREMENTS_FILENAME",
@@ -411,5 +524,6 @@ __all__ = [
     "check_skill_run",
     "current_subject",
     "lease_store",
+    "removal_blockers",
     "state_dir",
 ]

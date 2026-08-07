@@ -3938,6 +3938,39 @@ async def _reconcile_device_queue(
             # Отдаётся только демонам, заявившим supports_removal (backend-гейт),
             # поэтому старый CLI сюда не попадёт и навык не переустановит.
             if str(item.get("action") or "install") == "remove":
+                # #1486, §6.3 контракта лиза: ОТЗЫВ ≠ СНЯТИЕ. Лиз отвечает,
+                # можно ли ИСПОЛНЯТЬ, а задание remove — должны ли ЛЕЖАТЬ
+                # файлы. Пока навык-носитель держит хотя бы одна способность с
+                # действующим правом, снимать его нельзя: иначе отзыв
+                # `grok_transcriber` убил бы `grok_ask` из того же пакета,
+                # право на который никто не отзывал.
+                blockers = ()
+                with suppress(Exception):  # реестра нет/битый ⇒ прежнее поведение
+                    from skillery_cli.core.leases import removal_blockers
+
+                    blockers = removal_blockers(str(ref), skill_id=sid)
+                if blockers:
+                    held = ", ".join(blockers)
+                    reason = (
+                        f"навык {ref} не снят: его держат способности с "
+                        f"действующим доступом ({held}). Отзыв одной "
+                        "способности не снимает навык, нужный другой"
+                    )
+                    with suppress(Exception):
+                        _ilog.warning("снятие навыка отклонено (носитель занят)", extra={
+                            "context": {"step": "remove", "skill": str(ref),
+                                        "initiator": "web-queue", "held_by": list(blockers)}})
+                    # Рапортуем ОТКАЗ, а не успех: иначе хаб записал бы навык
+                    # снятым, а файлы остались бы на машине — состояние
+                    # устройства в вебе стало бы неправдой. Счётчик попыток
+                    # (лимит 3) не даёт крутить это заданию вечно.
+                    with suppress(Exception):
+                        await client.report_device_apply(
+                            slug=str(ref), ok=False, error=reason, skill_id=sid
+                        )
+                    attempts[key] = tried + 1
+                    report["skipped"].append(ref)
+                    continue
                 try:
                     # revert CLI/MCP навыка ДО remove — при purge стор (и его
                     # манифест) удаляется, revert читает манифест пока он на месте.

@@ -157,7 +157,7 @@ async def sync_leases(client: Any, *, device_id: str) -> dict[str, Any]:
     журнала и тестов.
     """
     summary: dict[str, Any] = {
-        "granted": 0, "issued": [], "denied": [], "dropped": [],
+        "granted": 0, "issued": [], "denied": [], "dropped": [], "revoked": [],
         "refreshed": False, "error": None,
     }
     subject = current_subject()
@@ -187,6 +187,12 @@ async def sync_leases(client: Any, *, device_id: str) -> dict[str, Any]:
     index.merge(rows)
     granted = {row.name for row in rows}
     summary["granted"] = len(granted)
+
+    # #1486: витрина — ЯВНЫЙ ответ хаба, поэтому пропажа из неё значит «права
+    # нет», а не «мы не знаем» (сеть отвалилась бы выше, ничего не тронув).
+    # Помечаем право снятым, но СТРОКУ НЕ УДАЛЯЕМ: требование лиза липкое, и
+    # именно этот факт потом решает, держит ли способность навык на диске.
+    summary["revoked"] = list(index.mark_revoked(frozenset(granted)))
 
     # 2. Второй рубеж отзыва: способность пропала из ответа хаба ⇒ права нет.
     #    Это ЯВНЫЙ ответ, а не молчание сети (сеть отвалилась бы выше), поэтому
@@ -282,6 +288,10 @@ async def sync_leases(client: Any, *, device_id: str) -> dict[str, Any]:
         # витрины. Причину (`code`) наружу не различаем: решение владельца
         # §12.Д — NO_GRANT и GRANT_REVOKED для пользователя одно и то же.
         store.drop(name, hub_now=stamp)
+        # Поимённый отказ — такой же явный ответ, как пропажа из витрины:
+        # право снято, и навык-носитель этой способностью больше не держится.
+        if index.revoke(name):
+            summary["revoked"].append(name)
         summary["denied"].append(name)
         _LOG.info(
             "лиз «%s» не выдан: %s", name, denial.get("code"),
