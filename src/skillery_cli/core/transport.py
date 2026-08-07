@@ -154,6 +154,12 @@ class HubClient:
     ) -> None:
         self._access_token = access_token
         self._on_refresh = on_token_refresh
+        #: #1490: время ХАБА из заголовка ``Date`` последнего успешного ответа
+        #: (unix-секунды). Контракт лиза §5: смещение считается от часов хаба, а
+        #: монотонный пол `hub_time_floor` поднимается только подтверждённым
+        #: хабом временем — иначе весь контур снимается переводом часов назад.
+        #: Живёт в транспорте, потому что заголовок виден только здесь.
+        self.last_hub_time: int | None = None
         # Храним для ДИАГНОСТИКИ сети: голый «ConnectError: » без хоста ничего не
         # говорит о том, куда именно не достучались (см. ``_network_error``).
         self._base_url = base_url or ""
@@ -374,11 +380,30 @@ class HubClient:
                 self._access_token = new_tokens[0]
                 resp = await self._send(method, url, _merged_headers(), **kwargs)
             # Если refresh не сработал — оставим 401, ниже выбросим понятный ApiError.
+        self._remember_hub_time(resp)
         if resp.status_code >= 400:
             raise self._parse_error_response(resp)
         if resp.status_code == 204 or not resp.content:
             return None
         return resp.json()
+
+    def _remember_hub_time(self, resp: httpx.Response) -> None:
+        """Запомнить время хаба из ``Date`` (#1490, контракт лиза §5).
+
+        Берётся с ЛЮБОГО ответа, включая 4xx: заголовок проставляет сервер, и
+        403 «права нет» подтверждает время ровно так же, как 200. Битый или
+        отсутствующий ``Date`` — молча пропускаем: часы важны, но не настолько,
+        чтобы из-за них падал запрос.
+        """
+        raw = resp.headers.get("Date")
+        if not raw:
+            return
+        try:
+            from email.utils import parsedate_to_datetime
+
+            self.last_hub_time = int(parsedate_to_datetime(raw).timestamp())
+        except Exception:  # noqa: BLE001 — экзотический формат даты не наша беда
+            return
 
     # --- REST-20 (#1452): мутация адресуется ЧИСЛОВЫМ id ---
     #
@@ -1054,6 +1079,92 @@ class HubClient:
         data = await self._request("GET", "/me/installs")
         items = data.get("items") if isinstance(data, dict) else None
         return list(items) if items else []
+
+    # --- #1490: способности и лизы ------------------------------------
+    #
+    # Три вызова, и ни один из них не делается на запуске навыка: их зовёт
+    # ТОЛЬКО демон в такте тяжёлой сверки. Проверка права в момент
+    # использования локальная и офлайн (контракт лиза §3), сеть здесь — про
+    # ОБНОВЛЕНИЕ доказательства, а не про его предъявление.
+
+    async def list_my_capabilities(
+        self, *, supports_lease: bool = True, size: int = 200
+    ) -> list[dict[str, Any]]:
+        """GET /me/capabilities — что мне РАЗРЕШЕНО (рабочий набор демона, #1484).
+
+        ``supports_lease=true`` обязателен и по умолчанию включён: сервер
+        fail-closed не отдаёт способности с ``requires_lease`` клиенту, не
+        объявившему поддержку (контракт лиза §8). Клиент, который умеет
+        проверять лиз, обязан заявить об этом — иначе платная способность до
+        него просто не доедет.
+
+        Ответ — страница ``{items, total, page, size}``; страницы добираем, пока
+        не выбран ``total``. Набор способностей одного пользователя мал, но
+        обрезать его молча первой страницей значило бы терять лиз на
+        способности, которая не влезла.
+        """
+        out: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            data = await self._request(
+                "GET",
+                "/me/capabilities",
+                params={
+                    "supports_lease": "true" if supports_lease else "false",
+                    "page": page,
+                    "size": size,
+                },
+            )
+            if not isinstance(data, dict):
+                break
+            items = list(data.get("items") or [])
+            out.extend(items)
+            total = int(data.get("total") or 0)
+            if not items or len(out) >= total:
+                break
+            page += 1
+        return out
+
+    async def replace_my_leases(
+        self, *, capabilities: list[str], device_id: str, supports_lease: bool = True
+    ) -> dict[str, Any]:
+        """PUT /me/leases — БАТЧ: заявить набор способностей, получить набор лизов.
+
+        Один запрос на такт, а не N: демон обновляет НАБОР, и N отдельных
+        ``POST /capabilities/{id}/leases`` дали бы N раундтрипов и N резолвов
+        прав на каждое устройство парка (контракт лиза §4.1).
+
+        Ответ — ``{"issued": [...], "denied": [...]}``. **Частичный отказ —
+        норма** (REST-32): одна отозванная способность не роняет батч, иначе
+        отзыв единственного права молча оставил бы устройство без всех
+        остальных лизов и через сутки положил бы всю локальную работу.
+        """
+        data = await self._request(
+            "PUT",
+            "/me/leases",
+            json={
+                "device_id": device_id,
+                "capabilities": list(capabilities),
+                "supports_lease": bool(supports_lease),
+            },
+        )
+        if not isinstance(data, dict):
+            return {"issued": [], "denied": []}
+        return {
+            "issued": list(data.get("issued") or []),
+            "denied": list(data.get("denied") or []),
+        }
+
+    async def fetch_lease_jwks(self) -> dict[str, Any]:
+        """GET /.well-known/jwks.json — публичные ключи проверки лиза.
+
+        Токена не требует и не должен (RFC 8615 + контракт лиза §2.1): проверка
+        идёт офлайн на устройстве, зачастую ещё не залогиненном, и закрытый
+        авторизацией JWKS сделал бы её невозможной ровно там, ради чего она
+        существует.
+        """
+        data = await self._request("GET", "/.well-known/jwks.json")
+        return data if isinstance(data, dict) else {}
 
     async def get_skill(self, slug: str) -> dict[str, Any]:
         return await self._request("GET", f"/skills/{slug}")

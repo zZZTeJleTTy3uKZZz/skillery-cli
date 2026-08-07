@@ -3632,6 +3632,39 @@ def cmd_sync(
     _run(_do())
 
 
+async def _reconcile_capability_leases(cfg: ClientConfig, access: str) -> dict:
+    """#1490: обновить набор лизов способностей в такте тяжёлой сверки.
+
+    Тонкая обёртка над :func:`skillery_cli.core.lease_sync.sync_leases` — вся
+    политика (порог обновления как доля TTL, различение «хаб ответил нет» и
+    «хаб недоступен», монотонный пол времени) живёт там, здесь только
+    построение клиента и гарантия, что демон от лизов не умрёт.
+
+    Почему best-effort: на этом же такте едут очередь заданий устройства и
+    доставка outbox'а. Отсутствие свежего лиза — это отказ ОДНОЙ способности
+    через сутки, а упавший такт — молчащее устройство прямо сейчас.
+    """
+    from skillery_cli.core.identity import device_uid
+    from skillery_cli.core.lease_sync import sync_leases
+
+    client = HubClient(
+        base_url=cfg.base_url, access_token=access,
+        on_token_refresh=_make_refresh_callback(cfg),
+    )
+    try:
+        return await sync_leases(client, device_id=device_uid())
+    except Exception as exc:  # noqa: BLE001 — демон не умирает из-за лизов
+        from skillery_cli.core.logging_setup import get_logger
+
+        get_logger("lease").warning(
+            "обновление лизов не прошло",
+            extra={"context": {"error": str(exc) or type(exc).__name__}},
+        )
+        return {"error": str(exc) or type(exc).__name__}
+    finally:
+        await client.close()
+
+
 async def _reconcile_hub_installs(
     cfg: ClientConfig,
     access: str,
