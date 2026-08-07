@@ -52,6 +52,7 @@ fail-open наизнанку: удаление ``leases.json`` снимало б
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -298,10 +299,8 @@ class RequirementsIndex:
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 json.dump(payload, fh, ensure_ascii=False, indent=2)
-            try:
+            with contextlib.suppress(OSError):  # экзотические ФС / Windows
                 os.chmod(tmp, _FILE_MODE)
-            except OSError:  # экзотические ФС / Windows
-                pass
             os.replace(tmp, self.path)
         except BaseException:
             tmp.unlink(missing_ok=True)

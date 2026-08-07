@@ -280,7 +280,10 @@ def test_auto_update_no_hub_skills(
     assert cfg.last_auto_update_at is not None
 
 
-# ---- Демон вызывает ОБА прохода: device-sync + auto-update-latest ----
+# ---- Демон вызывает ВСЕ проходы тяжёлой сверки ----
+# #1490: третьим встал такт лизов способностей. Проверяется здесь, а не
+# отдельным тестом, потому что вопрос ровно один — из чего состоит тяжёлый
+# такт; два ответа на него разъехались бы при следующей правке.
 @pytest.mark.asyncio
 async def test_daemon_reconcile_runs_both_passes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -318,8 +321,14 @@ async def test_daemon_reconcile_runs_both_passes(
 
     monkeypatch.setattr(main_mod, "_daemon_cli_self_upgrade", _no_self_upgrade)
 
+    async def _fake_leases(cfg, access):  # noqa: ANN001
+        calls.append("capability-leases")
+        return {"granted": 0}
+
+    monkeypatch.setattr(main_mod, "_reconcile_capability_leases", _fake_leases)
+
     runner = daemon_mod._build_runner(interval_seconds=60)
     assert runner._reconcile is not None
     await runner._reconcile()
 
-    assert calls == ["device-sync", "auto-update-latest"]
+    assert calls == ["device-sync", "auto-update-latest", "capability-leases"]
