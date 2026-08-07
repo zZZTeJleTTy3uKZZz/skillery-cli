@@ -5503,6 +5503,19 @@ def cmd_publish(
         _run_publish_denylist_gate(skill_dir, force=force)
 
     version = tag.lstrip("v")
+    # #1489: способности объявляет манифест навыка. Разбираем ДО сборки и до
+    # сети — опечатка в [[capabilities]] обязана стоить один разбор TOML, а не
+    # весь проход публикации с 422 в конце.
+    from skillery_cli.core.capability_manifest import (
+        CapabilityManifestError,
+        capabilities_of,
+    )
+
+    try:
+        declared_capabilities = capabilities_of(skill_dir)
+    except CapabilityManifestError as exc:
+        emit_error("VALIDATION", str(exc))
+        raise typer.Exit(2) from exc
     manifest = build_manifest(skill_dir, version=version)
     actual_commit = commit_sha or git_commit_sha(skill_dir)
     if not actual_commit:
@@ -5560,6 +5573,11 @@ def cmd_publish(
             "cli": manifest.cli,
             "mcp": manifest.mcp,
             "runtime_dependencies": manifest.runtime_dependencies,
+            # #1489: [[capabilities]] — из ЭТОГО объявления хаб выводит реестр
+            # способностей версии (sync_capabilities_from_manifest). Без поля
+            # опубликованная через CLI версия не завела бы ни одной строки, и
+            # выдать способность отдельно от навыка стало бы невозможно.
+            "capabilities": declared_capabilities,
         },
     }
     if dry_run:
@@ -5580,6 +5598,19 @@ def cmd_publish(
         )
         try:
             result = await client.publish_skill(payload)
+        except ApiError as exc:
+            # #1489: 409 CAPABILITY_NAME_CONFLICT — единственный отказ, который
+            # автор навыка не в состоянии понять по коду: локально всё
+            # валидно, а имя занято ЧУЖИМ навыком, о чём знает только хаб.
+            # Голый код здесь = тикет в поддержку, поэтому объясняем причину и
+            # называем следующее действие.
+            from skillery_cli.commands.capability import explain_api_error
+
+            hint = explain_api_error(exc)
+            if hint is None:
+                raise
+            emit_error(exc.code, hint, status_code=exc.status_code)
+            raise typer.Exit(1) from exc
         finally:
             await client.close()
         emit_data(
@@ -6278,6 +6309,11 @@ def build_app() -> typer.Typer:
     )
     # Гранты доступа: у backend гейтится даже GET, поэтому гейтим целиком.
     _access_mod.register(app, can_manage=cfg.has_permission("skill.manage"))
+    # #1489: способности. Чтение и своя машина — всем (это ответ на вопрос
+    # «что мне разрешено»); выдача/отзыв прав — под гейтом навыка-носителя.
+    from skillery_cli.commands import capability as _capability_mod
+
+    _capability_mod.register(app, can_manage=cfg.has_permission("skill.manage"))
     # Конфигурация хаба — только hub.admin.
     _system_mod.register(app, can_manage=cfg.is_hub_admin())
     # Сессии и профиль — всегда: это про СВОЙ аккаунт, прав не требует.

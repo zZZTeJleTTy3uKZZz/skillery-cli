@@ -169,6 +169,18 @@ def validate_scaffolded_skill(skill_dir: Path | str) -> list[str]:
                     "tooling-навык должен нести CLI или MCP "
                     "([[cli]]/[[mcp]] в _skill_meta.toml)."
                 )
+            # #1489: блок [[capabilities]] проверяем ЗДЕСЬ же, а не только на
+            # публикации: узнать про опечатку в момент генерации/правки навыка
+            # дешевле, чем в конце длинного прохода publish.
+            from skillery_cli.core.capability_manifest import (
+                CapabilityManifestError,
+                parse_capabilities,
+            )
+
+            try:
+                parse_capabilities(data)
+            except CapabilityManifestError as exc:
+                errors.append(f"_skill_meta.toml: {exc}")
     return errors
 
 
