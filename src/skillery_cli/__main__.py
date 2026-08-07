@@ -3683,6 +3683,20 @@ async def _reconcile_hub_installs(
 
     Возвращает report ``{downloaded, updated, skipped, failed}`` (списки имён).
     Используется и ``cmd_pull``, и best-effort reconcile в демоне.
+
+    ⚠️ **Односторонняя сверка — сознательно (#1486).** Пропажа навыка из
+    ``/me/installs`` здесь НЕ приводит к удалению, и это не недоделка. Три
+    причины, каждой достаточно:
+
+    1. ``/me/installs`` — не набор, а ОКНО: бэкенд считает его из последних
+       500 install-событий актора (``routes/me.py``). Навык, поставленный
+       давно, из ответа выпадает сам собой — «удалять отсутствующее» значило
+       бы стирать рабочие навыки по расписанию активности пользователя.
+    2. Сюда попадают и ЧУЖИЕ установки: ``install --path``, ``--from-git``,
+       project-scope. Их в хабе нет и быть не должно.
+    3. Канал снятия уже есть и он адресный — задание ``action=remove`` в
+       очереди устройства (§6.1 контракта лиза), которое ещё и проверяет, не
+       держит ли навык другая востребованная способность.
     """
     store_root = cfg.effective_store_dir()
     client = HubClient(
@@ -3938,6 +3952,39 @@ async def _reconcile_device_queue(
             # Отдаётся только демонам, заявившим supports_removal (backend-гейт),
             # поэтому старый CLI сюда не попадёт и навык не переустановит.
             if str(item.get("action") or "install") == "remove":
+                # #1486, §6.3 контракта лиза: ОТЗЫВ ≠ СНЯТИЕ. Лиз отвечает,
+                # можно ли ИСПОЛНЯТЬ, а задание remove — должны ли ЛЕЖАТЬ
+                # файлы. Пока навык-носитель держит хотя бы одна способность с
+                # действующим правом, снимать его нельзя: иначе отзыв
+                # `grok_transcriber` убил бы `grok_ask` из того же пакета,
+                # право на который никто не отзывал.
+                blockers = ()
+                with suppress(Exception):  # реестра нет/битый ⇒ прежнее поведение
+                    from skillery_cli.core.leases import removal_blockers
+
+                    blockers = removal_blockers(str(ref), skill_id=sid)
+                if blockers:
+                    held = ", ".join(blockers)
+                    reason = (
+                        f"навык {ref} не снят: его держат способности с "
+                        f"действующим доступом ({held}). Отзыв одной "
+                        "способности не снимает навык, нужный другой"
+                    )
+                    with suppress(Exception):
+                        _ilog.warning("снятие навыка отклонено (носитель занят)", extra={
+                            "context": {"step": "remove", "skill": str(ref),
+                                        "initiator": "web-queue", "held_by": list(blockers)}})
+                    # Рапортуем ОТКАЗ, а не успех: иначе хаб записал бы навык
+                    # снятым, а файлы остались бы на машине — состояние
+                    # устройства в вебе стало бы неправдой. Счётчик попыток
+                    # (лимит 3) не даёт крутить это заданию вечно.
+                    with suppress(Exception):
+                        await client.report_device_apply(
+                            slug=str(ref), ok=False, error=reason, skill_id=sid
+                        )
+                    attempts[key] = tried + 1
+                    report["skipped"].append(ref)
+                    continue
                 try:
                     # revert CLI/MCP навыка ДО remove — при purge стор (и его
                     # манифест) удаляется, revert читает манифест пока он на месте.
@@ -5470,6 +5517,19 @@ def cmd_publish(
         _run_publish_denylist_gate(skill_dir, force=force)
 
     version = tag.lstrip("v")
+    # #1489: способности объявляет манифест навыка. Разбираем ДО сборки и до
+    # сети — опечатка в [[capabilities]] обязана стоить один разбор TOML, а не
+    # весь проход публикации с 422 в конце.
+    from skillery_cli.core.capability_manifest import (
+        CapabilityManifestError,
+        capabilities_of,
+    )
+
+    try:
+        declared_capabilities = capabilities_of(skill_dir)
+    except CapabilityManifestError as exc:
+        emit_error("VALIDATION", str(exc))
+        raise typer.Exit(2) from exc
     manifest = build_manifest(skill_dir, version=version)
     actual_commit = commit_sha or git_commit_sha(skill_dir)
     if not actual_commit:
@@ -5527,6 +5587,11 @@ def cmd_publish(
             "cli": manifest.cli,
             "mcp": manifest.mcp,
             "runtime_dependencies": manifest.runtime_dependencies,
+            # #1489: [[capabilities]] — из ЭТОГО объявления хаб выводит реестр
+            # способностей версии (sync_capabilities_from_manifest). Без поля
+            # опубликованная через CLI версия не завела бы ни одной строки, и
+            # выдать способность отдельно от навыка стало бы невозможно.
+            "capabilities": declared_capabilities,
         },
     }
     if dry_run:
@@ -5547,6 +5612,19 @@ def cmd_publish(
         )
         try:
             result = await client.publish_skill(payload)
+        except ApiError as exc:
+            # #1489: 409 CAPABILITY_NAME_CONFLICT — единственный отказ, который
+            # автор навыка не в состоянии понять по коду: локально всё
+            # валидно, а имя занято ЧУЖИМ навыком, о чём знает только хаб.
+            # Голый код здесь = тикет в поддержку, поэтому объясняем причину и
+            # называем следующее действие.
+            from skillery_cli.commands.capability import explain_api_error
+
+            hint = explain_api_error(exc)
+            if hint is None:
+                raise
+            emit_error(exc.code, hint, status_code=exc.status_code)
+            raise typer.Exit(1) from exc
         finally:
             await client.close()
         emit_data(
@@ -6245,6 +6323,11 @@ def build_app() -> typer.Typer:
     )
     # Гранты доступа: у backend гейтится даже GET, поэтому гейтим целиком.
     _access_mod.register(app, can_manage=cfg.has_permission("skill.manage"))
+    # #1489: способности. Чтение и своя машина — всем (это ответ на вопрос
+    # «что мне разрешено»); выдача/отзыв прав — под гейтом навыка-носителя.
+    from skillery_cli.commands import capability as _capability_mod
+
+    _capability_mod.register(app, can_manage=cfg.has_permission("skill.manage"))
     # Конфигурация хаба — только hub.admin.
     _system_mod.register(app, can_manage=cfg.is_hub_admin())
     # Сессии и профиль — всегда: это про СВОЙ аккаунт, прав не требует.

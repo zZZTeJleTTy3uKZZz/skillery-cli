@@ -1155,6 +1155,82 @@ class HubClient:
             "denied": list(data.get("denied") or []),
         }
 
+    # --- #1489: команды `skillery capability …` ------------------------
+    #
+    # В отличие от трёх вызовов выше эти зовёт ЧЕЛОВЕК, а не демон: витрина,
+    # карточка, точечная выдача лиза и управление грантами способности.
+
+    async def get_capability(self, id_or_name: str) -> dict[str, Any]:
+        """GET /capabilities/{id} — по числовому id ИЛИ по имени.
+
+        Имя допустимо именно в ЧТЕНИИ (REST-20a на стороне хаба): оно
+        иммутабельно по построению — это ключ entry-point ``skillery.plugins``,
+        и его смена означает другую способность. Человек знает способность
+        именно по имени (``grok_transcriber``), поэтому резолв id ради карточки
+        был бы лишним походом в сеть.
+        """
+        return await self._request("GET", f"/capabilities/{id_or_name}")
+
+    async def issue_capability_lease(
+        self, capability_id: str, *, device_id: str, supports_lease: bool = True
+    ) -> dict[str, Any]:
+        """POST /capabilities/{id}/leases — точечная выдача (201 + ``Location``).
+
+        Демон обновляет НАБОР через ``PUT /me/leases``; этот путь нужен ровно
+        там, где набор ждать нельзя: сразу после явного ``capability install``
+        (контракт §3 — «всегда обновлять после явного install»), иначе
+        поставленная способность до трёх минут отвечала бы «нет доступа».
+
+        Мутация ⇒ ТОЛЬКО числовой id: имя хаб здесь не принимает намеренно
+        (цена ошибки — «выдали право не на ту способность»).
+        """
+        return await self._request(
+            "POST",
+            f"/capabilities/{capability_id}/leases",
+            json={"device_id": device_id, "supports_lease": bool(supports_lease)},
+        )
+
+    async def list_capability_access_grants(self, capability_id: str) -> dict[str, Any]:
+        """GET /capabilities/{id}/access-grants — кому выдан доступ к способности."""
+        return await self._request(
+            "GET", f"/capabilities/{capability_id}/access-grants"
+        )
+
+    async def grant_capability_access(
+        self,
+        capability_id: str,
+        *,
+        target_type: str,
+        target_id: str,
+        role: str = "viewer",
+        expires_at: str | None = None,
+    ) -> dict[str, Any]:
+        """PUT /capabilities/{id}/access-grants — выдать доступ (идемпотентно).
+
+        Ради этой ручки линия способностей и существует: подписчику выдаётся
+        ``grok_transcriber``, а ``grok_ask`` из того же дистрибутива — нет.
+        ``expires_at`` (``--until``) — срок ГРАНТА, не лиза: лиз всегда живёт
+        сутки и лишь следует за грантом.
+        """
+        body: dict[str, Any] = {
+            "target_type": target_type,
+            "target_id": str(target_id),
+            "role": role,
+        }
+        if expires_at:
+            body["expires_at"] = expires_at
+        return await self._request(
+            "PUT", f"/capabilities/{capability_id}/access-grants", json=body
+        )
+
+    async def revoke_capability_access(
+        self, capability_id: str, grant_id: str
+    ) -> None:
+        """DELETE /capabilities/{id}/access-grants/{grant_id} — отозвать доступ."""
+        await self._request(
+            "DELETE", f"/capabilities/{capability_id}/access-grants/{grant_id}"
+        )
+
     async def fetch_lease_jwks(self) -> dict[str, Any]:
         """GET /.well-known/jwks.json — публичные ключи проверки лиза.
 
