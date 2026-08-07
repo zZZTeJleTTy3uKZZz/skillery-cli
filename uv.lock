@@ -686,6 +686,18 @@ wheels = [
 ]
 
 [[package]]
+name = "s-leasekit"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cryptography" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/fc/68/583ad985596ba8f61177acd23253158873d3c973dfd1163901321e28017b/s_leasekit-0.1.0.tar.gz", hash = "sha256:080ffdbb5866f304956dd3bcda084af482957883f15af17fc9137d066e38ea03", size = 65733, upload-time = "2026-08-07T10:35:12.007Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7c/35/bb435a4cd6242b218794291ad9ba9be4dc90c3bd5ea65e63e44902dac8ba/s_leasekit-0.1.0-py3-none-any.whl", hash = "sha256:1ac291e96aee5af204915fa1fd1ef6889e9ac1331ef91051424103a007913f93", size = 31313, upload-time = "2026-08-07T10:35:10.681Z" },
+]
+
+[[package]]
 name = "s-librarykit"
 version = "0.7.1"
 source = { registry = "https://pypi.org/simple" }
@@ -761,7 +773,7 @@ wheels = [
 
 [[package]]
 name = "skillery-cli"
-version = "0.5.82"
+version = "0.5.84"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
@@ -770,6 +782,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "rich" },
     { name = "s-clikit" },
+    { name = "s-leasekit" },
     { name = "s-librarykit" },
     { name = "s-skillgate" },
     { name = "s-skillkit" },
@@ -798,6 +811,7 @@ requires-dist = [
     { name = "rich", specifier = ">=13.9" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
     { name = "s-clikit", specifier = ">=0.1.4" },
+    { name = "s-leasekit", specifier = ">=0.1.0" },
     { name = "s-librarykit", specifier = ">=0.7.1" },
     { name = "s-skillgate", specifier = ">=0.1.5" },
     { name = "s-skillkit", specifier = ">=0.3.5" },
