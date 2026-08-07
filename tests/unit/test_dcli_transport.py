@@ -445,6 +445,31 @@ async def test_export_users_returns_csv_text() -> None:
         assert "m@acme.ru" in text
 
 
+async def test_list_companies_does_not_send_format() -> None:
+    """GET /companies отдаёт JSON и параметра ``format`` не объявляет.
+
+    Замок против рецидива копипасты из ``export_users``: лишний query до
+    #1516 молча игнорировался backend'ом, а в strict-режиме даёт 422 — то
+    есть ломает ``skillery company list`` у всех уже установленных CLI.
+    """
+    with respx.mock(base_url=_BASE) as router:
+        route = router.get("/companies").mock(
+            return_value=Response(
+                200, json={"items": [], "total": 0, "page": 1, "size": 20}
+            )
+        )
+        client = HubClient(base_url=_BASE, access_token="t")
+        try:
+            await client.list_companies(q="acme", page=2, size=50)
+        finally:
+            await client.close()
+        params = route.calls.last.request.url.params
+        assert "format" not in params
+        assert params["q"] == "acme"
+        assert params["page"] == "2"
+        assert params["size"] == "50"
+
+
 # ===================== M-6 — list_collections paging =====================
 async def test_list_collections_sends_paging_params() -> None:
     with respx.mock(base_url=_BASE) as router:

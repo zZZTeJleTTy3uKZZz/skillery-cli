@@ -1318,8 +1318,13 @@ class HubClient:
         Сверено с ``routes/companies.py::list_companies`` (W5): server-side
         offset-пагинация ``page/size/q`` → ``{items,total,page,size}``.
         Неуказанные параметры не шлём — backend применит свои дефолты.
+
+        ``format`` здесь НЕ шлём: эндпоинт его не объявляет, а метод возвращает
+        JSON. Параметр попал сюда копипастой из ``export_users`` и до сих пор
+        проходил лишь потому, что backend молча игнорировал лишний query —
+        со strict-режимом (#1516) такой запрос стал бы 422.
         """
-        params: dict[str, Any] = {"format": "csv"}
+        params: dict[str, Any] = {}
         if q:
             params["q"] = q
         if page is not None:
