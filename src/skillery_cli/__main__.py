@@ -3954,6 +3954,17 @@ async def _reconcile_device_queue(
                             "skill.uninstall", slug=str(ref),
                             scope="global", agent=agent_target.name,
                         )
+                    # #1490: файлов навыка на машине больше нет — забываем и его
+                    # требования лиза. Это ЕДИНСТВЕННАЯ законная причина убрать
+                    # строку из реестра: отзыв права такой причиной не является
+                    # (контракт лиза §6.3 — лиз про «можно исполнять», снятие
+                    # про «должны ли лежать файлы»).
+                    with suppress(Exception):
+                        from skillery_cli.core.leases import RequirementsIndex
+
+                        _idx = RequirementsIndex.load()
+                        if _idx.forget_skill(str(ref), str(sid) if sid else None):
+                            _idx.save()
                     # Рапорт об успешном снятии — без версии (backend по
                     # action=remove удалит строку очереди).
                     await client.report_device_apply(
@@ -5114,6 +5125,14 @@ def cmd_remove(
             agent=target.name,
             extra={"kept_local": result.kept_local},
         )
+        # #1490: навык ушёл из стора — забываем его требования лиза (см. тот же
+        # комментарий в removal-ветке очереди устройства).
+        with suppress(Exception):
+            from skillery_cli.core.leases import RequirementsIndex
+
+            _idx = RequirementsIndex.load()
+            if _idx.forget_skill(slug):
+                _idx.save()
 
     # #1146: терминология — ПО ФАКТУ содеянного, а не по названию команды.
     # Кит без --purge снимает из project-scope ТОЛЬКО ссылку; стор цел, навык
