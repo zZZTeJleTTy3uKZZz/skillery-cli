@@ -2,6 +2,9 @@
  "source": "skillery-backend create_app().openapi()",
  "title": "Skillery",
  "paths": {
+  "/.well-known/jwks.json": [
+   "GET"
+  ],
   "/account-deletion-requests": [
    "GET",
    "POST"
@@ -83,6 +86,22 @@
   ],
   "/auth/signup/verify": [
    "GET"
+  ],
+  "/capabilities": [
+   "GET"
+  ],
+  "/capabilities/{id}": [
+   "GET"
+  ],
+  "/capabilities/{id}/access-grants": [
+   "GET",
+   "PUT"
+  ],
+  "/capabilities/{id}/access-grants/{grant_id}": [
+   "DELETE"
+  ],
+  "/capabilities/{id}/leases": [
+   "POST"
   ],
   "/client-logs": [
    "POST"
@@ -246,6 +265,9 @@
   "/me/avatar-source": [
    "PUT"
   ],
+  "/me/capabilities": [
+   "GET"
+  ],
   "/me/deletion-preview": [
    "GET"
   ],
@@ -265,6 +287,13 @@
    "GET"
   ],
   "/me/issues": [
+   "GET"
+  ],
+  "/me/leases": [
+   "GET",
+   "PUT"
+  ],
+  "/me/leases/{id}": [
    "GET"
   ],
   "/me/notifications/stream": [
@@ -381,6 +410,9 @@
    "DELETE"
   ],
   "/skills/{id}/analytics": [
+   "GET"
+  ],
+  "/skills/{id}/capabilities": [
    "GET"
   ],
   "/skills/{id}/collections": [
