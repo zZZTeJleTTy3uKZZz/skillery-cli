@@ -2804,12 +2804,71 @@ def _backup_foreign_before_hub(
         return None
 
 
+def _backup_foreign_scope_before_hub(
+    store_root: Path, dir_name: str, agent_target, project: Optional[Path]
+) -> Optional[dict]:
+    """Освободить ИМЯ В ЗОНЕ АГЕНТА, занятое версией вне Skillery (#1405).
+
+    ВТОРАЯ ПОЛОВИНА «хаб становится главным». Резерв каталога СТОРА сам по себе
+    ничего не решает: исполняется то, что лежит в ``~/.claude/skills/<навык>``.
+    На живой машине владельца ровно это и было — в сторе хабовая версия
+    (``vk`` v0.2.6), а в зоне агента посторонний каталог с тем же именем, и
+    исполнялся он. Хабовая установка при этом либо падала в ownership-гейт кита
+    ПОСЛЕ записи в стор (стор ушёл вперёд, зона агента осталась прежней), либо
+    выглядела успешной по стору — «веб сказал ок, а работает локальная».
+
+    Занятое имя освобождается недеструктивно (см. ``backup_scope_entry``):
+    каталог уезжает в резерв целиком, ССЫЛКА на рабочую папку автора только
+    снимается — её цель не трогаем.
+
+    ``None`` — освобождать нечего: пути нет или он уже наш (ссылка в стор /
+    каталог с нашей метой — с этим кит разбирается сам). Никогда не бросает:
+    сорванный резерв не имеет права отменить установку.
+    """
+    from skillkit.installer.ownership import PathGuard
+
+    from skillery_cli.core.store_backup import backup_scope_entry
+
+    try:
+        from skillkit import linker
+
+        link = Path(agent_target.slug_dir(dir_name, project=project))
+        if not linker.is_link(link) and not link.exists():
+            return None
+        if PathGuard(Path(store_root)).is_ours(
+            link, store_dir=Path(store_root) / dir_name
+        ):
+            return None
+    except Exception:  # noqa: BLE001 — не смогли опознать путь → не вмешиваемся
+        return None
+    try:
+        return backup_scope_entry(
+            store_root, dir_name, link, reason="hub-takeover-scope"
+        )
+    except Exception:  # noqa: BLE001 — не смогли зарезервировать → не вытесняем
+        return None
+
+
 def _announce_takeover(record: dict, *, slug: str, version: str, headless: bool) -> None:
     """Сказать пользователю, что версия подменена и как откатиться."""
+    from skillery_cli.core.store_backup import KIND_SCOPE_DIR, KIND_SCOPE_LINK
+
+    kind = str(record.get("kind") or "store")
+    if kind == KIND_SCOPE_LINK:
+        what = (
+            f"каталог агента вёл ссылкой на {record.get('link_target') or '—'} "
+            "(ссылка снята, сама папка не тронута)"
+        )
+    elif kind == KIND_SCOPE_DIR:
+        what = "каталог агента был занят версией вне Хаба (сохранена целиком)"
+    else:
+        what = (
+            f"прежняя версия ({record.get('source')} "
+            f"v{record.get('version') or '—'}) сохранена"
+        )
     text = (
-        f"Навык «{slug}»: прежняя версия ({record.get('source')} "
-        f"v{record.get('version') or '—'}) сохранена в резерв "
-        f"{record.get('id')}; активна версия из Хаба v{version}. "
+        f"Навык «{slug}»: {what} в резерв {record.get('id')}; "
+        f"активна версия из Хаба v{version}. "
         f"Откат: skillery store restore {slug} --backup {record.get('id')}"
     )
     if not headless:
@@ -2889,6 +2948,8 @@ async def _materialize_from_bundle(
     ``skill_path`` и работает через клиентские креды)."""
     import tempfile
 
+    from skillkit.errors import ScopeConflict
+
     skill_path = dep_bundle.get("skill_path")
     commit_sha = dep_bundle["commit_sha"]
     manifest = dep_bundle["manifest"]
@@ -2951,6 +3012,16 @@ async def _materialize_from_bundle(
                         force=force,
                         skill_id=dep_id,
                     )
+            except ScopeConflict:
+                # #1405: КОНФЛИКТ ИМЕНИ В ЗОНЕ АГЕНТА — не «битый снапшот».
+                # Снапшот доехал и лёг в стор, а споткнулась ЛИНКОВКА. Прежний
+                # широкий except уводил этот случай на git clone: пользователь
+                # получал «нет доступа к приватному репозиторию» (клон падал на
+                # кредах) вместо настоящей причины, а стор тем временем уже
+                # содержал хабовую версию — та самая картина «веб сказал ок, а
+                # исполняется локальная». Пробрасываем: у ScopeConflict есть свой
+                # человекочитаемый разбор с готовой командой (см. ``_run``).
+                raise
             except Exception:  # noqa: BLE001 — битый снапшот → откат на clone
                 pass
             finally:
@@ -3053,8 +3124,14 @@ async def _install_chain(
             from skillkit.installer import skill_dir_name as _dir_name
 
             _store_root = cfg.effective_store_dir()
-            replaced = _backup_foreign_before_hub(
-                _store_root, _dir_name(dep_slug or None, dep_id)
+            _dn = _dir_name(dep_slug or None, dep_id)
+            replaced = _backup_foreign_before_hub(_store_root, _dn)
+            # #1405, вторая половина: то же имя в ЗОНЕ АГЕНТА. Стор — хранилище,
+            # исполняется ссылка/каталог в `~/.claude/skills/<навык>`; пока он
+            # занят посторонней версией, «хаб стал главным» неправда, чем бы ни
+            # закончилась запись в стор.
+            replaced_scope = _backup_foreign_scope_before_hub(
+                _store_root, _dn, agent_target, project_path
             )
             # Content-serving: снапшот с бэкенда (без клиентских git-кред) →
             # fallback на git clone. См. _materialize_from_bundle.
@@ -3070,43 +3147,46 @@ async def _install_chain(
                 # если хаб-версия не встала (нет снапшота, отвалился clone), тут
                 # же возвращаем прежнюю из резерва — иначе рабочий локальный
                 # навык исчезал бы из-за неудачной чужой установки.
-                if replaced is not None:
+                for _rec in (replaced_scope, replaced):
+                    if _rec is None:
+                        continue
                     with suppress(Exception):
                         from skillery_cli.core.store_backup import restore_backup
 
-                        restore_backup(
-                            _store_root, _dir_name(dep_slug or None, dep_id),
-                            replaced.get("id"),
-                        )
+                        restore_backup(_store_root, _dn, _rec.get("id"))
                 raise
-            if replaced is not None:
+            for _rec in (replaced, replaced_scope):
+                if _rec is None:
+                    continue
                 # Состояние пользователя (.env / _local/ / профили браузера +
                 # preserved_paths) переезжает в свежую установку: иначе «главной
-                # стала хабовая» означало бы «навык перестал работать».
+                # стала хабовая» означало бы «навык перестал работать». У
+                # резерва-ССЫЛКИ переносить нечего (мы её только сняли) — и
+                # лезть в чужую рабочую папку за состоянием мы не вправе.
                 with suppress(Exception):
                     from skillery_cli.core.store_backup import carry_over_user_state
 
-                    replaced["carried_over"] = carry_over_user_state(
-                        replaced,
-                        Path(result.store_dir or (_store_root / _dir_name(
-                            dep_slug or None, dep_id))),
+                    _rec["carried_over"] = carry_over_user_state(
+                        _rec,
+                        Path(result.store_dir or (_store_root / _dn)),
                         extra_preserved=tuple(
                             (dep_bundle.get("manifest") or {}).get("preserved_paths")
                             or ()
                         ),
                     )
                 _announce_takeover(
-                    replaced, slug=str(dep_slug or dep_id), version=dep_version,
+                    _rec, slug=str(dep_slug or dep_id), version=dep_version,
                     headless=headless,
                 )
                 with suppress(Exception):
                     ilog.info("прежняя версия навыка убрана в резерв", extra={
                         "context": {
                             "step": "takeover", "slug": str(dep_slug or dep_id),
-                            "backup_id": replaced.get("id"),
-                            "replaced_source": replaced.get("source"),
-                            "replaced_version": replaced.get("version"),
-                            "carried_over": replaced.get("carried_over") or [],
+                            "backup_id": _rec.get("id"),
+                            "backup_kind": _rec.get("kind") or "store",
+                            "replaced_source": _rec.get("source"),
+                            "replaced_version": _rec.get("version"),
+                            "carried_over": _rec.get("carried_over") or [],
                             "initiator": initiator,
                         }})
             entry = {
@@ -3124,6 +3204,8 @@ async def _install_chain(
             if replaced is not None:
                 # В JSON-ответе факт вытеснения виден явно (веб/скрипты).
                 entry["replaced"] = replaced
+            if replaced_scope is not None:
+                entry["replaced_scope"] = replaced_scope
             installed_chain.append(entry)
             # Аудит материализации (SK-5): что и как легло в стор. ``initiator``
             # (C2) — чьё это действие: cli / web-queue / daemon-auto.
