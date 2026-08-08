@@ -29,6 +29,12 @@
    ``preserved_paths`` манифеста и таргета) ПЕРЕНОСЯТСЯ в свежую установку,
    чтобы навык продолжил работать сразу, а не после ручного отката.
 
+ДВЕ ПОЛОВИНЫ УСТАНОВКИ. Стор — только хранилище; ИСПОЛНЯЕТСЯ то, что лежит в
+зоне агента (``~/.claude/skills/<навык>``). Поэтому резерв бывает двух видов:
+каталог стора (:func:`backup_store_skill`) и занятое имя в зоне агента
+(:func:`backup_scope_entry`). Без второго хабовая версия могла лежать в сторе,
+а исполняться продолжала бы локальная — ровно то, что видел владелец.
+
 Модуль не ходит в сеть и не запускает подпроцессы.
 """
 from __future__ import annotations
@@ -151,6 +157,102 @@ def backup_store_skill(
     return record
 
 
+#: Вид резерва. ``store`` — каталог стора; ``scope-dir`` — каталог ЗОНЫ АГЕНТА
+#: (``~/.claude/skills/<навык>``), уехавший в резерв целиком; ``scope-link`` —
+#: ССЫЛКА зоны агента на чужой каталог: снята сама ссылка, её цель НЕ тронута.
+KIND_STORE = "store"
+KIND_SCOPE_DIR = "scope-dir"
+KIND_SCOPE_LINK = "scope-link"
+
+
+def describe_backup(record: dict[str, Any]) -> str:
+    """Человеческое «что именно лежит в этом резерве» (#1405).
+
+    Виды резерва — служебные коды (``scope-link``), и показывать их человеку
+    как есть значит объяснять ему нашу внутреннюю кухню вместо его ситуации.
+    """
+    kind = str(record.get("kind") or KIND_STORE)
+    if kind == KIND_SCOPE_LINK:
+        return f"ссылка агента → {record.get('link_target') or '—'}"
+    if kind == KIND_SCOPE_DIR:
+        return "каталог агента (вне Хаба)"
+    version = record.get("version") or "—"
+    return f"{record.get('source') or '—'} v{version}"
+
+
+def backup_scope_entry(
+    store_dir: Path,
+    dir_name: str,
+    entry_path: Path,
+    *,
+    reason: str,
+) -> dict[str, Any] | None:
+    """Освободить ИМЯ В ЗОНЕ АГЕНТА, не потеряв то, что там стояло (#1405).
+
+    Стор — половина установки; исполняется то, что лежит в зоне агента
+    (``~/.claude/skills/<навык>``). Пока это имя занято версией вне Skillery,
+    хабовая версия не главная, чем бы ни закончилась запись в стор.
+
+    Освобождение РАЗНОЕ по природе занятого пути — и разница здесь ровно про
+    сохранность данных:
+
+    * **обычный каталог** — это и есть навык (в нём могут лежать ``.env`` и
+      прочее состояние): уезжает в резерв ЦЕЛИКОМ, ничего не удаляется;
+    * **ссылка** (junction/symlink на рабочую папку автора, напр.
+      ``_storage/<навык>`` с ``.git``) — снимается ТОЛЬКО ССЫЛКА. Цель не
+      перемещается и не удаляется: это чужой рабочий каталог, к навыку он
+      относится косвенно, и утащить его в служебную зону стора значило бы
+      увести у пользователя репозиторий. В записи резерва остаётся адрес цели —
+      его достаточно, чтобы откат восстановил ссылку.
+
+    ``None`` — освобождать нечего (пути нет).
+    """
+    from skillkit import linker
+
+    entry = Path(entry_path)
+    linked = linker.is_link(entry)
+    if not linked and not entry.is_dir():
+        return None
+
+    base = backups_root(store_dir) / dir_name
+    base.mkdir(parents=True, exist_ok=True)
+    slot = _unique_backup_dir(base)
+    slot.mkdir(parents=True)
+
+    record: dict[str, Any] = {
+        "id": slot.name,
+        "dir_name": dir_name,
+        "slug": dir_name,
+        "reason": reason,
+        "created_at": datetime.now(UTC).isoformat(),
+        "path": str(slot),
+        "scope_path": str(entry),
+        "original_path": str(entry),
+        "version": None,
+    }
+    if linked:
+        target = linker.link_target(entry)
+        record["kind"] = KIND_SCOPE_LINK
+        record["source"] = KIND_SCOPE_LINK
+        record["link_target"] = str(target) if target is not None else None
+        # Снимаем ССЫЛКУ, цель не трогаем (remove_link никогда не делает rmtree).
+        linker.remove_link(entry)
+    else:
+        payload = slot / _PAYLOAD_DIR
+        try:
+            shutil.move(str(entry), str(payload))
+        except Exception:  # noqa: BLE001 — переименование не вышло → копия+снос
+            shutil.copytree(entry, payload, symlinks=True, dirs_exist_ok=True)
+            shutil.rmtree(entry, ignore_errors=True)
+        record["kind"] = KIND_SCOPE_DIR
+        record["source"] = KIND_SCOPE_DIR
+        record["skill_path"] = str(payload)
+    (slot / _RECORD_FILE).write_text(
+        json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return record
+
+
 def _read_record(slot: Path) -> dict[str, Any] | None:
     try:
         record = json.loads((slot / _RECORD_FILE).read_text(encoding="utf-8"))
@@ -160,7 +262,11 @@ def _read_record(slot: Path) -> dict[str, Any] | None:
         return None
     # Пути могли переехать вместе со стором — пересчитываем от факта на диске.
     record["path"] = str(slot)
-    record["skill_path"] = str(slot / _PAYLOAD_DIR)
+    # У резерва-ССЫЛКИ содержимого в слоте нет, и подставлять его нельзя: в
+    # ``skill_path`` ходят и откат, и перенос состояния — указать им на чужую
+    # рабочую папку значило бы её увезти. Адрес цели живёт в ``link_target``.
+    if record.get("kind") != KIND_SCOPE_LINK:
+        record["skill_path"] = str(slot / _PAYLOAD_DIR)
     return record
 
 
@@ -216,6 +322,8 @@ def restore_backup(
             f"Резервной копии навыка «{dir_name}» нет"
             + (f" (id={backup_id})" if backup_id else "")
         )
+    if str(record.get("kind") or KIND_STORE) in (KIND_SCOPE_DIR, KIND_SCOPE_LINK):
+        return _restore_scope_backup(store_dir, record)
     payload = Path(record["skill_path"])
     if not payload.is_dir():
         raise BackupError(f"Резерв повреждён: нет каталога {payload}")
@@ -243,6 +351,48 @@ def restore_backup(
     return {"restored": record, "replaced": replaced, "path": str(target)}
 
 
+def _restore_scope_backup(
+    store_dir: Path, record: dict[str, Any]
+) -> dict[str, Any]:
+    """Вернуть в зону агента то, что вытеснила хаб-установка (#1405).
+
+    Откат обратим и здесь: занятое сейчас имя (обычно ссылка на стор с хабовой
+    версией) не удаляется бесследно, а уезжает тем же механизмом в новый резерв.
+    """
+    from skillkit import linker
+
+    entry = Path(str(record.get("scope_path") or ""))
+    if str(entry) in ("", "."):
+        raise BackupError("Резерв повреждён: не записан путь в зоне агента")
+    dir_name = str(record.get("dir_name") or entry.name)
+
+    replaced: dict[str, Any] | None = None
+    if linker.is_link(entry) or entry.exists():
+        replaced = backup_scope_entry(
+            store_dir, dir_name, entry, reason="restore-scope"
+        )
+
+    if str(record.get("kind")) == KIND_SCOPE_LINK:
+        target = record.get("link_target")
+        if not target:
+            raise BackupError("Резерв повреждён: не записана цель ссылки")
+        entry.parent.mkdir(parents=True, exist_ok=True)
+        linker.create_link(entry, Path(str(target)))
+    else:
+        payload = Path(str(record.get("skill_path") or ""))
+        if not payload.is_dir():
+            raise BackupError(f"Резерв повреждён: нет каталога {payload}")
+        entry.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.move(str(payload), str(entry))
+        except Exception:  # noqa: BLE001 — переименование не вышло → копия
+            shutil.copytree(payload, entry, symlinks=True, dirs_exist_ok=True)
+            shutil.rmtree(payload, ignore_errors=True)
+    # Слот отдал содержимое — метку убираем, чтобы список резервов не врал.
+    shutil.rmtree(Path(str(record.get("path") or "")), ignore_errors=True)
+    return {"restored": record, "replaced": replaced, "path": str(entry)}
+
+
 def carry_over_user_state(
     backup_record: dict[str, Any],
     new_dir: Path,
@@ -254,8 +404,17 @@ def carry_over_user_state(
     Переносится ТОЛЬКО то, чего в новой установке нет (хабовая версия могла
     привезти свой ``_local/`` — её содержимое сильнее). Возвращает имена
     перенесённых путей; ошибка на одном пути не срывает перенос остальных.
+
+    У резерва-ССЫЛКИ (:data:`KIND_SCOPE_LINK`) переносить нечего и НЕЛЬЗЯ: своего
+    содержимого в слоте нет, а лезть за состоянием в чужую рабочую папку автора
+    мы не вправе. Пустой ``skill_path`` — не «текущий каталог»: ``Path("")`` в
+    pathlib равен ``Path(".")``, и без этой проверки перенос ушёл бы шарить по
+    CWD и утащил бы в навык посторонний ``.env``.
     """
-    src_root = Path(backup_record.get("skill_path") or "")
+    raw_src = str(backup_record.get("skill_path") or "").strip()
+    if not raw_src or str(backup_record.get("kind")) == KIND_SCOPE_LINK:
+        return []
+    src_root = Path(raw_src)
     dst_root = Path(new_dir)
     if not src_root.is_dir() or not dst_root.is_dir():
         return []
@@ -283,11 +442,16 @@ def carry_over_user_state(
 __all__ = [
     "BACKUPS_DIR_NAME",
     "BackupError",
+    "KIND_SCOPE_DIR",
+    "KIND_SCOPE_LINK",
+    "KIND_STORE",
     "USER_STATE_NAMES",
     "USER_STATE_PREFIXES",
+    "backup_scope_entry",
     "backup_store_skill",
     "backups_root",
     "carry_over_user_state",
+    "describe_backup",
     "find_backup",
     "is_user_state_name",
     "iter_store_skill_dirs",
