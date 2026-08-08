@@ -389,8 +389,17 @@ def carry_over_user_state(
     Переносится ТОЛЬКО то, чего в новой установке нет (хабовая версия могла
     привезти свой ``_local/`` — её содержимое сильнее). Возвращает имена
     перенесённых путей; ошибка на одном пути не срывает перенос остальных.
+
+    У резерва-ССЫЛКИ (:data:`KIND_SCOPE_LINK`) переносить нечего и НЕЛЬЗЯ: своего
+    содержимого в слоте нет, а лезть за состоянием в чужую рабочую папку автора
+    мы не вправе. Пустой ``skill_path`` — не «текущий каталог»: ``Path("")`` в
+    pathlib равен ``Path(".")``, и без этой проверки перенос ушёл бы шарить по
+    CWD и утащил бы в навык посторонний ``.env``.
     """
-    src_root = Path(backup_record.get("skill_path") or "")
+    raw_src = str(backup_record.get("skill_path") or "").strip()
+    if not raw_src or str(backup_record.get("kind")) == KIND_SCOPE_LINK:
+        return []
+    src_root = Path(raw_src)
     dst_root = Path(new_dir)
     if not src_root.is_dir() or not dst_root.is_dir():
         return []

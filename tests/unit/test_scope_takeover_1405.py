@@ -233,6 +233,28 @@ class TestForeignLinkInAgentZone:
         # В служебную зону стора рабочая папка НЕ копировалась.
         assert not (Path(record["path"]) / "skill").exists()
 
+    async def test_no_state_scraped_from_cwd(self, env, monkeypatch) -> None:
+        """⚠️ У резерва-ССЫЛКИ перенос состояния не шарит по чужим каталогам.
+
+        В записи такого резерва нет ``skill_path`` (своего содержимого в слоте
+        нет). ``Path("")`` в pathlib равен ``Path(".")`` — без явной проверки
+        перенос состояния принимал ТЕКУЩИЙ каталог за источник и утаскивал в
+        свежую установку посторонний ``.env`` из CWD.
+        """
+        cfg, target, store, tmp = env
+        cwd = tmp / "cwd"
+        (cwd / "_local").mkdir(parents=True)
+        (cwd / ".env").write_text("CHUZHOY=секрет\n", encoding="utf-8")
+        monkeypatch.chdir(cwd)
+        _foreign_scope_link(target, tmp)
+
+        await _install_from_hub(cfg, target)
+
+        assert not (store / "demo" / ".env").exists(), (
+            "состояние из постороннего каталога не имеет права попасть в навык"
+        )
+        assert not (store / "demo" / "_local").exists()
+
     async def test_rollback_recreates_link(self, env) -> None:
         cfg, target, store, tmp = env
         link, work = _foreign_scope_link(target, tmp)
