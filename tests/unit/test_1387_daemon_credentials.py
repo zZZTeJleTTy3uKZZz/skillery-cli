@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -95,6 +96,35 @@ def test_new_login_is_picked_up_without_restart(creds_env) -> None:
     creds_env.login("new@test", "TOKEN-NEW")  # пользователь вошёл заново
     assert creds.access() == "TOKEN-NEW", "демон обязан подхватить сам"
     assert creds.config().user_email == "new@test"
+
+
+def test_relogin_is_picked_up_even_when_mtime_and_size_match(creds_env) -> None:
+    """Смена кред замечается, даже если stat не отличает файлы.
+
+    Регрессия, пойманная гейтом CI: отпечатком была пара ``(mtime_ns, size)``.
+    Перелогин на адрес ТОЙ ЖЕ длины размер не меняет, а mtime совпадает, если
+    обе записи попали в один тик часов ФС (разрешение зависит от файловой
+    системы и бывает грубее наносекунд). Отпечаток тогда не менялся — и демон
+    продолжал работать под СТАРЫМ токеном.
+
+    Здесь совпадение stat не оставлено на волю таймингов, а задано явно: mtime
+    возвращается к прежнему через ``os.utime``. Тест обязан краснеть на любой
+    реализации отпечатка, которая опирается только на метаданные файла.
+    """
+    creds_env.login("old@test", "TOKEN-OLD")
+    before = creds_env.cfg_path.stat()
+    creds = creds_env.make()
+    assert creds.access() == "TOKEN-OLD"
+
+    creds_env.login("new@test", "TOKEN-NEW")  # ровно та же длина адреса
+    os.utime(creds_env.cfg_path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert creds_env.cfg_path.stat().st_size == before.st_size, (
+        "предусловие теста: размер обязан совпасть, иначе он проверяет не то"
+    )
+
+    assert creds.access() == "TOKEN-NEW", (
+        "stat одинаков — отпечаток обязан смотреть на СОДЕРЖИМОЕ"
+    )
 
 
 def test_unchanged_credentials_are_not_re_read(creds_env, monkeypatch) -> None:

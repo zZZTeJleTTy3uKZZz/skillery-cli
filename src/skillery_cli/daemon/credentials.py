@@ -59,6 +59,7 @@ outbox вырос до 739 конвертов. Ручной ``daemon stop`` + ``
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
@@ -118,16 +119,32 @@ def needs_login(state: dict[str, Any] | None = None) -> bool:
 class _Stamp:
     """Отпечаток файлов кред — сравнивается на каждом такте вместо чтения."""
 
-    config: tuple[int, int] | None = None
-    tokens: tuple[int, int] | None = None
+    config: tuple[int, int, str] | None = None
+    tokens: tuple[int, int, str] | None = None
 
 
-def _stat_stamp(path: Path) -> tuple[int, int] | None:
+def _stat_stamp(path: Path) -> tuple[int, int, str] | None:
+    """Отпечаток = (mtime_ns, size, хэш содержимого).
+
+    Пары ``(mtime_ns, size)`` НЕДОСТАТОЧНО, и это не теоретическая придирка:
+    перелогин на адрес той же длины (``old@test`` → ``new@test``) не меняет
+    размер, а mtime может совпасть, если обе записи попали в один тик часов
+    файловой системы. Разрешение mtime зависит от ФС и на некоторых машинах
+    заметно грубее, чем наносекунды в названии поля. Тогда отпечаток совпадает,
+    демон считает креды прежними и продолжает работать под СТАРЫМ токеном —
+    ровно тот случай, который этот класс обязан ловить (поймано гейтом CI:
+    локально mtime различался, на раннере — нет).
+
+    Хэш снимает зависимость от разрешения часов вообще. Файлы кред — десятки
+    байт, поэтому чтение ничтожно на фоне того дорогого (``ClientConfig.load``
+    + keyring), ради чего кэш и существует.
+    """
     try:
         st = path.stat()
+        digest = hashlib.blake2b(path.read_bytes(), digest_size=16).hexdigest()
     except OSError:
         return None
-    return (st.st_mtime_ns, st.st_size)
+    return (st.st_mtime_ns, st.st_size, digest)
 
 
 class DaemonCredentials:
