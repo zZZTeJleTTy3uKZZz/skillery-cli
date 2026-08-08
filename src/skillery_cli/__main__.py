@@ -4806,7 +4806,7 @@ def cmd_store_backups(
     затирается, а целиком уезжает в служебную зону стора. Вернуть —
     ``skillery store restore <навык> [--backup <id>]``.
     """
-    from skillery_cli.core.store_backup import list_backups
+    from skillery_cli.core.store_backup import describe_backup, list_backups
 
     cfg = ClientConfig.load()
     if not isinstance(slug, str):
@@ -4820,14 +4820,12 @@ def cmd_store_backups(
         table = Table(title="Резервы навыков (свежие сверху)")
         table.add_column("навык")
         table.add_column("id")
-        table.add_column("источник")
-        table.add_column("version")
+        table.add_column("что сохранено")
         table.add_column("причина")
         for r in rows:
             table.add_row(
                 str(r.get("dir_name") or "—"), str(r.get("id") or "—"),
-                str(r.get("source") or "—"), str(r.get("version") or "—"),
-                str(r.get("reason") or "—"),
+                describe_backup(r), str(r.get("reason") or "—"),
             )
         console.print(table)
         console.print(
@@ -4848,7 +4846,11 @@ def cmd_store_restore(
     Откат сам обратим: то, что стоит сейчас, не удаляется, а уезжает в новый
     резерв — вернуться обратно можно этой же командой.
     """
-    from skillery_cli.core.store_backup import BackupError, restore_backup
+    from skillery_cli.core.store_backup import (
+        BackupError,
+        describe_backup,
+        restore_backup,
+    )
 
     cfg = ClientConfig.load()
     if not isinstance(backup, str):
@@ -4863,7 +4865,7 @@ def cmd_store_restore(
         rec = p["restored"]
         console.print(
             f"[green]✓[/] Навык [bold]{slug}[/] возвращён из резерва "
-            f"{rec.get('id')} ({rec.get('source')} v{rec.get('version') or '—'})"
+            f"{rec.get('id')} ({describe_backup(rec)})"
         )
         if p.get("replaced"):
             console.print(

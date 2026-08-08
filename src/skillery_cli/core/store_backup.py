@@ -165,6 +165,21 @@ KIND_SCOPE_DIR = "scope-dir"
 KIND_SCOPE_LINK = "scope-link"
 
 
+def describe_backup(record: dict[str, Any]) -> str:
+    """Человеческое «что именно лежит в этом резерве» (#1405).
+
+    Виды резерва — служебные коды (``scope-link``), и показывать их человеку
+    как есть значит объяснять ему нашу внутреннюю кухню вместо его ситуации.
+    """
+    kind = str(record.get("kind") or KIND_STORE)
+    if kind == KIND_SCOPE_LINK:
+        return f"ссылка агента → {record.get('link_target') or '—'}"
+    if kind == KIND_SCOPE_DIR:
+        return "каталог агента (вне Хаба)"
+    version = record.get("version") or "—"
+    return f"{record.get('source') or '—'} v{version}"
+
+
 def backup_scope_entry(
     store_dir: Path,
     dir_name: str,
@@ -436,6 +451,7 @@ __all__ = [
     "backup_store_skill",
     "backups_root",
     "carry_over_user_state",
+    "describe_backup",
     "find_backup",
     "is_user_state_name",
     "iter_store_skill_dirs",
