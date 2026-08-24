@@ -86,7 +86,7 @@ def lock_path() -> Path:
     return home / "token-refresh.lock"
 
 
-def _try_lock(fh) -> bool:  # noqa: ANN001 — файловый объект
+def _try_lock(fh) -> bool:  # файловый объект
     """Одна НЕблокирующая попытка захвата. ``False`` — занято соседом."""
     if sys.platform == "win32":
         import msvcrt
@@ -110,7 +110,7 @@ def _try_lock(fh) -> bool:  # noqa: ANN001 — файловый объект
     return True
 
 
-def _unlock(fh) -> None:  # noqa: ANN001 — файловый объект
+def _unlock(fh) -> None:  # файловый объект
     if sys.platform == "win32":
         import msvcrt
 
@@ -135,7 +135,7 @@ def token_refresh_lock(timeout: float = DEFAULT_TIMEOUT) -> Iterator[bool]:
         path = lock_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         fh = path.open("a+b")
-    except Exception:  # noqa: BLE001 — файл лока не создался: не блокируем вход
+    except Exception:  # файл лока не создался: не блокируем вход
         yield True
         return
 
@@ -146,7 +146,7 @@ def token_refresh_lock(timeout: float = DEFAULT_TIMEOUT) -> Iterator[bool]:
         while True:
             try:
                 locked = _try_lock(fh)
-            except Exception:  # noqa: BLE001 — нет msvcrt/fcntl на платформе
+            except Exception:  # нет msvcrt/fcntl на платформе
                 passthrough = True
                 break
             if locked or time.monotonic() >= deadline:

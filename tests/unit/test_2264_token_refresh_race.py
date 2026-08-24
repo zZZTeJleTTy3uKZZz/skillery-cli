@@ -209,7 +209,7 @@ def test_lock_is_exclusive_across_real_processes(tmp_path) -> None:
     )
     env = _child_env(lock_file)
     procs = [
-        subprocess.Popen(  # noqa: S603 — свой же интерпретатор
+        subprocess.Popen(  # запускаем свой же интерпретатор
             [sys.executable, str(src)],
             stdout=subprocess.PIPE,
             text=True,
@@ -251,7 +251,7 @@ def test_lock_survives_dead_owner(tmp_path) -> None:
         encoding="utf-8",
     )
     env = _child_env(lock_file)
-    victim = subprocess.Popen(  # noqa: S603 — свой же интерпретатор
+    victim = subprocess.Popen(  # запускаем свой же интерпретатор
         [sys.executable, str(src)], stdout=subprocess.PIPE, text=True, env=env
     )
     try:
