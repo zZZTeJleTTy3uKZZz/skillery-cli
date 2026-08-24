@@ -15,8 +15,8 @@ import contextlib
 import os
 import re
 import sys
-import threading
 import time
+import weakref
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -284,37 +284,51 @@ def _get_access_token() -> str:
     return access
 
 
-#: #2264: внутрипроцессная половина сериализации обновления токена. Байтовая
-#: блокировка файла на Windows видна и СВОЕМУ процессу (другой дескриптор того
-#: же файла тоже ждёт), поэтому две корутины одного процесса без этого замка
-#: заклинили бы друг друга. ``threading.Lock`` (а не ``asyncio.Lock``) — потому
-#: что ждём мы в рабочем потоке и отпускаем, вообще говоря, в другом.
-_INPROC_REFRESH_LOCK = threading.Lock()
+#: #2264: внутрипроцессная половина сериализации обновления токена — по одному
+#: замку на event loop. Нужна по двум причинам: (1) байтовая блокировка файла
+#: видна и СВОЕМУ процессу (второй дескриптор того же файла честно ждёт), так
+#: что без неё корутины одного процесса упирались бы друг в друга через ядро;
+#: (2) ожидание межпроцессного лока занимает поток из пула ``to_thread`` — если
+#: в него уйдут все конкурирующие корутины, пула не хватит даже на освобождение
+#: лока владельцем. С этим замком в пул уходит РОВНО ОДНА корутина процесса.
+#: Ключ — сам loop (CLI за жизнь процесса может поднять их несколько:
+#: ``asyncio.run`` на команду), слабые ссылки не держат мёртвые loop'ы.
+_LOOP_REFRESH_LOCKS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
+def _inproc_refresh_lock() -> asyncio.Lock:
+    """Замок обновления токена текущего event loop (создаётся лениво)."""
+    loop = asyncio.get_running_loop()
+    lock = _LOOP_REFRESH_LOCKS.get(loop)
+    if lock is None:
+        lock = asyncio.Lock()
+        _LOOP_REFRESH_LOCKS[loop] = lock
+    return lock
 
 
 class _RefreshGuard:
-    """Двухуровневый замок обновления токена: свой процесс + все остальные.
+    """Межпроцессная половина замка обновления токена.
 
     ``acquire``/``release`` вызываются из рабочих потоков
-    (``asyncio.to_thread``), поэтому оба уровня выбраны потоко-независимыми.
+    (``asyncio.to_thread``) — захват блокирующий, а на event loop демона висит
+    long-poll очереди заданий. Поэтому механизм выбран НЕ потоко-аффинный:
+    байтовая блокировка файла живёт на дескрипторе, а не на потоке (подробнее —
+    ``core/token_lock.py``).
+
     Неудача захвата НЕ отменяет обновление: лучше рискнуть гонкой, чем
     оставить пользователя без сессии, если сосед завис.
     """
 
     def __init__(self, timeout: float = _token_lock.DEFAULT_TIMEOUT) -> None:
         self._timeout = timeout
-        self._inproc = False
         self._cm: object | None = None
 
     def acquire(self) -> bool:
-        self._inproc = _INPROC_REFRESH_LOCK.acquire(timeout=self._timeout)
-        if not self._inproc:
-            return False
         cm = _token_lock.token_refresh_lock(self._timeout)
         self._cm = cm
         try:
             return bool(cm.__enter__())  # type: ignore[attr-defined]
-        except Exception:  # noqa: BLE001 — сбой лока не должен рвать сессию
+        except Exception:  # сбой лока не должен рвать сессию
             self._cm = None
             return False
 
@@ -323,10 +337,6 @@ class _RefreshGuard:
         if cm is not None:
             with contextlib.suppress(Exception):
                 cm.__exit__(None, None, None)  # type: ignore[attr-defined]
-        if self._inproc:
-            self._inproc = False
-            with contextlib.suppress(Exception):
-                _INPROC_REFRESH_LOCK.release()
 
 
 def _make_refresh_callback(cfg: ClientConfig) -> object:
@@ -355,6 +365,12 @@ def _make_refresh_callback(cfg: ClientConfig) -> object:
         # считал повтор кражей — ``reuse_detected``, 401 на всё.
         # Ждём в рабочем потоке: захват блокирующий, а на event loop демона
         # висит long-poll очереди заданий.
+        async with _inproc_refresh_lock():
+            return await _refresh_locked(cfg, refresh)
+
+    async def _refresh_locked(
+        cfg: ClientConfig, refresh: str
+    ) -> tuple[str, str] | None:
         guard = _RefreshGuard()
         await asyncio.to_thread(guard.acquire)
         try:
