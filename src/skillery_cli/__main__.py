@@ -11,9 +11,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import re
 import sys
+import threading
 import time
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
@@ -56,6 +58,7 @@ from skillery_cli.core.manifest_builder import build_manifest, git_commit_sha
 from skillery_cli.core.secret_scan import scan_dir as secret_scan_dir
 from skillery_cli.daemon.instrumentation import track_skill_event
 from skillery_cli.core.transport import ApiError, HubClient
+from skillery_cli.core import token_lock as _token_lock
 from skillery_cli import _branding
 from skillery_cli.commands._common import (
     hydrate_session_permissions,
@@ -281,6 +284,51 @@ def _get_access_token() -> str:
     return access
 
 
+#: #2264: внутрипроцессная половина сериализации обновления токена. Байтовая
+#: блокировка файла на Windows видна и СВОЕМУ процессу (другой дескриптор того
+#: же файла тоже ждёт), поэтому две корутины одного процесса без этого замка
+#: заклинили бы друг друга. ``threading.Lock`` (а не ``asyncio.Lock``) — потому
+#: что ждём мы в рабочем потоке и отпускаем, вообще говоря, в другом.
+_INPROC_REFRESH_LOCK = threading.Lock()
+
+
+class _RefreshGuard:
+    """Двухуровневый замок обновления токена: свой процесс + все остальные.
+
+    ``acquire``/``release`` вызываются из рабочих потоков
+    (``asyncio.to_thread``), поэтому оба уровня выбраны потоко-независимыми.
+    Неудача захвата НЕ отменяет обновление: лучше рискнуть гонкой, чем
+    оставить пользователя без сессии, если сосед завис.
+    """
+
+    def __init__(self, timeout: float = _token_lock.DEFAULT_TIMEOUT) -> None:
+        self._timeout = timeout
+        self._inproc = False
+        self._cm: object | None = None
+
+    def acquire(self) -> bool:
+        self._inproc = _INPROC_REFRESH_LOCK.acquire(timeout=self._timeout)
+        if not self._inproc:
+            return False
+        cm = _token_lock.token_refresh_lock(self._timeout)
+        self._cm = cm
+        try:
+            return bool(cm.__enter__())  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001 — сбой лока не должен рвать сессию
+            self._cm = None
+            return False
+
+    def release(self) -> None:
+        cm, self._cm = self._cm, None
+        if cm is not None:
+            with contextlib.suppress(Exception):
+                cm.__exit__(None, None, None)  # type: ignore[attr-defined]
+        if self._inproc:
+            self._inproc = False
+            with contextlib.suppress(Exception):
+                _INPROC_REFRESH_LOCK.release()
+
+
 def _make_refresh_callback(cfg: ClientConfig) -> object:
     """Возвращает callback который CLI передаёт в HubClient.
 
@@ -301,23 +349,42 @@ def _make_refresh_callback(cfg: ClientConfig) -> object:
                 f"refresh-токен для {cfg.user_email} не найден в хранилище"
             )
             return None
-        sub = HubClient(base_url=cfg.base_url, access_token=None)
+        # #2264: обновление токена сериализуем МЕЖДУ ПРОЦЕССАМИ. Демон,
+        # watchdog и команда пользователя — разные процессы с общим токеном;
+        # без лока они проворачивали один RT одновременно, и сервер (законно)
+        # считал повтор кражей — ``reuse_detected``, 401 на всё.
+        # Ждём в рабочем потоке: захват блокирующий, а на event loop демона
+        # висит long-poll очереди заданий.
+        guard = _RefreshGuard()
+        await asyncio.to_thread(guard.acquire)
         try:
-            data = await sub.refresh(refresh)
-        except ApiError as exc:
-            _REFRESH_FAILURE["reason"] = (
-                f"обновление сессии отклонено сервером ({exc.code})"
-            )
-            return None
+            # ПОД ЛОКОМ перечитываем хранилище: пока мы ждали, сосед мог уже
+            # обновить пару. Слать свой (теперь устаревший) токен нельзя —
+            # это ровно тот повтор, из-за которого сервер рвёт сессию. Лок
+            # без перечитывания лишь упорядочил бы гонку, а не убрал её.
+            fresh_access, fresh_refresh = load_tokens(cfg.user_email)
+            if fresh_refresh and fresh_refresh != refresh and fresh_access:
+                _REFRESH_FAILURE["reason"] = None
+                return (fresh_access, fresh_refresh)
+            sub = HubClient(base_url=cfg.base_url, access_token=None)
+            try:
+                data = await sub.refresh(fresh_refresh or refresh)
+            except ApiError as exc:
+                _REFRESH_FAILURE["reason"] = (
+                    f"обновление сессии отклонено сервером ({exc.code})"
+                )
+                return None
+            finally:
+                await sub.close()
+            new_access = data["access_token"]
+            new_refresh = data["refresh_token"]
+            save_tokens(cfg.user_email, new_access, new_refresh)
+            populate_from_jwt(cfg, new_access)
+            cfg.save()
+            _REFRESH_FAILURE["reason"] = None
+            return (new_access, new_refresh)
         finally:
-            await sub.close()
-        new_access = data["access_token"]
-        new_refresh = data["refresh_token"]
-        save_tokens(cfg.user_email, new_access, new_refresh)
-        populate_from_jwt(cfg, new_access)
-        cfg.save()
-        _REFRESH_FAILURE["reason"] = None
-        return (new_access, new_refresh)
+            await asyncio.to_thread(guard.release)
 
     return _refresh
 
