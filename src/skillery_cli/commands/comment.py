@@ -214,8 +214,9 @@ def cmd_comment_delete(
 
     _common.run(_do())
 
-
-def register(app: typer.Typer) -> None:
-    """Регистрирует ``comment`` (post) + ``comments`` (list)."""
-    app.command(name="comment")(cmd_comment_post)
-    app.command(name="comments")(cmd_comments_list)
+# #2267: модульного ``register()`` здесь НЕТ и быть не должно. Он объявлял
+# плоские ``comment``/``comments``, но не вызывался ниоткуда — реальная
+# регистрация группы ``comment`` (add/edit/delete/list) живёт в ``build_app``,
+# где доступны per-permission гейты (comment.post / edit_own / delete_own).
+# Мёртвая вторая точка регистрации = второй источник правды о том, как
+# называются команды; удалена.

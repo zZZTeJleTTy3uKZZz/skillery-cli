@@ -1,4 +1,11 @@
-"""Тесты admin-команд CLI: `admin invite` (B1) и `admin company-create` (B2).
+"""Контракт выдачи инвайта (B1) и создания компании (B2).
+
+#2267: группа ``admin`` расформирована — эти действия живут в группах своих
+сущностей (``member invite`` / ``company create`` / ``skill yank`` /
+``skill sync-versions``), а прежние имена остались скрытыми алиасами. Тесты
+здесь проверяют КОНТРАКТ действий на выживших реализациях; что имён ровно по
+одному видимому — в ``test_2267_command_dedup.py``.
+
 
 B1: `issue_invite` бил в УДАЛЁННЫЙ nested-роут `POST /companies/{cid}/invites`
 с body `{role_id, group_ids}`. Реальный контракт (backend
@@ -109,18 +116,23 @@ async def test_issue_invite_includes_email_when_provided() -> None:
         }
 
 
-def test_cmd_admin_invite_calls_issue_invite_flat(
+def test_cmd_member_invite_calls_issue_invite_flat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """cmd_admin_invite больше не принимает --groups и читает invite_token из
-    flat-ответа."""
-    from skillery_cli import __main__ as main_mod
+    """#2267: ЕДИНСТВЕННАЯ реализация выдачи инвайта — ``member invite``.
+
+    Прежняя вторая копия ``cmd_admin_invite`` удалена (то же flat
+    ``POST /invites``, тот же pre-emptive User+Membership), её имя осталось
+    скрытым алиасом сюда. Регрессия B1 проверяется на выжившей функции:
+    сигнатура без ``group_ids``, invite_token читается из flat-ответа.
+    """
+    from skillery_cli.commands import _common
+    from skillery_cli.commands import member as member_mod
 
     _patch_text_mode()
-    cfg = ClientConfig(base_url="http://localhost:8000")
+    cfg = ClientConfig(base_url="http://localhost:8000", company_id="7")
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
-    monkeypatch.setattr(main_mod, "_get_access_token", lambda: "tok")
-    monkeypatch.setattr(main_mod, "_make_refresh_callback", lambda c: None)
+    monkeypatch.setattr(_common, "get_access_token", lambda: "tok")
 
     invoked: dict[str, Any] = {}
 
@@ -152,25 +164,36 @@ def test_cmd_admin_invite_calls_issue_invite_flat(
     fake_client = MagicMock()
     fake_client.issue_invite = _fake_issue_invite
     fake_client.close = _fake_close
-    monkeypatch.setattr(main_mod, "HubClient", lambda **kw: fake_client)
+    monkeypatch.setattr(_common, "make_client", lambda *a, **kw: fake_client)
 
-    # Сигнатура без group_ids.
-    main_mod.cmd_admin_invite(company_id="7", role_id="3")
+    # Сигнатура без group_ids; --company-id (форма прежней `admin invite`)
+    # маппится в тот же параметр company.
+    member_mod.cmd_member_invite(role_id="3", email=None, name=None, company="7")
 
     assert invoked["company_id"] == "7"
     assert invoked["role_id"] == "3"
+    # email опционален (прежняя `admin invite` умела выдавать голый токен).
+    assert invoked["email"] is None
+    assert invoked["display_name"] is None
 
 
-def test_cmd_admin_invite_has_no_groups_param() -> None:
-    """Регрессия B1: параметр --groups удалён из сигнатуры команды."""
+def test_cmd_member_invite_has_no_groups_param() -> None:
+    """Регрессия B1: параметра --groups нет у выжившей реализации."""
     import inspect
 
+    from skillery_cli.commands import member as member_mod
+
+    params = inspect.signature(member_mod.cmd_member_invite).parameters
+    assert "group_ids" not in params
+    assert "company" in params
+    assert "role_id" in params
+
+
+def test_admin_invite_function_is_gone() -> None:
+    """#2267: вторая реализация удалена, а не оставлена «на всякий случай»."""
     from skillery_cli import __main__ as main_mod
 
-    params = inspect.signature(main_mod.cmd_admin_invite).parameters
-    assert "group_ids" not in params
-    assert "company_id" in params
-    assert "role_id" in params
+    assert not hasattr(main_mod, "cmd_admin_invite")
 
 
 # ============================================================
@@ -214,18 +237,18 @@ async def test_create_company_body_has_no_max_users() -> None:
         assert body["slug"] == "acme"
 
 
-def test_cmd_admin_company_create_omits_slug_when_not_given(
+def test_cmd_company_create_omits_slug_when_not_given(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """slug опционален: если --slug не задан, ключ slug НЕ уходит в payload
     (backend создаст компанию slug-less)."""
-    from skillery_cli import __main__ as main_mod
+    from skillery_cli.commands import _common
+    from skillery_cli.commands import company as company_mod
 
     _patch_text_mode()
     cfg = ClientConfig(base_url="http://localhost:8000")
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
-    monkeypatch.setattr(main_mod, "_get_access_token", lambda: "tok")
-    monkeypatch.setattr(main_mod, "_make_refresh_callback", lambda c: None)
+    monkeypatch.setattr(_common, "get_access_token", lambda: "tok")
 
     captured: dict[str, Any] = {}
 
@@ -244,9 +267,9 @@ def test_cmd_admin_company_create_omits_slug_when_not_given(
     fake_client = MagicMock()
     fake_client.create_company = _fake_create_company
     fake_client.close = _fake_close
-    monkeypatch.setattr(main_mod, "HubClient", lambda **kw: fake_client)
+    monkeypatch.setattr(_common, "make_client", lambda *a, **kw: fake_client)
 
-    main_mod.cmd_admin_company_create(
+    company_mod.cmd_company_create(
         slug=None,
         name="Acme",
         owner_email="o@acme.ru",
@@ -260,16 +283,16 @@ def test_cmd_admin_company_create_omits_slug_when_not_given(
     assert captured["owner_display_name"] == "Owner"
 
 
-def test_cmd_admin_company_create_sends_slug_when_given(
+def test_cmd_company_create_sends_slug_when_given(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from skillery_cli import __main__ as main_mod
+    from skillery_cli.commands import _common
+    from skillery_cli.commands import company as company_mod
 
     _patch_text_mode()
     cfg = ClientConfig(base_url="http://localhost:8000")
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: cfg))
-    monkeypatch.setattr(main_mod, "_get_access_token", lambda: "tok")
-    monkeypatch.setattr(main_mod, "_make_refresh_callback", lambda c: None)
+    monkeypatch.setattr(_common, "get_access_token", lambda: "tok")
 
     captured: dict[str, Any] = {}
 
@@ -288,9 +311,9 @@ def test_cmd_admin_company_create_sends_slug_when_given(
     fake_client = MagicMock()
     fake_client.create_company = _fake_create_company
     fake_client.close = _fake_close
-    monkeypatch.setattr(main_mod, "HubClient", lambda **kw: fake_client)
+    monkeypatch.setattr(_common, "make_client", lambda *a, **kw: fake_client)
 
-    main_mod.cmd_admin_company_create(
+    company_mod.cmd_company_create(
         slug="acme",
         name="Acme",
         owner_email="o@acme.ru",
@@ -300,14 +323,22 @@ def test_cmd_admin_company_create_sends_slug_when_given(
     assert "max_users" not in captured
 
 
-def test_cmd_admin_company_create_has_no_max_users_param() -> None:
+def test_cmd_company_create_has_no_max_users_param() -> None:
     """Регрессия B2: параметр max_users удалён из сигнатуры команды."""
     import inspect
 
+    from skillery_cli.commands.company import cmd_company_create
+
+    params = inspect.signature(cmd_company_create).parameters
+    assert "max_users" not in params
+
+
+def test_admin_company_create_function_is_gone() -> None:
+    """#2267: `admin company-create` был вторым ИМЕНЕМ той же функции —
+    осталось одно (`company create`), имя-дубль снято в скрытый алиас."""
     from skillery_cli import __main__ as main_mod
 
-    params = inspect.signature(main_mod.cmd_admin_company_create).parameters
-    assert "max_users" not in params
+    assert not hasattr(main_mod, "cmd_admin_company_create")
 
 
 # === #340: yank/unyank версии навыка ===
@@ -366,13 +397,17 @@ async def test_unyank_posts_unyank_endpoint() -> None:
         assert route.called
 
 
-def test_cmd_admin_yank_signature() -> None:
-    """Команда yank зарегистрирована с ожидаемыми параметрами."""
+def test_cmd_skill_yank_signature() -> None:
+    """Команда yank зарегистрирована с ожидаемыми параметрами.
+
+    #2267: живёт в группе ``skill`` (действие над навыком), функция
+    переименована в ``cmd_skill_yank``; ``admin yank`` — скрытый алиас.
+    """
     import inspect
 
     from skillery_cli import __main__ as main_mod
 
-    params = inspect.signature(main_mod.cmd_admin_yank).parameters
+    params = inspect.signature(main_mod.cmd_skill_yank).parameters
     assert "slug" in params
     assert "version" in params
     assert "unyank" in params

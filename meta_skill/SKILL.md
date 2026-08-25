@@ -376,20 +376,29 @@ flush`. CLI **никогда не шлёт события синхронно** �
 | ------------------------------------------------------ | ---------------------- | ----------- |
 | `skills-hub members [--company ID] [--q S] [--page N] [--size N]` | любой залогиненный | Участники компании (серверная пагинация). Без admin-прав бэк показывает только вас; hub-admin без `--company` видит всех пользователей хаба |
 | `skills-hub roles`                                     | любой залогиненный     | Глобальный каталог ролей — для выбора `role-id` |
-| `skills-hub member invite --email E --role-id R [--name N] [--company ID]` | `user.invite` | Пригласить участника (печатает invite-token + URL). Display-name по умолчанию — часть email до `@`. Приглашённый сразу виден в `members` (статус invited) |
+| `skills-hub member invite --role-id R [--email E] [--name N] [--company ID]` | `user.invite` \| `invite.manage` | Пригласить участника (печатает invite-token + URL). ЕДИНСТВЕННАЯ реализация выдачи инвайта (#2267). `--email` опционален: задан — приглашённый сразу виден в `member list` (статус invited), опущен — выдаётся голая токен-ссылка. Display-name по умолчанию — часть email до `@`. `--company-id` — синоним `--company` |
 | `skills-hub member remove <user_id> [--company ID]`    | `user.remove`          | Убрать из компании (сессии удалённого отзываются) |
 | `skills-hub member change-role <user_id> <role_id> [--company ID]` | `role.manage` | Сменить роль. Не-assignable роль для company-admin отклоняется backend'ом (422) |
 | `skills-hub member lock <user_id> [--reason R]`        | `user.lock`            | Заблокировать вход (сессии отзываются; self-lock запрещён) |
 | `skills-hub member unlock <user_id>`                   | `user.lock`            | Снять блокировку |
 | `skills-hub member reset-password <user_id>`           | `company.manage`       | Одноразовый пароль: показывается **ОДИН раз** (backend хранит лишь хэш). В `--json` пароль уходит в stdout — **агенту: не логировать**. Сессии пользователя отзываются |
 
-### Админка (только hub-admin / company-admin)
+### Административные действия (по правам, а не по имени группы)
 
-| Команда                                       | Назначение                                       |
-| --------------------------------------------- | ------------------------------------------------ |
-| `skills-hub admin sync-skill <id-или-slug>`   | Подтянуть новые GitLab tags                      |
-| `skills-hub admin company-create <slug> ...`  | Создать новую компанию + invite owner'у (slug компании задаёт hub-admin). Legacy-локация — каноничная P1-команда: `company create` |
-| `skills-hub admin invite --company-id ... --role-id ...` | Выдать invite member'у (P1-аналог: `member invite`) |
+Группа `admin` РАСФОРМИРОВАНА (#2267): действие живёт в группе своей
+сущности, доступ решают права. Прежние имена продолжают работать скрытыми
+устаревшими алиасами (с предупреждением в stderr) — но в новых скриптах
+используйте канон.
+
+| Команда                                              | Право                        | Назначение                                   |
+| ----------------------------------------------------- | ---------------------------- | -------------------------------------------- |
+| `skills-hub skill sync-versions <id-или-slug>`        | `hub.admin`                  | Подтянуть новые git-теги навыка как версии    |
+| `skills-hub skill yank <id-или-slug> <semver>`        | `skill.manage` \| `hub.admin` | Снять версию из latest/install (`--unyank` — вернуть) |
+| `skills-hub company create --name ... --owner-email ...` | `hub.company_create`      | Создать компанию + invite owner'у             |
+
+Устаревшие имена (работают, из справки скрыты): `admin sync-skill` →
+`skill sync-versions`, `admin yank` → `skill yank`, `admin company-create` →
+`company create`, `admin invite` → `member invite` (см. таблицу участников выше).
 
 `skills-hub --help` после login показывает только те команды, на которые у
 пользователя есть permission в JWT — это управляется backend'ом в момент

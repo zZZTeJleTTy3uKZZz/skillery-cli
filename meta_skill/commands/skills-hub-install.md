@@ -26,7 +26,7 @@ skills-hub --json install $ARGUMENTS
 ```
 
 Если это установка из хаба и backend ответил 403 / 404 / "VALIDATION" —
-объясни, что у пользователя нет прав на этот skill (попросить admin invite или
+объясни, что у пользователя нет прав на этот skill (попросить `member invite` или
 `skill.install` permission). Для `--path` / `--from-git` логин не нужен — если
 там ошибка, причина обычно в пути/URL/ref.
 
