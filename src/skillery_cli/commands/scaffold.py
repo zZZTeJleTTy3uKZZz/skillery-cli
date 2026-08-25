@@ -172,15 +172,32 @@ def validate_scaffolded_skill(skill_dir: Path | str) -> list[str]:
             # #1489: блок [[capabilities]] проверяем ЗДЕСЬ же, а не только на
             # публикации: узнать про опечатку в момент генерации/правки навыка
             # дешевле, чем в конце длинного прохода publish.
+            # #2271: заодно сверяем его с плагинами `skillery.plugins` из
+            # pyproject.toml дистрибутива — расхождение этих двух реестров и
+            # было причиной, по которой в проде не завелось ни одной
+            # способности.
             from skillery_cli.core.capability_manifest import (
                 CapabilityManifestError,
                 parse_capabilities,
+                plugin_entry_points_of,
+                reconcile_capabilities,
             )
 
             try:
-                parse_capabilities(data)
+                declared = parse_capabilities(data)
             except CapabilityManifestError as exc:
                 errors.append(f"_skill_meta.toml: {exc}")
+            else:
+                entry_points, pyproject_path = plugin_entry_points_of(skill_dir)
+                try:
+                    reconcile_capabilities(
+                        declared,
+                        entry_points,
+                        manifest_path=meta,
+                        pyproject_path=pyproject_path,
+                    )
+                except CapabilityManifestError as exc:
+                    errors.append(str(exc))
     return errors
 
 
