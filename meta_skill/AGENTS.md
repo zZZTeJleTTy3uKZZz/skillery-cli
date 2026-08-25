@@ -501,16 +501,16 @@ skills-hub --json enable <slug>
 | `ticket.read`           | `tickets list`, `ticket show`                       |
 | `ticket.update_status`  | `ticket status`                                     |
 | `events.send`           | реальная отправка events на backend (daemon/flush)  |
-| `user.invite`           | `member invite`                                     |
 | `user.remove`           | `member remove`                                     |
 | `role.manage`           | `member change-role`; также открывает `company invite-links *` |
 | `user.lock`             | `member lock` / `member unlock`                     |
 | `company.manage`        | `company edit`, `member reset-password`; также открывает `company invite-links *` |
 | `catalog.manage`        | `company catalog list / grant / revoke`             |
 | `catalog.view_all`      | `company catalog list` (read-only)                  |
-| `hub.admin`             | `company list`, `admin sync-skill` (+hub-admin bypass: проходит все permission-гейты CLI) |
-| `hub.company_create`    | `company create`, legacy `admin company-create`     |
-| `invite.manage`         | `admin invite`                                      |
+| `hub.admin`             | `company list`, `skill sync-versions` (+hub-admin bypass: проходит все permission-гейты CLI) |
+| `hub.company_create`    | `company create`                                    |
+| `user.invite` \| `invite.manage` | `member invite` (ANY-of: #2267 свёл две прежние копии команды в одну) |
+| `skill.manage`          | `skill yank` (+ гранты доступа, способности)        |
 
 > **Always-on** (без логина и без прав): `register`, `join`,
 > `install --path` / `--from-git`, `enable` / `disable` / `remove` / `sync` /
