@@ -47,7 +47,7 @@ dependencies = [
     # резолвить). На 0.3.4 всё продолжает работать: команды навыков зовутся
     # напрямую, просто без учёта, а миграция шимов молча становится no-op.
     "s-skillkit>=0.3.7",  # 0.3.7: владение артефактами — чужую команду/MCP не перехватить (#2272)
-    "s-skillgate>=0.1.5",  # единый secret-scan (G5): regex-fallback publish-гейта на skillgate
+    "s-skillgate>=0.1.7",  # единый secret-scan (G5): regex-fallback publish-гейта на skillgate; >=0.1.7: generic-password не блокирует код (getpass/передача переменной/JS-false)
     # >=0.1.2 — модуль telemetrykit.outbox: ОБЩИЙ локальный транспорт исходящих
     # сущностей (~/.skillery/outbox.jsonl). Навыки пишут туда kind="skill_run"
     # декоратором @track_skill(), CLI — kind="log"; доставку на /telemetry/batch
