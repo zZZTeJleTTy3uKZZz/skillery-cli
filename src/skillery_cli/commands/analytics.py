@@ -22,7 +22,7 @@ from rich.console import Console
 from rich.table import Table
 
 from skillery_cli.config import ClientConfig
-from skillery_cli.core import analytics_sync, linker
+from skillery_cli.core import analytics_sync, install_reason, linker
 from skillery_cli.core.agents import get_target
 from skillery_cli.core.installer import read_meta
 from skillery_cli.output import emit_data
@@ -47,6 +47,12 @@ def _scan_store(store_root: Path) -> list[dict[str, Any]]:
                 "agent": meta.get("agent"),
                 "source": meta.get("source"),
                 "scope": meta.get("scope"),
+                # #2282: ПРИЧИНА установки — «явная» или «приехал как
+                # зависимость». Без неё выдача не отвечала на вопрос «почему
+                # этот навык вообще здесь»; отсутствие поля в старой мете
+                # читается как явная установка (см. core.install_reason).
+                "install_reason": install_reason.reason_of(meta),
+                "required_by": install_reason.required_by_of(meta),
                 "path": str(d),
             }
         )
@@ -74,6 +80,8 @@ def _scan_project(target, project: Path) -> list[dict[str, Any]]:  # noqa: ANN00
                 "agent": meta.get("agent"),
                 "source": meta.get("source"),
                 "linked": linked,
+                "install_reason": install_reason.reason_of(meta),
+                "required_by": install_reason.required_by_of(meta),
                 "path": str(d),
             }
         )

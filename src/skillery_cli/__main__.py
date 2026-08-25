@@ -52,6 +52,7 @@ from skillery_cli.core.agents import (
     detect_agent,
     get_target,
 )
+from skillery_cli.core import install_reason
 from skillery_cli.core.installer import SkillInstaller, read_meta
 from skillery_cli.core.store_backup import iter_store_skill_dirs
 from skillery_cli.core.manifest_builder import build_manifest, git_commit_sha
@@ -444,6 +445,32 @@ def _is_newer(candidate: str, current: str) -> bool:
     cand_p = cand + (0,) * (width - len(cand))
     cur_p = cur + (0,) * (width - len(cur))
     return cand_p > cur_p
+
+
+def _stale_chain_deps(
+    bundle: dict, *, target, project: Optional[Path]
+) -> list[tuple[str, str]]:
+    """Зависимости из ``dependencies_chain``, которых нет локально либо старее.
+
+    #2282: ``skill update`` сравнивал ТОЛЬКО версию самого навыка. Пока версия
+    потребителя не менялась, он получал «актуально» — а новая версия
+    объявленной им зависимости (и тем более зависимость, ПОЯВИВШАЯСЯ в новой
+    версии манифеста) не приезжала вообще. Сам навык в цепочке пропускается:
+    его версию гейтит обычная проверка ``_is_newer``.
+    """
+    self_slug = bundle.get("skill_slug")
+    stale: list[tuple[str, str]] = []
+    for entry in bundle.get("dependencies_chain") or []:
+        if not entry or len(entry) < 2:
+            continue
+        dep_slug, dep_version = entry[0], entry[1]
+        if not dep_slug or dep_slug == self_slug:
+            continue
+        meta = read_meta(target.slug_dir(dep_slug, project=project))
+        current = (meta or {}).get("version")
+        if current is None or _is_newer(dep_version, current):
+            stale.append((dep_slug, dep_version))
+    return stale
 
 
 def _maybe_auto_update(cfg: ClientConfig, *, project: Path | None = None) -> None:
@@ -3167,6 +3194,99 @@ async def _materialize_from_bundle(
     )
 
 
+def _reportable_installs(chain: list[dict]) -> list[dict]:
+    """Что из цепочки устройство предъявляет хабу как «установлено» (#2282).
+
+    Не рапортуются: пропущенные, stub-заглушки и ЗАВИСИМОСТИ. Зависимость —
+    расширение потребителя, а не навык устройства; отрапортовав её, мы завели бы
+    плагин в веб-набор устройства, а следующая сверка набора притащила бы его
+    обратно уже КОРНЕМ цепочки — то есть полноценным навыком в зоне агента,
+    мимо решения пользователя. Петля замыкается молча, поэтому режем её здесь.
+    """
+    return [
+        item
+        for item in chain
+        if not item.get("skipped")
+        and item.get("content") != "stub"
+        and item.get("agent_visible") is not False
+    ]
+
+
+def _sweep_orphan_dependencies(  # noqa: ANN001
+    installer,
+    store_root: Path,
+    *,
+    consumer: str,
+    project_path: Optional[Path],
+    agent_target=None,
+) -> list[str]:
+    """Убрать зависимости, которые остались без потребителя (#2282).
+
+    Обратные ссылки, а не forward-граф: у каждой зависимости хранится
+    ``required_by`` — кто её требует. Снятие потребителя вычёркивает его из этих
+    списков, и навык уезжает с диска ровно тогда, когда список опустел И навык
+    приехал как зависимость. Так же считает ``apt autoremove``: forward-граф
+    успевает протухнуть (манифест потребителя уже удалён), обратные ссылки —
+    нет.
+
+    Рекурсивно: снятая зависимость сама могла что-то требовать.
+
+    Возвращает имена реально убранных навыков (в порядке уборки).
+    """
+    swept: list[str] = []
+    queue = [consumer]
+    seen = {consumer}
+    while queue:
+        gone = queue.pop(0)
+        try:
+            orphans = install_reason.forget_consumer(store_root, gone)
+        except Exception:  # noqa: BLE001 — уборка не важнее самого удаления
+            break
+        for orphan in orphans:
+            if orphan in seen:
+                continue
+            seen.add(orphan)
+            with suppress(Exception):
+                _revert_tooling(
+                    orphan, agent_target=agent_target, project=project_path,
+                    store_dir=Path(store_root) / orphan,
+                )
+            try:
+                res = installer.remove(
+                    slug=orphan, project=project_path, purge=True
+                )
+            except Exception:  # noqa: BLE001 — см. выше
+                continue
+            if res.removed:
+                swept.append(orphan)
+                queue.append(orphan)
+    return swept
+
+
+def _unlink_from_agent_zone(installer, dir_name: str, project_path: Optional[Path]) -> bool:  # noqa: ANN001
+    """Убрать навык из ЗОНЫ АГЕНТА, оставив его в сторе (#2282).
+
+    Зона агента (``~/.claude/skills/<навык>`` либо каталог агента в проекте) —
+    это витрина: что там лежит, то агент видит списком и может позвать. Навык,
+    приехавший ТОЛЬКО как зависимость, там не место — он расширяет потребителя,
+    а не является отдельным навыком. Стор при этом не трогаем: потребитель
+    берёт контент оттуда.
+
+    Ставим-и-снимаем, а не «не ставим»: линковка выполняется внутри
+    ``installer.install`` (единственный путь материализации, общий со снапшотом
+    и монорепо-подпапкой), и обходить её пришлось бы тремя разными способами.
+    Кит снимает ссылку своим же гейтом принадлежности — чужой каталог на этом
+    имени не пострадает.
+
+    Возвращает True, если ссылка действительно была снята.
+    """
+    try:
+        result = installer.remove(slug=dir_name, project=project_path)
+    except Exception:  # noqa: BLE001 — витрина не важнее самой установки
+        return False
+    return bool(result.removed)
+
+
 async def _install_chain(
     cfg: ClientConfig,
     access: str,
@@ -3180,6 +3300,7 @@ async def _install_chain(
     source: dict | None = None,
     headless: bool = False,
     initiator: str = "cli",
+    promote_root: bool = True,
 ) -> list[dict]:
     """Качает bundle (+deps), материализует в стор, линкует в scope.
 
@@ -3221,6 +3342,13 @@ async def _install_chain(
             [[bundle["skill_slug"], bundle["version"], bundle.get("repo_url")]],
         )
         installed_chain: list[dict] = []
+        # Имя каталога КОРНЯ цепочки — идентичность потребителя в ``required_by``
+        # (для slug-less навыка это его числовой id, как и имя папки стора).
+        from skillkit.installer import skill_dir_name as _root_dir_name
+
+        _root_dn = _root_dir_name(
+            bundle.get("skill_slug") or None, bundle.get("skill_id")
+        )
         for dep_slug, dep_version, dep_repo in chain:
             if dep_slug == bundle["skill_slug"]:
                 dep_bundle = bundle
@@ -3242,6 +3370,11 @@ async def _install_chain(
 
             _store_root = cfg.effective_store_dir()
             _dn = _dir_name(dep_slug or None, dep_id)
+            # #2282: причину и накопленный required_by снимаем ДО материализации
+            # — кит перезаписывает ``_skill_meta.json`` целиком, наши поля в
+            # свежем файле отсутствуют. Без снимка переустановка теряла бы и
+            # повышение до explicit, и список потребителей.
+            _prior_reason = install_reason.snapshot(_store_root / _dn)
             replaced = _backup_foreign_before_hub(_store_root, _dn)
             # #1405, вторая половина: то же имя в ЗОНЕ АГЕНТА. Стор — хранилище,
             # исполняется ссылка/каталог в `~/.claude/skills/<навык>`; пока он
@@ -3306,11 +3439,44 @@ async def _install_chain(
                             "carried_over": _rec.get("carried_over") or [],
                             "initiator": initiator,
                         }})
+            # #2282: ПРИЧИНА установки. Корень цепочки — то, что попросил
+            # пользователь (explicit); остальные приехали ради него и являются
+            # РАСШИРЕНИЕМ потребителя, а не самостоятельным навыком: они лежат в
+            # сторе (потребителю доступны), но в зону агента не линкуются —
+            # иначе агент видит плагин в списке навыков и зовёт его напрямую.
+            # Явная установка того же навыка «повышает» его до полноценного
+            # (apt: manual побеждает auto) — тогда ссылка остаётся.
+            _store_dir_final = Path(result.store_dir or (_store_root / _dn))
+            _is_root = dep_slug == bundle["skill_slug"]
+            if _is_root and not promote_root and _prior_reason[0] is not None:
+                # Обновление НЕ является просьбой пользователя поставить навык:
+                # авто-апдейт и `skill update` обходят то, что УЖЕ стоит, и
+                # корнем цепочки оказывается в том числе навык, приехавший
+                # зависимостью. Повысить его тут значило бы протащить плагин в
+                # зону агента задним числом. Причина сохраняется как была.
+                _reason = _prior_reason[0]
+            else:
+                _reason = (
+                    install_reason.EXPLICIT if _is_root else install_reason.DEPENDENCY
+                )
+            _effective = install_reason.stamp(
+                _store_dir_final,
+                reason=_reason,
+                required_by=None if _is_root else _root_dn,
+                prior=_prior_reason,
+            )
+            _agent_visible = _effective == install_reason.EXPLICIT
+            if not _agent_visible and not result.skipped:
+                _unlink_from_agent_zone(installer, _dn, project_path)
             entry = {
                 "slug": dep_slug, "skill_id": result.skill_id,
                 "version": dep_version, "is_update": result.is_update,
                 "target_dir": str(result.target_dir), "scope": result.scope,
-                "linked": result.linked, "link_kind": result.link_kind,
+                "linked": result.linked if _agent_visible else False,
+                "link_kind": result.link_kind if _agent_visible else "none",
+                "install_reason": _effective,
+                "agent_visible": _agent_visible,
+                "store_dir": str(_store_dir_final),
             }
             # Фикс 5в: stub-установка помечается в JSON-ответе явно.
             if result.content == "stub":
@@ -3534,9 +3700,7 @@ def cmd_install(
             )
             try:
                 reported: set[str] = set()
-                for item in installed_chain:
-                    if item.get("skipped") or item.get("content") == "stub":
-                        continue
+                for item in _reportable_installs(installed_chain):
                     ref = item.get("slug") or (
                         str(item["skill_id"])
                         if item.get("skill_id") is not None
@@ -3565,6 +3729,17 @@ def cmd_install(
                     )
                     continue
                 action = "Обновлён" if item["is_update"] else "Установлен"
+                # #2282: зависимость приезжает в СТОР и расширяет потребителя, но
+                # отдельным навыком в зоне агента не становится — говорим это
+                # прямо, иначе «установлен» читается как «агент его увидит».
+                if item.get("agent_visible") is False:
+                    console.print(
+                        f"[green]✓[/] {action} {agent_tag}(зависимость) 🧩 "
+                        f"{item['slug']}@{item['version']} → "
+                        f"{item.get('store_dir') or item['target_dir']} "
+                        "[dim](в сторе; отдельным навыком агенту не показывается)[/]"
+                    )
+                    continue
                 mount = "📎" if item["linked"] else "📄"
                 console.print(
                     f"[green]✓[/] {action} {agent_tag}({item['scope']}) {mount} "
@@ -3617,6 +3792,10 @@ def cmd_enable(
     if local is not None:
         linked, link_kind = local
         store_dir = cfg.effective_store_dir() / slug
+        # #2282: включение в проект — ЯВНОЕ действие пользователя. Навык,
+        # приехавший когда-то как зависимость, этим повышается до полноценного
+        # (и перестаёт быть кандидатом на авто-уборку вместе с потребителем).
+        install_reason.stamp(store_dir, reason=install_reason.EXPLICIT)
         store_meta = read_meta(store_dir) or {}
         project_manifest.add(project_path, slug)
         # повторное включение tooling-навыка в проект → CLI/MCP/deps
@@ -4626,6 +4805,9 @@ async def _auto_update_hub_installs(
                 cfg, access, slug=str(ref), channel=channel, scope="global",
                 project_path=None, force=False, agent_target=agent_target,
                 initiator="daemon-auto",
+                # #2282: фон обходит УЖЕ установленное — это не просьба
+                # пользователя поставить навык, причина установки сохраняется.
+                promote_root=False,
             )
             report["updated"].append(ref)
         except Exception as exc:  # noqa: BLE001 — один навык не валит фон
@@ -5165,10 +5347,16 @@ def cmd_update(
                         }
                     )
                     continue
+                # #2282: обновления требует не только сам навык, но и его
+                # цепочка — зависимость могла выйти новее либо появиться в
+                # новой версии манифеста.
+                stale_deps = _stale_chain_deps(
+                    bundle, target=target, project=proj
+                )
                 # Гейт как в _maybe_auto_update: обновляем ТОЛЬКО если бандл
                 # строго новее (баг B8 — раньше `== ` пропускал лишь равенство,
                 # т.е. downgrade на младшую версию проходил в install).
-                if not _is_newer(bundle["version"], current_version):
+                if not _is_newer(bundle["version"], current_version) and not stale_deps:
                     results.append(
                         {
                             "slug": meta_slug,
@@ -5181,6 +5369,62 @@ def cmd_update(
                             "updated": False,
                         }
                     )
+                    continue
+                chain = bundle.get("dependencies_chain") or []
+                if len(chain) > 1:
+                    # Навык С ЗАВИСИМОСТЯМИ обновляем тем же путём, что и
+                    # ставим, — ``_install_chain``: он обходит цепочку целиком
+                    # и умеет снапшот-канал (без git-кред устройства). Прямой
+                    # ``installer.install`` этого не умеет: он обновил бы один
+                    # навык и молча оставил зависимость на старой версии.
+                    # Версии ДО установки: после неё на диске уже новые, и
+                    # «from» в отчёте равнялся бы «to» (то есть апдейт выглядел
+                    # бы как пустой).
+                    before = {
+                        entry[0]: (
+                            read_meta(target.slug_dir(entry[0], project=proj)) or {}
+                        ).get("version", "0.0.0")
+                        for entry in chain
+                        if entry and entry[0]
+                    }
+                    installed = await _install_chain(
+                        cfg,
+                        access,
+                        slug=ref,
+                        channel=channel,
+                        scope=scope_label,
+                        project_path=proj,
+                        force=True,
+                        agent_target=target,
+                        initiator="cli",
+                        # #2282: обновление сохраняет причину установки — иначе
+                        # `skill update --all` протаскивал бы зависимости в зону
+                        # агента задним числом.
+                        promote_root=False,
+                    )
+                    for row in installed:
+                        row_slug = row.get("slug")
+                        results.append(
+                            {
+                                "slug": row_slug,
+                                "skill_id": row.get("skill_id"),
+                                "ref": row_slug or ref,
+                                "scope": row.get("scope") or scope_label,
+                                "project": str(proj) if proj else None,
+                                "from": before.get(row_slug, current_version),
+                                "to": row.get("version"),
+                                "updated": not row.get("skipped"),
+                                "via_chain": True,
+                            }
+                        )
+                        if not row.get("skipped"):
+                            track_skill_event(
+                                "skill.update",
+                                slug=row_slug or ref,
+                                version=row.get("version"),
+                                scope=row.get("scope") or scope_label,
+                                agent=target.name,
+                            )
                     continue
                 up = installer.install(
                     slug=meta_slug,
@@ -5389,6 +5633,19 @@ def cmd_remove(
     # следующий `installed` «необъяснимо» показывал якобы удалённый навык.
     disabled_only = result.scope == "project" and not result.purged
 
+    # #2282: снятие потребителя уносит за собой ЕГО зависимости — но только те,
+    # что (а) приехали как зависимость и (б) больше никем не требуются. Явно
+    # поставленный навык остаётся, даже осиротев: пользователь просил его сам
+    # (инвариант `apt autoremove`, см. skillery_cli.core.install_reason).
+    # Отключение из проекта (ссылка снята, стор цел) зависимости не трогает —
+    # навык никуда не делся, следующий `enable` вернёт его без сети.
+    removed_dependencies: list[str] = []
+    if not disabled_only:
+        removed_dependencies = _sweep_orphan_dependencies(
+            installer, cfg.effective_store_dir(), consumer=slug,
+            project_path=project_path, agent_target=target,
+        )
+
     def _render(_: dict) -> None:
         if disabled_only:
             console.print(
@@ -5404,12 +5661,18 @@ def cmd_remove(
             console.print(f"[green]✓[/] Удалён ({result.scope}): {slug}")
         if manifest_removed:
             console.print("[dim]Убран из .skillery/skills.toml[/]")
+        for dep in removed_dependencies:
+            console.print(
+                f"[green]✓[/] Убрана зависимость: {dep} "
+                "[dim](приехала ради снятого навыка, больше никем не требуется)[/]"
+            )
 
     emit_data(
         {
             "slug": slug,
             "scope": result.scope,
             "removed": True,
+            "removed_dependencies": removed_dependencies,
             # Машинному потребителю тоже нужна разница «отключён» vs «удалён»:
             # по одному removed=True он её не восстановит.
             "disabled_only": disabled_only,
