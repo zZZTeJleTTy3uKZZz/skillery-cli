@@ -86,6 +86,25 @@ def collect_installed(
     }
 
 
+def _reason_suffix(item: dict) -> str:
+    """Хвост строки с ПРИЧИНОЙ установки (#2282).
+
+    Явная установка помечается коротко, зависимость — с перечислением тех, ради
+    кого навык здесь: без этого «почему у меня стоит hello-base» остаётся без
+    ответа, а именно этот вопрос владелец и задал на живой проверке.
+    """
+    from skillery_cli.core.install_reason import DEPENDENCY, REASON_TITLES
+
+    reason = item.get("install_reason")
+    if not reason:
+        return ""
+    title = REASON_TITLES.get(reason, reason)
+    if reason == DEPENDENCY:
+        who = ", ".join(item.get("required_by") or []) or "никем не требуется"
+        return f" [magenta]({title}: {who})[/]"
+    return f" [dim]({title})[/]"
+
+
 def render_installed(console, payload: dict) -> None:
     """Текстовый рендер выдачи (общий для ``installed`` и ``list --installed``)."""
     rows = payload["installed"]
@@ -106,6 +125,7 @@ def render_installed(console, payload: dict) -> None:
             link = " [dim](ссылка)[/]" if it.get("linked") else " [yellow](копия)[/]"
         console.print(
             f"  • [bold]{name}[/] v{ver} [cyan]{row_scope}[/] [dim]{src}[/]{link}"
+            f"{_reason_suffix(it)}"
         )
 
 
