@@ -146,9 +146,17 @@ def cmd_members_list(
 
 
 def cmd_member_invite(
-    email: str = typer.Option(..., "--email", help="Email приглашаемого"),
     role_id: str = typer.Option(
-        ..., "--role-id", help="ID роли (см. `skillery roles`)"
+        ..., "--role-id", help="ID роли (см. `skillery role list`)"
+    ),
+    email: str | None = typer.Option(
+        None,
+        "--email",
+        help=(
+            "Email приглашаемого. Задан → backend сразу заводит "
+            "pre-emptive User(invited)+Membership (приглашённый виден в "
+            "`member list`). Опущен → выдаётся только токен-ссылка."
+        ),
     ),
     name: str | None = typer.Option(
         None,
@@ -159,18 +167,27 @@ def cmd_member_invite(
         ),
     ),
     company: str | None = typer.Option(
-        None, "--company", help="ID компании (default: из вашего токена)"
+        None,
+        "--company",
+        "--company-id",
+        help="ID компании (default: из вашего токена)",
     ),
 ) -> None:
     """Пригласить участника в компанию (flat POST /invites).
 
-    Право ``user.invite``. Создаёт pre-emptive User(invited)+Membership —
-    приглашённый сразу виден в ``members``. Печатает invite-token и URL.
+    ЕДИНСТВЕННАЯ реализация выдачи инвайта (#2267): прежняя вторая копия
+    ``admin invite`` удалена, её имя оставлено скрытым алиасом сюда.
+    Видимость — по ЛЮБОМУ из прав ``user.invite`` / ``invite.manage``
+    (объединение прежних гейтов двух копий: ни одно не ослаблено и ни одно
+    не ужесточено); финально доступ режет backend.
+
+    ``--email``/``--name`` опциональны; ``--company-id`` — синоним
+    ``--company`` (форма из прежней ``admin invite``).
     """
     cfg = ClientConfig.load()
     access = _common.get_access_token()
     company_id = _resolve_company_id(cfg, company, required=True)
-    display_name = name or _derive_display_name(email)
+    display_name = name or (_derive_display_name(email) if email else None)
 
     async def _do() -> None:
         client = _common.make_client(cfg, access)
@@ -183,8 +200,8 @@ def cmd_member_invite(
 
         def _render(p: dict[str, Any]) -> None:
             console.print(
-                f"[green]✓[/] Invite для {email} (role={role_id}, "
-                f"company={company_id})"
+                f"[green]✓[/] Invite для {email or '(без email)'} "
+                f"(role={role_id}, company={company_id})"
             )
             console.print(f"  Token: {p['invite_token']}")
             console.print(f"  URL:   {p['invite_url']}")

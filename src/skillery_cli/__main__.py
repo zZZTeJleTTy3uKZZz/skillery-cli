@@ -5839,13 +5839,18 @@ def cmd_publish(
     _run(_do())
 
 
-def cmd_admin_sync(
+def cmd_skill_sync_versions(
     slug: str = typer.Argument(
         ..., metavar="ID_ИЛИ_SLUG", help="id-или-slug скилла (backend принимает оба)"
     ),
     channel: str = typer.Option("published"),
 ) -> None:
-    """[hub.admin] Backend сам подтягивает новые GitLab tags (по id-или-slug)."""
+    """[hub.admin] Подтянуть новые git-теги навыка как версии (по id-или-slug).
+
+    #2267: действие над НАВЫКОМ живёт в группе ``skill``, а не в группе по
+    имени роли. Прежнее ``admin sync-skill`` осталось скрытым алиасом.
+    Парная команда чтения — ``skill sync-status``.
+    """
     cfg = ClientConfig.load()
     access = _get_access_token()
 
@@ -5870,7 +5875,7 @@ def cmd_admin_sync(
     _run(_do())
 
 
-def cmd_admin_yank(
+def cmd_skill_yank(
     slug: str = typer.Argument(
         ..., metavar="ID_ИЛИ_SLUG", help="id-или-slug навыка"
     ),
@@ -5882,6 +5887,8 @@ def cmd_admin_yank(
     """[skill.manage] Снять (yank) версию навыка — исключить из latest/install.
 
     Снятая версия остаётся в истории; `--unyank` возвращает её обратно (#340).
+    #2267: живёт в группе ``skill`` (действие над навыком); прежнее
+    ``admin yank`` осталось скрытым алиасом.
     """
     cfg = ClientConfig.load()
     access = _get_access_token()
@@ -5909,88 +5916,14 @@ def cmd_admin_yank(
     _run(_do())
 
 
-def cmd_admin_company_create(
-    name: str = typer.Option(...),
-    owner_email: str = typer.Option(..., "--owner-email"),
-    owner_name: str = typer.Option(..., "--owner-name"),
-    slug: Optional[str] = typer.Option(
-        None,
-        "--slug",
-        help="Slug компании (требует hub.slug_manage; опусти → backend создаст slug-less)",
-    ),
-) -> None:
-    """[hub.company_create] Создать новую компанию + invite owner'у."""
-    cfg = ClientConfig.load()
-    access = _get_access_token()
-
-    async def _do() -> None:
-        client = HubClient(
-            base_url=cfg.base_url,
-            access_token=access,
-            on_token_refresh=_make_refresh_callback(cfg),
-        )
-        payload: dict[str, object] = {
-            "name": name,
-            "owner_email": owner_email,
-            "owner_display_name": owner_name,
-        }
-        if slug:
-            payload["slug"] = slug  # пустой slug не шлём → backend сделает slug-less
-        try:
-            r = await client.create_company(payload)
-        finally:
-            await client.close()
-
-        def _render(p: dict) -> None:
-            label = slug or p.get("company_id")
-            console.print(f"[green]✓[/] Компания {label} (id={p['company_id']})")
-            console.print(f"  Owner invite: {p['owner_invite_token']}")
-            console.print(f"  URL:          {p['owner_invite_url']}")
-
-        emit_data(r, text_renderer=_render)
-
-    _run(_do())
-
-
-def cmd_admin_invite(
-    company_id: str = typer.Option(..., "--company-id"),
-    role_id: str = typer.Option(..., "--role-id"),
-    email: Optional[str] = typer.Option(
-        None, "--email", help="Email приглашаемого (pre-emptive User+Membership)"
-    ),
-    name: Optional[str] = typer.Option(
-        None, "--name", help="Display-name приглашаемого (вместе с --email)"
-    ),
-) -> None:
-    """[invite.manage] Выдать invite member/manager'у в свою компанию.
-
-    Flat POST /invites: nested /companies/{id}/invites удалён. ``--email``
-    + ``--name`` опциональны — если заданы, backend сразу заводит
-    User(invited)+Membership (invitee виден в списке пользователей).
-    """
-    cfg = ClientConfig.load()
-    access = _get_access_token()
-
-    async def _do() -> None:
-        client = HubClient(
-            base_url=cfg.base_url,
-            access_token=access,
-            on_token_refresh=_make_refresh_callback(cfg),
-        )
-        try:
-            r = await client.issue_invite(
-                company_id, role_id, email=email, display_name=name
-            )
-        finally:
-            await client.close()
-
-        def _render(p: dict) -> None:
-            console.print(f"[green]✓[/] Invite: {p['invite_token']}")
-            console.print(f"  URL: {p['invite_url']}")
-
-        emit_data(r, text_renderer=_render)
-
-    _run(_do())
+# #2267: `cmd_admin_company_create` и `cmd_admin_invite` УДАЛЕНЫ — это были
+# вторые реализации уже существующих действий:
+#   * создание компании — `commands.company.cmd_company_create` (`company create`);
+#   * выдача инвайта    — `commands.member.cmd_member_invite` (`member invite`).
+# Обе шлют ровно те же flat-запросы (POST /companies, POST /invites), поэтому
+# копии не нужны: одно действие = одна реализация. Прежние имена `admin
+# company-create` / `admin invite` остались СКРЫТЫМИ deprecated-алиасами,
+# делегирующими в канонические функции (см. `_register_admin_compat`).
 
 
 def cmd_config(
@@ -6414,6 +6347,32 @@ def build_app() -> typer.Typer:
         ),
     )
 
+    # === #2267: группа `admin` РАСФОРМИРОВАНА по сущностям ===
+    # Решение владельца по канону REST (#1452) — «префикс /admin убран из
+    # путей полностью: админ и пользователь ходят в одни ручки, видимость
+    # решают права и RLS». В путях API это сделано; здесь то же самое делаем
+    # в командах: действие живёт в группе своей СУЩНОСТИ, а доступ к нему
+    # решают права, а не имя группы.
+    #
+    #   admin sync-skill    → skill sync-versions   (право hub.admin)
+    #   admin yank          → skill yank            (skill.manage | hub.admin)
+    #   admin company-create→ company create        (hub.company_create)
+    #   admin invite        → member invite         (user.invite | invite.manage)
+    #
+    # Права здесь ровно те же, что были у прежних admin-команд — переезд
+    # ничего не ослабляет и не ужесточает. Прежние имена продолжают работать
+    # скрытыми deprecated-алиасами (`_register_admin_compat` в конце сборки).
+    can_admin_sync_versions = cfg.has_permission("hub.admin")
+    can_company_create = cfg.has_permission("hub.company_create")
+    # invite: ОБЪЕДИНЕНИЕ гейтов двух прежних копий (admin invite —
+    # invite.manage, member invite — user.invite). Выбрать одно молча значило
+    # бы отнять команду у половины прежних вызывающих, поэтому ANY-of.
+    can_invite = (
+        cfg.has_permission("user.invite")
+        or cfg.has_permission("invite.manage")
+    )
+    can_yank = cfg.has_permission("skill.manage") or cfg.is_hub_admin()
+
     # --- P1 member ---
     # Участники + каталог ролей (C3): members/roles — любой залогиненный
     # (backend сам сужает выдачу: member без admin-прав видит только себя),
@@ -6422,7 +6381,8 @@ def build_app() -> typer.Typer:
 
     _member_mod.register(
         app,
-        can_invite=cfg.has_permission("user.invite"),
+        # #2267: ANY-of user.invite | invite.manage (см. блок выше).
+        can_invite=can_invite,
         can_remove=cfg.has_permission("user.remove"),
         can_change_role=cfg.has_permission("role.manage"),
         # S3 D2.2: lock/unlock гейтится тем же предикатом, что backend
@@ -6452,34 +6412,6 @@ def build_app() -> typer.Typer:
 
     _permission_mod.register(app, can_manage=cfg.is_hub_admin())
 
-    # === Admin sub-app (если есть хотя бы одно admin-право) ===
-    can_sync = cfg.has_permission("hub.admin")
-    can_company_create = cfg.has_permission("hub.company_create")
-    can_invite = cfg.has_permission("invite.manage") or cfg.is_hub_admin()
-    can_yank = cfg.has_permission("skill.manage") or cfg.is_hub_admin()
-    if can_sync or can_company_create or can_invite or can_yank:
-        admin_app = typer.Typer(
-            no_args_is_help=True,
-            help="Admin команды (зависят от ваших прав)",
-        )
-        app.add_typer(admin_app, name="admin")
-        # cli-kits W6: подкоманды admin → command_kit.gated. Предикаты —
-        # предвычисленные булевы (can_invite включает is_hub_admin-fallback),
-        # поэтому has_permission отдаём как lambda над готовым bool (точное
-        # зеркало прежних `if can_x:`).
-        gated(admin_app, permission="sync-skill",
-              has_permission=lambda _p: can_sync,
-              name="sync-skill")(cmd_admin_sync)
-        gated(admin_app, permission="yank",
-              has_permission=lambda _p: can_yank,
-              name="yank")(cmd_admin_yank)
-        gated(admin_app, permission="company-create",
-              has_permission=lambda _p: can_company_create,
-              name="company-create")(cmd_admin_company_create)
-        gated(admin_app, permission="invite",
-              has_permission=lambda _p: can_invite,
-              name="invite")(cmd_admin_invite)
-
     # --- P1 company ---
     # sub-app `company` (C2): show/switch — always-on для залогиненного
     # (бэк сам режет tenant-изоляцией); остальные подкоманды гейтятся
@@ -6490,7 +6422,8 @@ def build_app() -> typer.Typer:
     _company_mod.register(
         app,
         can_list=cfg.is_hub_admin(),
-        can_create=cfg.has_permission("hub.company_create"),
+        can_create=can_company_create,  # #2267: тот же гейт, что был у admin company-create
+
         can_edit=cfg.has_permission("company.manage"),
         can_invite_links=(
             cfg.has_permission("company.manage")
@@ -6542,8 +6475,116 @@ def build_app() -> typer.Typer:
         ),
     )
 
+    # #2267: два бывших admin-глагола — действия над НАВЫКОМ, поэтому их место
+    # в группе `skill` (рядом с sync-status/version add), а не в группе по
+    # имени роли. Регистрируем ПОСЛЕ skill_extra: группа `skill` к этому
+    # моменту уже создана.
+    skill_app = _skill_group(app)
+    gated(skill_app, permission="yank", has_permission=lambda _p: can_yank,
+          name="yank")(cmd_skill_yank)
+    gated(skill_app, permission="sync-versions",
+          has_permission=lambda _p: can_admin_sync_versions,
+          name="sync-versions")(cmd_skill_sync_versions)
+
+    # #2267: прежние имена группы `admin` — СКРЫТЫЕ deprecated-алиасы.
+    _register_admin_compat(
+        app,
+        can_sync=can_admin_sync_versions,
+        can_yank=can_yank,
+        can_company_create=can_company_create,
+        can_invite=can_invite,
+    )
+
     _finalize_groups(app)
     return app
+
+
+def _skill_group(app: typer.Typer) -> typer.Typer:
+    """Sub-app ``skill`` (создаётся, если его ещё нет).
+
+    Группа собирается несколькими модулями (``skill_extra``, ``_grouping``),
+    поэтому берём уже существующий инстанс — иначе глаголы разъедутся по двум
+    одноимённым группам.
+    """
+    for group in app.registered_groups:
+        if group.name == "skill" and group.typer_instance is not None:
+            return group.typer_instance
+    sub = typer.Typer(
+        no_args_is_help=True,
+        help="Навыки: поиск, установка, включение, обновление, публикация.",
+    )
+    app.add_typer(sub, name="skill")
+    return sub
+
+
+def _register_admin_compat(
+    app: typer.Typer,
+    *,
+    can_sync: bool,
+    can_yank: bool,
+    can_company_create: bool,
+    can_invite: bool,
+) -> None:
+    """Back-compat группы ``admin`` (#2267): скрытые deprecated-алиасы.
+
+    Группа расформирована (каждое действие переехало в группу своей
+    сущности), но CLI стоит у пользователей и зовётся из скриптов и SKILL.md
+    навыков — снести имена значило бы молча сломать чужую автоматизацию.
+    Поэтому ровно тот же приём, что для ``accept-invite`` (#1223):
+
+    * группа и все её команды ``hidden=True`` + ``deprecated=True`` — из
+      справки уходят, вызываться продолжают;
+    * алиас ведёт в ТУ ЖЕ функцию, что новая форма (не копию — иначе формы
+      разойдутся при первой правке);
+    * при вызове в stderr уходит предупреждение с новым именем.
+
+    Гейты — те же булевы, что у канонических форм: алиас не даёт доступа,
+    которого нет у новой формы.
+    """
+    from skillery_cli.commands.company import cmd_company_create
+    from skillery_cli.commands.member import cmd_member_invite
+
+    if not (can_sync or can_yank or can_company_create or can_invite):
+        return
+    admin_app = typer.Typer(
+        no_args_is_help=True,
+        help="УСТАРЕЛО: команды переехали в группы skill/company/member.",
+        hidden=True,
+        deprecated=True,
+    )
+    app.add_typer(admin_app, name="admin", hidden=True, deprecated=True)
+    _admin_alias(
+        admin_app, can_sync, "sync-skill", "skill sync-versions",
+        cmd_skill_sync_versions,
+    )
+    _admin_alias(admin_app, can_yank, "yank", "skill yank", cmd_skill_yank)
+    _admin_alias(
+        admin_app, can_company_create, "company-create", "company create",
+        cmd_company_create,
+    )
+    _admin_alias(
+        admin_app, can_invite, "invite", "member invite", cmd_member_invite
+    )
+
+
+def _admin_alias(
+    admin_app: typer.Typer,
+    allowed: bool,
+    old_verb: str,
+    new_path: str,
+    func: Any,
+) -> None:
+    """Один скрытый deprecated-алиас ``admin <old_verb>`` → ``<new_path>``."""
+    from skillery_cli._grouping import deprecated_alias
+
+    gated(
+        admin_app,
+        permission=old_verb,
+        has_permission=lambda _p: allowed,
+        name=old_verb,
+        hidden=True,
+        deprecated=True,
+    )(deprecated_alias(func, old=f"admin {old_verb}", new=new_path))
 
 
 def _finalize_groups(app: typer.Typer) -> None:
