@@ -281,3 +281,31 @@ def test_meta_without_reason_reads_as_explicit(tmp_path: Path) -> None:
                                         encoding="utf-8")
     assert install_reason.read_reason(d) == (install_reason.EXPLICIT, [])
     assert install_reason.is_agent_visible(d) is True
+
+
+# --- обновление не повышает зависимость задним числом -----------------------
+
+
+def test_update_does_not_promote_dependency(stand) -> None:  # noqa: ANN001
+    """Фон/`update` обходят УЖЕ установленное — это не просьба пользователя.
+
+    Регресс на реальную дыру: авто-обновление и ``skill update --all`` идут по
+    сторовым навыкам поштучно, и КОРНЕМ цепочки оказывается в том числе навык,
+    приехавший зависимостью. Повышение root'а «по факту вызова» протащило бы
+    плагин в зону агента задним числом.
+    """
+    import asyncio
+
+    stand.install(_CONSUMER)
+    assert not stand.agent_sees(_BASE)
+    asyncio.run(
+        stand.main._install_chain(
+            stand.cfg_, "tok", slug=_BASE, channel="published", scope="global",
+            project_path=None, force=False, agent_target=stand.target_,
+            initiator="daemon-auto", promote_root=False,
+        )
+    )
+    assert not stand.agent_sees(_BASE), (
+        "обновление повысило зависимость до полноценного навыка"
+    )
+    assert stand.reason(_BASE) == (install_reason.DEPENDENCY, [_CONSUMER])

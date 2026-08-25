@@ -3282,6 +3282,7 @@ async def _install_chain(
     source: dict | None = None,
     headless: bool = False,
     initiator: str = "cli",
+    promote_root: bool = True,
 ) -> list[dict]:
     """Качает bundle (+deps), материализует в стор, линкует в scope.
 
@@ -3429,7 +3430,17 @@ async def _install_chain(
             # (apt: manual побеждает auto) — тогда ссылка остаётся.
             _store_dir_final = Path(result.store_dir or (_store_root / _dn))
             _is_root = dep_slug == bundle["skill_slug"]
-            _reason = install_reason.EXPLICIT if _is_root else install_reason.DEPENDENCY
+            if _is_root and not promote_root and _prior_reason[0] is not None:
+                # Обновление НЕ является просьбой пользователя поставить навык:
+                # авто-апдейт и `skill update` обходят то, что УЖЕ стоит, и
+                # корнем цепочки оказывается в том числе навык, приехавший
+                # зависимостью. Повысить его тут значило бы протащить плагин в
+                # зону агента задним числом. Причина сохраняется как была.
+                _reason = _prior_reason[0]
+            else:
+                _reason = (
+                    install_reason.EXPLICIT if _is_root else install_reason.DEPENDENCY
+                )
             _effective = install_reason.stamp(
                 _store_dir_final,
                 reason=_reason,
@@ -4778,6 +4789,9 @@ async def _auto_update_hub_installs(
                 cfg, access, slug=str(ref), channel=channel, scope="global",
                 project_path=None, force=False, agent_target=agent_target,
                 initiator="daemon-auto",
+                # #2282: фон обходит УЖЕ установленное — это не просьба
+                # пользователя поставить навык, причина установки сохраняется.
+                promote_root=False,
             )
             report["updated"].append(ref)
         except Exception as exc:  # noqa: BLE001 — один навык не валит фон
@@ -5367,6 +5381,10 @@ def cmd_update(
                         force=True,
                         agent_target=target,
                         initiator="cli",
+                        # #2282: обновление сохраняет причину установки — иначе
+                        # `skill update --all` протаскивал бы зависимости в зону
+                        # агента задним числом.
+                        promote_root=False,
                     )
                     for row in installed:
                         row_slug = row.get("slug")
