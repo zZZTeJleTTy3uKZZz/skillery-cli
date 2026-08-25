@@ -309,3 +309,21 @@ def test_update_does_not_promote_dependency(stand) -> None:  # noqa: ANN001
         "обновление повысило зависимость до полноценного навыка"
     )
     assert stand.reason(_BASE) == (install_reason.DEPENDENCY, [_CONSUMER])
+
+
+def test_dependency_is_not_reported_as_device_install(stand) -> None:  # noqa: ANN001
+    """Зависимость не уезжает в веб-набор устройства как установленный навык.
+
+    Иначе замыкается петля: рапорт заводит плагин в ``/me/installs``, а сверка
+    набора (``pull``/демон) притаскивает его обратно уже КОРНЕМ цепочки — то
+    есть полноценным навыком в зоне агента, мимо решения пользователя.
+    """
+    chain = stand.install(_CONSUMER)
+    # Стенд ставит из stub-источника, а stub не рапортуется по СВОЕМУ правилу —
+    # снимаем метку, чтобы проверялась именно ветка «это зависимость».
+    for row in chain:
+        row.pop("content", None)
+    reportable = [
+        row["slug"] for row in stand.main._reportable_installs(chain)
+    ]
+    assert reportable == [_CONSUMER]

@@ -3194,6 +3194,24 @@ async def _materialize_from_bundle(
     )
 
 
+def _reportable_installs(chain: list[dict]) -> list[dict]:
+    """Что из цепочки устройство предъявляет хабу как «установлено» (#2282).
+
+    Не рапортуются: пропущенные, stub-заглушки и ЗАВИСИМОСТИ. Зависимость —
+    расширение потребителя, а не навык устройства; отрапортовав её, мы завели бы
+    плагин в веб-набор устройства, а следующая сверка набора притащила бы его
+    обратно уже КОРНЕМ цепочки — то есть полноценным навыком в зоне агента,
+    мимо решения пользователя. Петля замыкается молча, поэтому режем её здесь.
+    """
+    return [
+        item
+        for item in chain
+        if not item.get("skipped")
+        and item.get("content") != "stub"
+        and item.get("agent_visible") is not False
+    ]
+
+
 def _sweep_orphan_dependencies(  # noqa: ANN001
     installer,
     store_root: Path,
@@ -3682,9 +3700,7 @@ def cmd_install(
             )
             try:
                 reported: set[str] = set()
-                for item in installed_chain:
-                    if item.get("skipped") or item.get("content") == "stub":
-                        continue
+                for item in _reportable_installs(installed_chain):
                     ref = item.get("slug") or (
                         str(item["skill_id"])
                         if item.get("skill_id") is not None
