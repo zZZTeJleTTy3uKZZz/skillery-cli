@@ -183,6 +183,9 @@ def test_second_pass_does_not_break_promoted_skill(stand) -> None:  # noqa: ANN0
     stand.install(_CONSUMER)
     assert stand.agent_sees(_BASE), "повторный проход снял уже явный навык"
     assert stand.reason(_BASE)[0] == install_reason.EXPLICIT
+    # Переустановка не теряет накопленное: кит переписывает мету целиком, и без
+    # снимка ДО материализации список потребителей обнулялся бы каждым проходом.
+    assert stand.reason(_BASE)[1] == [_CONSUMER]
     assert stand.agent_sees(_CONSUMER)
     assert stand.in_store(_BASE) and stand.in_store(_CONSUMER)
 
