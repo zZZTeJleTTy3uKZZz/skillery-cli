@@ -112,19 +112,44 @@ def is_agent_visible(store_dir: Path) -> bool:
     return read_reason(store_dir)[0] == EXPLICIT
 
 
+def snapshot(store_dir: Path) -> tuple[str | None, list[str]]:
+    """Причина и список потребителей ДО переустановки навыка.
+
+    Снимать их обязательно ЗАРАНЕЕ: кит перезаписывает ``_skill_meta.json``
+    целиком при каждой материализации, и наши поля в свежем файле отсутствуют.
+    Без снимка переустановка теряла бы и повышение до explicit, и накопленный
+    ``required_by``.
+
+    Первый элемент — ``None``, если навыка на диске не было ВОВСЕ (новая
+    установка: прежнего мнения о причине не существует). Мета БЕЗ нашего поля —
+    это старая установка, и она читается как ``explicit`` (см. docstring
+    модуля): иначе первый же приезд в роли зависимости разжаловал бы навык,
+    который пользователь когда-то ставил сам, и однажды снёс бы его как сироту.
+    """
+    meta = _load(store_dir)
+    if meta is None:
+        return None, []
+    return reason_of(meta), required_by_of(meta)
+
+
 def stamp(
     store_dir: Path,
     *,
     reason: str,
     required_by: str | None = None,
+    prior: tuple[str | None, list[str]] | None = None,
 ) -> str:
     """Проставить причину установки поверх меты кита. Возвращает ИТОГОВУЮ причину.
 
-    Правило старшинства (apt: ``manual`` побеждает ``auto``): если навык уже
-    помечен ``explicit``, повторный приезд в роли зависимости причину НЕ
-    понижает — только добавляет потребителя в ``required_by``. Обратный переход
+    Правило старшинства (apt: ``manual`` побеждает ``auto``): если навык уже был
+    ``explicit``, повторный приезд в роли зависимости причину НЕ понижает —
+    только добавляет потребителя в ``required_by``. Обратный переход
     (dependency → explicit) выполняется, как только пользователь ставит навык
     сам: это и есть «повышение до полноценного».
+
+    ``prior`` — снимок :func:`snapshot`, снятый ДО материализации. Не задан ⇒
+    прежнее мнение берётся из файла (так зовут те места, которые мету не
+    перезаписывали — например включение навыка в проект).
 
     Идемпотентно: повторный вызов с теми же аргументами ничего не меняет.
     """
@@ -134,9 +159,11 @@ def stamp(
         # установка не состоялась). Молчим: причина установки не важнее самой
         # установки.
         return reason
-    previous = reason_of(meta)
-    effective = EXPLICIT if EXPLICIT in (previous, reason) else DEPENDENCY
-    consumers = set(required_by_of(meta))
+    if prior is None:
+        prior = snapshot(store_dir)
+    prior_reason, prior_consumers = prior
+    effective = EXPLICIT if EXPLICIT in (prior_reason, reason) else DEPENDENCY
+    consumers = set(prior_consumers) | set(required_by_of(meta))
     if required_by:
         consumers.add(str(required_by))
     meta[REASON_KEY] = effective
@@ -183,5 +210,6 @@ __all__ = [
     "read_reason",
     "reason_of",
     "required_by_of",
+    "snapshot",
     "stamp",
 ]

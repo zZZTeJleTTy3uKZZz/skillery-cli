@@ -3351,6 +3351,11 @@ async def _install_chain(
 
             _store_root = cfg.effective_store_dir()
             _dn = _dir_name(dep_slug or None, dep_id)
+            # #2282: причину и накопленный required_by снимаем ДО материализации
+            # — кит перезаписывает ``_skill_meta.json`` целиком, наши поля в
+            # свежем файле отсутствуют. Без снимка переустановка теряла бы и
+            # повышение до explicit, и список потребителей.
+            _prior_reason = install_reason.snapshot(_store_root / _dn)
             replaced = _backup_foreign_before_hub(_store_root, _dn)
             # #1405, вторая половина: то же имя в ЗОНЕ АГЕНТА. Стор — хранилище,
             # исполняется ссылка/каталог в `~/.claude/skills/<навык>`; пока он
@@ -3429,6 +3434,7 @@ async def _install_chain(
                 _store_dir_final,
                 reason=_reason,
                 required_by=None if _is_root else _root_dn,
+                prior=_prior_reason,
             )
             _agent_visible = _effective == install_reason.EXPLICIT
             if not _agent_visible and not result.skipped:
