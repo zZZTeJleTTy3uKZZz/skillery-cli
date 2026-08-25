@@ -61,7 +61,7 @@ def test_apply_tooling_installs_cli_mcp_deps(monkeypatch: pytest.MonkeyPatch) ->
 
     monkeypatch.setattr(
         ti.path_store, "add_cli",
-        lambda cmd, ep, *, skill_slug: added_cli.append((cmd, ep, skill_slug))
+        lambda cmd, ep, *, skill_slug, **kw: added_cli.append((cmd, ep, skill_slug))
         or Path(f"/bin/{cmd}"),
     )
     monkeypatch.setattr(
@@ -70,7 +70,7 @@ def test_apply_tooling_installs_cli_mcp_deps(monkeypatch: pytest.MonkeyPatch) ->
     )
     monkeypatch.setattr(
         ti.mcp_register, "register_mcp",
-        lambda server, *, agent_target, project: mcp_calls.append(server)
+        lambda server, *, agent_target, project, **kw: mcp_calls.append(server)
         or {"status": "registered", "server_name": server["server_name"]},
     )
     monkeypatch.setattr(
@@ -100,7 +100,7 @@ def test_apply_ensure_on_path_called_once_for_many_clis(
 ) -> None:
     ensure_calls: list[bool] = []
     monkeypatch.setattr(ti.path_store, "add_cli",
-                        lambda cmd, ep, *, skill_slug: Path(f"/bin/{cmd}"))
+                        lambda cmd, ep, *, skill_slug, **kw: Path(f"/bin/{cmd}"))
     monkeypatch.setattr(ti.path_store, "ensure_on_path",
                         lambda: ensure_calls.append(True) or {"status": "added", "bin_dir": "/b"})
     monkeypatch.setattr(ti.mcp_register, "register_mcp",
@@ -172,7 +172,7 @@ def test_apply_cli_error_does_not_raise(monkeypatch: pytest.MonkeyPatch) -> None
 
 def test_apply_deps_failure_does_not_raise(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ti.path_store, "add_cli",
-                        lambda cmd, ep, *, skill_slug: Path(f"/bin/{cmd}"))
+                        lambda cmd, ep, *, skill_slug, **kw: Path(f"/bin/{cmd}"))
     monkeypatch.setattr(ti.path_store, "ensure_on_path",
                         lambda: {"status": "already", "bin_dir": "/b"})
     monkeypatch.setattr(ti.mcp_register, "register_mcp",
@@ -229,10 +229,10 @@ def test_revert_removes_cli_and_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
     removed_cli: list[str] = []
     unreg_mcp: list[str] = []
     monkeypatch.setattr(ti.path_store, "remove_cli",
-                        lambda name: removed_cli.append(name) or True)
+                        lambda name, **kw: removed_cli.append(name) or True)
     monkeypatch.setattr(
         ti.mcp_register, "unregister_mcp",
-        lambda name, *, agent_target, project: unreg_mcp.append(name)
+        lambda name, *, agent_target, project, **kw: unreg_mcp.append(name)
         or {"status": "unregistered"},
     )
     report = ti.revert_tooling_artifacts(
@@ -246,7 +246,7 @@ def test_revert_removes_cli_and_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_revert_prompt_skill_noop(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ti.path_store, "remove_cli",
-                        lambda name: (_ for _ in ()).throw(AssertionError("noop")))
+                        lambda name, **kw: (_ for _ in ()).throw(AssertionError("noop")))
     report = ti.revert_tooling_artifacts(
         {"kind": "prompt"}, agent_target=_Target(), project=None
     )
@@ -256,7 +256,7 @@ def test_revert_prompt_skill_noop(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_revert_error_does_not_raise(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ti.path_store, "remove_cli",
-                        lambda name: (_ for _ in ()).throw(OSError("locked")))
+                        lambda name, **kw: (_ for _ in ()).throw(OSError("locked")))
     monkeypatch.setattr(ti.mcp_register, "unregister_mcp",
                         lambda *a, **k: {"status": "unregistered"})
     # Не бросает даже если remove_cli падает.

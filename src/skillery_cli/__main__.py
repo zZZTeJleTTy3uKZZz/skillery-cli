@@ -2624,6 +2624,14 @@ def _report_tooling(report: dict) -> None:
             # PATH раньше чужого. Сказать об этом надо ЗДЕСЬ, а не когда
             # пользователь удивится нулевым запускам.
             _warn_shim_collision(name)
+        elif status == "conflict":
+            # #2272: команду занял ДРУГОЙ навык (или она заведена вручную). Кит
+            # чужое не перезаписывает — но пользователь обязан узнать, почему
+            # команда навыка не появилась, иначе «не работает» без объяснения.
+            emit_message(
+                f"CLI «{name}» не поставлен: {cli.get('reason', '')}",
+                level="warn",
+            )
         elif status in ("error", "skipped"):
             emit_message(
                 f"CLI «{name}» не поставлен ({status}): {cli.get('reason', '')}",
@@ -2636,6 +2644,12 @@ def _report_tooling(report: dict) -> None:
             emit_message(f"MCP-сервер «{name}» зарегистрирован в агенте.", level="info")
         elif status == "manual":
             emit_message(mcp.get("instruction", f"MCP «{name}»: см. инструкцию."), level="warn")
+        elif status == "conflict":
+            # #2272: сервер с таким именем уже в конфиге агента и принадлежит не
+            # нам (другой навык или ручная настройка пользователя).
+            emit_message(
+                f"MCP «{name}» не зарегистрирован: {mcp.get('reason', '')}", level="warn"
+            )
         elif status == "error":
             emit_message(
                 f"MCP «{name}» не зарегистрирован: {mcp.get('reason', '')}", level="warn"
@@ -2664,9 +2678,29 @@ def _revert_tooling(slug: str, *, agent_target, project, store_dir: Path) -> Non
     try:
         meta = read_meta(store_dir) or {}
         manifest = meta.get("manifest")
-        tooling_install.revert_tooling_artifacts(
-            manifest, agent_target=agent_target, project=project
-        )
+        try:
+            # #2272: кит снимает CLI/MCP только при совпадении владельца —
+            # для этого ему нужен slug снимаемого навыка.
+            report = tooling_install.revert_tooling_artifacts(
+                manifest,
+                agent_target=agent_target,
+                project=project,
+                skill_slug=slug,
+            )
+        except TypeError:
+            # Кит старее гейта принадлежности (s-skillkit без skill_slug) —
+            # деградируем к прежнему поведению, а не роняем снятие навыка.
+            report = tooling_install.revert_tooling_artifacts(
+                manifest, agent_target=agent_target, project=project
+            )
+        for conflict in (report or {}).get("conflicts") or []:
+            kind = "CLI" if conflict.get("artifact") == "cli" else "MCP"
+            owner = conflict.get("owner")
+            whose = f"навыку «{owner}»" if owner else "не нам (заведено вручную)"
+            emit_message(
+                f"{kind} «{conflict.get('name')}» оставлен: принадлежит {whose}.",
+                level="warn",
+            )
     except Exception as exc:  # noqa: BLE001 — откат артефактов не валит снятие
         emit_message(f"Не удалось снять CLI/MCP навыка «{slug}»: {exc}", level="warn")
     # Свой CLI-пакет навыка ставился через `uv tool install` (не shim) — снимаем
