@@ -446,6 +446,32 @@ def _is_newer(candidate: str, current: str) -> bool:
     return cand_p > cur_p
 
 
+def _stale_chain_deps(
+    bundle: dict, *, target, project: Optional[Path]
+) -> list[tuple[str, str]]:
+    """Зависимости из ``dependencies_chain``, которых нет локально либо старее.
+
+    #2282: ``skill update`` сравнивал ТОЛЬКО версию самого навыка. Пока версия
+    потребителя не менялась, он получал «актуально» — а новая версия
+    объявленной им зависимости (и тем более зависимость, ПОЯВИВШАЯСЯ в новой
+    версии манифеста) не приезжала вообще. Сам навык в цепочке пропускается:
+    его версию гейтит обычная проверка ``_is_newer``.
+    """
+    self_slug = bundle.get("skill_slug")
+    stale: list[tuple[str, str]] = []
+    for entry in bundle.get("dependencies_chain") or []:
+        if not entry or len(entry) < 2:
+            continue
+        dep_slug, dep_version = entry[0], entry[1]
+        if not dep_slug or dep_slug == self_slug:
+            continue
+        meta = read_meta(target.slug_dir(dep_slug, project=project))
+        current = (meta or {}).get("version")
+        if current is None or _is_newer(dep_version, current):
+            stale.append((dep_slug, dep_version))
+    return stale
+
+
 def _maybe_auto_update(cfg: ClientConfig, *, project: Path | None = None) -> None:
     """Тихо обновляет установленные skills до latest published если cooldown прошёл.
 
@@ -5165,10 +5191,16 @@ def cmd_update(
                         }
                     )
                     continue
+                # #2282: обновления требует не только сам навык, но и его
+                # цепочка — зависимость могла выйти новее либо появиться в
+                # новой версии манифеста.
+                stale_deps = _stale_chain_deps(
+                    bundle, target=target, project=proj
+                )
                 # Гейт как в _maybe_auto_update: обновляем ТОЛЬКО если бандл
                 # строго новее (баг B8 — раньше `== ` пропускал лишь равенство,
                 # т.е. downgrade на младшую версию проходил в install).
-                if not _is_newer(bundle["version"], current_version):
+                if not _is_newer(bundle["version"], current_version) and not stale_deps:
                     results.append(
                         {
                             "slug": meta_slug,
@@ -5181,6 +5213,58 @@ def cmd_update(
                             "updated": False,
                         }
                     )
+                    continue
+                chain = bundle.get("dependencies_chain") or []
+                if len(chain) > 1:
+                    # Навык С ЗАВИСИМОСТЯМИ обновляем тем же путём, что и
+                    # ставим, — ``_install_chain``: он обходит цепочку целиком
+                    # и умеет снапшот-канал (без git-кред устройства). Прямой
+                    # ``installer.install`` этого не умеет: он обновил бы один
+                    # навык и молча оставил зависимость на старой версии.
+                    # Версии ДО установки: после неё на диске уже новые, и
+                    # «from» в отчёте равнялся бы «to» (то есть апдейт выглядел
+                    # бы как пустой).
+                    before = {
+                        entry[0]: (
+                            read_meta(target.slug_dir(entry[0], project=proj)) or {}
+                        ).get("version", "0.0.0")
+                        for entry in chain
+                        if entry and entry[0]
+                    }
+                    installed = await _install_chain(
+                        cfg,
+                        access,
+                        slug=ref,
+                        channel=channel,
+                        scope=scope_label,
+                        project_path=proj,
+                        force=True,
+                        agent_target=target,
+                        initiator="cli",
+                    )
+                    for row in installed:
+                        row_slug = row.get("slug")
+                        results.append(
+                            {
+                                "slug": row_slug,
+                                "skill_id": row.get("skill_id"),
+                                "ref": row_slug or ref,
+                                "scope": row.get("scope") or scope_label,
+                                "project": str(proj) if proj else None,
+                                "from": before.get(row_slug, current_version),
+                                "to": row.get("version"),
+                                "updated": not row.get("skipped"),
+                                "via_chain": True,
+                            }
+                        )
+                        if not row.get("skipped"):
+                            track_skill_event(
+                                "skill.update",
+                                slug=row_slug or ref,
+                                version=row.get("version"),
+                                scope=row.get("scope") or scope_label,
+                                agent=target.name,
+                            )
                     continue
                 up = installer.install(
                     slug=meta_slug,
