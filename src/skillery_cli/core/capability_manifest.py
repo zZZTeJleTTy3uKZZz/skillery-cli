@@ -21,6 +21,34 @@ entry-point'ами дистрибутива, и разъедется молча.
 номер элемента блока.
 
 ────────────────────────────────────────────────────────────────────────────
+ДВА РЕЕСТРА ОДНОЙ СУЩНОСТИ: ``[[capabilities]]`` И ``skillery.plugins`` (#2271)
+
+Способность — это и есть плагин: имя способности = ключ entry-point группы
+``skillery.plugins`` дистрибутива. Реестров у одной сущности оказалось два, и
+они разъехались молча: реальные навыки (telegram, vk-content-cli, notebooklm,
+alice-chat-cli, boosty-content-cli) объявляют плагины в ``pyproject.toml``, а
+хаб читал только ``[[capabilities]]`` — таких блоков не было НИ ОДНОГО, и в
+проде ``capabilities`` и ``capability_leases`` стояли на нуле.
+
+Источник правды выбран **entry-points**, и вот почему. Плагин обязан быть в
+``pyproject.toml`` — иначе его не найдёт ``PluginRegistry``, и способности не
+существует физически, сколько её ни объявляй в манифесте. Обратное неверно:
+манифест без entry-point — это обещание без исполнителя. Значит блок
+``[[capabilities]]`` не источник, а **уточнение**: заголовок, описание,
+``access_level``, ``requires_lease`` — то, чего в entry-point нет.
+
+Отсюда правило:
+
+* блока нет ⇒ реестр **выводится** из entry-points (дублировать нечего);
+* блок есть ⇒ он обязан совпасть с entry-points **по множеству имён**;
+  расхождение в любую сторону — ошибка с именем способности и файлом.
+
+``pyproject.toml`` ЧИТАЕТСЯ, а не импортируется — приём
+``adapterkit/testing/plugin.py::_pyproject_entry_points``. Публикация не имеет
+права выполнять код публикуемого навыка: у него свои зависимости, свои
+побочные эффекты при импорте и, вообще говоря, чужой автор.
+
+────────────────────────────────────────────────────────────────────────────
 ГЛОБАЛЬНАЯ УНИКАЛЬНОСТЬ ИМЕНИ — НЕ ЛОКАЛЬНАЯ ПРОВЕРКА
 
 Дубль ВНУТРИ одного манифеста ловится здесь. А вот занятость имени ДРУГИМ
@@ -35,6 +63,19 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 from typing import Any
+
+#: Группа entry-point'ов, в которой живут плагины Skillery. Объявляют её
+#: ``adapterkit/registry.py`` и ``socialkit/registry.py``, читает ``gateway``.
+#: Здесь — та же строка, но БЕЗ зависимости на киты: публикации нужны две
+#: проверки чтения TOML, а не инфраструктура вызова плагинов.
+PLUGIN_ENTRY_POINT_GROUP = "skillery.plugins"
+
+#: Докуда подниматься в поисках ``pyproject.toml``. Навык обычно лежит в
+#: ``<repo>/skills/<name>/``, а дистрибутив описан в корне репозитория —
+#: поэтому подъём нужен. Но он обязан быть ОГРАНИЧЕН: без границы публикация
+#: папки, случайно оказавшейся внутри чужого проекта, приписала бы навыку
+#: чужие плагины. Граница — корень репозитория (``.git``), запасная — глубина.
+PYPROJECT_SEARCH_DEPTH = 4
 
 #: Уровни доступа способности (зеркало ``_STRICTNESS`` бэкенда).
 ACCESS_LEVELS = ("public", "restricted", "private")
@@ -119,28 +160,144 @@ def parse_capabilities(meta_toml: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
-def capabilities_of(skill_dir: Path | str) -> list[dict[str, Any]]:
-    """Способности, объявленные навыком в ``_skill_meta.toml``.
+def plugin_entry_points_of(skill_dir: Path | str) -> tuple[dict[str, str], Path | None]:
+    """Плагины ``skillery.plugins`` дистрибутива навыка: ``{имя: "модуль:Класс"}``.
 
-    Нет файла (prompt/comprehensive-навык) ⇒ пусто: способности объявляет
-    tooling, и требовать манифест от навыка-инструкции незачем. Битый TOML
-    ⇒ ошибка: его всё равно не переживёт сборка манифеста, но здесь сообщение
-    называет файл.
+    ЧИТАЕМ ``pyproject.toml``, а не импортируем пакет (приём
+    ``adapterkit/testing/plugin.py::_pyproject_entry_points``). Публикация не
+    исполняет код публикуемого навыка ни при каких условиях: у него свои
+    зависимости, свои побочные эффекты импорта и чужой автор. Плюс это
+    работает на пакете, который ещё не установлен, — а при публикации он как
+    раз обычно не установлен.
+
+    Возвращает ещё и путь к найденному файлу: сообщение об ошибке обязано
+    называть КОНКРЕТНЫЙ файл, а не «ваш pyproject».
     """
-    path = Path(skill_dir) / "_skill_meta.toml"
+    start = Path(skill_dir).resolve()
+    chain = [start, *start.parents][: PYPROJECT_SEARCH_DEPTH + 1]
+    for directory in chain:
+        candidate = directory / "pyproject.toml"
+        if candidate.is_file():
+            try:
+                data = tomllib.loads(candidate.read_text(encoding="utf-8"))
+            except (tomllib.TOMLDecodeError, OSError, UnicodeDecodeError):
+                # Битый чужой pyproject не должен ронять публикацию навыка:
+                # плагинов мы из него не узнали — значит и сверять нечего.
+                return {}, None
+            table = (data.get("project", {}).get("entry-points") or {}).get(
+                PLUGIN_ENTRY_POINT_GROUP
+            ) or {}
+            if not isinstance(table, dict):
+                return {}, None
+            return (
+                {str(name): str(value) for name, value in table.items()},
+                candidate,
+            )
+        if (directory / ".git").exists():
+            # Корень репозитория без pyproject — выше уже чужая территория.
+            break
+    return {}, None
+
+
+def reconcile_capabilities(
+    declared: list[dict[str, Any]],
+    entry_points: dict[str, str],
+    *,
+    manifest_path: Path | None = None,
+    pyproject_path: Path | None = None,
+) -> list[dict[str, Any]]:
+    """Свести объявление манифеста с реальными плагинами дистрибутива (#2271).
+
+    Источник правды — entry-points: плагина, которого нет в ``pyproject.toml``,
+    не существует физически (``PluginRegistry`` его не найдёт), сколько бы
+    манифест его ни обещал. Блок ``[[capabilities]]`` — уточнение поверх:
+    заголовок, описание, ``access_level``, ``requires_lease``.
+
+    * ``pyproject.toml`` не найден ⇒ сверять не с чем: возвращаем объявленное
+      как есть. Так навык-инструкция (без дистрибутива вовсе) и навык, лежащий
+      вне репозитория, не получают ложного срабатывания;
+    * блок пуст ⇒ **выводим** реестр из entry-points. Именно это и было
+      сломано: сегодня такие способности не видит никто;
+    * блок непуст ⇒ множества имён обязаны совпасть. Расхождение в любую
+      сторону — ошибка с именем способности и файлом.
+    """
+    if pyproject_path is None and not entry_points:
+        return declared
+    if not declared:
+        return [
+            {
+                "name": name,
+                "entry_point": entry_points[name],
+                "requires_lease": False,
+            }
+            for name in sorted(entry_points)
+        ]
+    declared_names = {str(item["name"]) for item in declared}
+    where_manifest = str(manifest_path or "_skill_meta.toml")
+    where_pyproject = str(pyproject_path or "pyproject.toml")
+    missing_plugin = sorted(declared_names - set(entry_points))
+    if missing_plugin:
+        raise CapabilityManifestError(
+            f"{where_manifest}: способности {', '.join(missing_plugin)} объявлены "
+            f"в [[capabilities]], но их нет в [project.entry-points."
+            f'"{PLUGIN_ENTRY_POINT_GROUP}"] файла {where_pyproject}. '
+            "Способность без плагина — обещание без исполнителя: реестр хаба "
+            "заведёт имя, а резолв на устройстве не найдёт ничего."
+        )
+    missing_declaration = sorted(set(entry_points) - declared_names)
+    if missing_declaration:
+        raise CapabilityManifestError(
+            f"{where_pyproject}: плагины {', '.join(missing_declaration)} объявлены "
+            f'в [project.entry-points."{PLUGIN_ENTRY_POINT_GROUP}"], но их нет в '
+            f"[[capabilities]] файла {where_manifest}. Раз блок заполняется "
+            "вручную — он обязан покрывать ВЕСЬ дистрибутив, иначе часть "
+            "способностей уедет в хаб, а часть останется невидимой."
+        )
+    # Имена сошлись — дополняем адресом плагина то, что его не указало.
+    out: list[dict[str, Any]] = []
+    for item in declared:
+        entry = dict(item)
+        entry.setdefault("entry_point", entry_points[str(item["name"])])
+        out.append(entry)
+    return out
+
+
+def capabilities_of(skill_dir: Path | str) -> list[dict[str, Any]]:
+    """Способности навыка: ``[[capabilities]]``, сверенные с плагинами (#2271).
+
+    Нет файла (prompt/comprehensive-навык) ⇒ объявления нет, но реестр всё
+    равно выводится из ``skillery.plugins`` дистрибутива, если он есть: у
+    навыков вроде ``boosty-content-cli`` и ``alice-chat-cli`` манифеста нет
+    вовсе, а плагины есть — и раньше хаб не узнавал о них ничего. Нет ни
+    манифеста, ни ``pyproject.toml`` ⇒ пусто. Битый TOML ⇒ ошибка: его всё
+    равно не переживёт сборка манифеста, но здесь сообщение называет файл.
+    """
+    skill_dir = Path(skill_dir)
+    path = skill_dir / "_skill_meta.toml"
+    entry_points, pyproject_path = plugin_entry_points_of(skill_dir)
     if not path.is_file():
-        return []
+        return reconcile_capabilities(
+            [], entry_points, manifest_path=path, pyproject_path=pyproject_path
+        )
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except (tomllib.TOMLDecodeError, OSError, UnicodeDecodeError) as exc:
         raise CapabilityManifestError(f"{path} не парсится: {exc}") from exc
-    return parse_capabilities(data)
+    return reconcile_capabilities(
+        parse_capabilities(data),
+        entry_points,
+        manifest_path=path,
+        pyproject_path=pyproject_path,
+    )
 
 
 __all__ = [
     "ACCESS_LEVELS",
     "KNOWN_KEYS",
+    "PLUGIN_ENTRY_POINT_GROUP",
     "CapabilityManifestError",
     "capabilities_of",
     "parse_capabilities",
+    "plugin_entry_points_of",
+    "reconcile_capabilities",
 ]
