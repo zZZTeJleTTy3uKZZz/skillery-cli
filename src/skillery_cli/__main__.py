@@ -6109,38 +6109,142 @@ def cmd_publish(
     _run(_do())
 
 
+#: Состояния джобы синхронизации, после которых ждать больше нечего.
+SYNC_JOB_TERMINAL = frozenset({"done", "error"})
+
+#: КОНТРАКТ ОТВЕТА ХАБА — здесь, а не в голове читающего.
+#:
+#: ``POST /skills/{id}/sync-jobs`` отдаёт ``{job_id, status}`` и ВСЕГДА 202
+#: (REST-26: синхронного ``?wait=true`` больше нет). Разбор же остался от
+#: прежней синхронной ручки и лез в ``skill_slug``/``new_versions`` — которых в
+#: ответе 202 нет и быть не может. Итог был худшим из возможных: команда
+#: печатала «✗ Ошибка: KeyError: skill_slug», хотя задача создавалась и
+#: отрабатывала. Человек видел красное и не знал, что синхронизация прошла.
+#:
+#: Результат живёт в ДРУГОМ ответе — ``GET …/sync-jobs/{job_id}``:
+#: ``{job_id, skill_slug, status, result, error}``, а внутри ``result`` —
+#: ``new_versions``/``existing_versions``/``blocked_versions`` (semver → число
+#: находок) и ``blocked_findings`` (semver → [{rule, file, line, severity}]).
+#: Форму стережёт ``tests/unit/test_2286_sync_versions_contract.py``.
+SYNC_JOB_ACCEPTED_KEYS = ("job_id", "status")
+SYNC_JOB_STATUS_KEYS = ("job_id", "skill_slug", "status", "result", "error")
+SYNC_JOB_RESULT_KEYS = (
+    "skill_slug",
+    "new_versions",
+    "existing_versions",
+    "blocked_versions",
+    "blocked_findings",
+)
+
+
+def _render_sync_job(payload: dict) -> None:
+    """Человеческий вывод джобы синхронизации — ЧЕРЕЗ ``.get``, без ``[]``.
+
+    Ни одного обращения по ключу: у джобы ТРИ разные формы (принята, сделана,
+    упала), и поле, обязательное в одной, отсутствует в двух других. Именно
+    квадратные скобки и превратили успешную синхронизацию в ``KeyError``.
+    """
+    статус = str(payload.get("status") or "—")
+    цвет = {"done": "green", "error": "red"}.get(статус, "yellow")
+    навык = payload.get("skill_slug") or ""
+    console.print(
+        f"[{цвет}]{'✓' if статус == 'done' else '•'}[/] Синхронизация"
+        f"{' ' + str(навык) if навык else ''}"
+        f" (джоба {payload.get('job_id')}): [{цвет}]{статус}[/]"
+    )
+    if payload.get("error"):
+        console.print(f"  Ошибка: {payload['error']}")
+    итог = payload.get("result")
+    if not isinstance(итог, dict):
+        if статус not in SYNC_JOB_TERMINAL:
+            # Не «ничего не приняли», а «ещё не досчитала». Разница видна
+            # только если сказать её вслух.
+            console.print("  Результата пока нет — задача ещё выполняется.")
+        return
+    console.print(f"  Новые:        {', '.join(итог.get('new_versions') or []) or '—'}")
+    console.print(f"  Существовали: {', '.join(итог.get('existing_versions') or []) or '—'}")
+    заблокированы = итог.get("blocked_versions") or {}
+    находки = итог.get("blocked_findings") or {}
+    if not заблокированы:
+        console.print("  Заблокированы: —")
+        return
+    console.print(f"  [red]Заблокированы:[/] {len(заблокированы)}")
+    for версия, сколько in заблокированы.items():
+        console.print(f"    {версия} — находок: {сколько}")
+        # ПРИЧИНА, а не только число: «версия заблокирована» без имени правила
+        # и места не даёт автору навыка ничего, кроме тревоги.
+        for находка in (находки.get(версия) or [])[:5]:
+            место = f"{находка.get('file') or '?'}:{находка.get('line') or '?'}"
+            console.print(
+                f"      {находка.get('severity') or '?'} "
+                f"{находка.get('rule') or '?'} — {место}"
+            )
+
+
 def cmd_skill_sync_versions(
     slug: str = typer.Argument(
         ..., metavar="ID_ИЛИ_SLUG", help="id-или-slug скилла (backend принимает оба)"
     ),
     channel: str = typer.Option("published"),
+    wait: bool = typer.Option(
+        True, "--wait/--no-wait", help="Дождаться результата джобы и показать его"
+    ),
+    timeout: float = typer.Option(
+        180.0, "--timeout", help="Сколько секунд ждать результата (при --wait)"
+    ),
 ) -> None:
     """[hub.admin] Подтянуть новые git-теги навыка как версии (по id-или-slug).
 
     #2267: действие над НАВЫКОМ живёт в группе ``skill``, а не в группе по
     имени роли. Прежнее ``admin sync-skill`` осталось скрытым алиасом.
     Парная команда чтения — ``skill sync-status``.
+
+    #2286: ЖДЁМ РЕЗУЛЬТАТ, А НЕ ПЕЧАТАЕМ КВИТАНЦИЮ. Хаб отвечает на постановку
+    только ``{job_id, status}``, а версии считает фоном; прежний разбор искал в
+    этой квитанции ``skill_slug`` и падал ``KeyError`` — при том что джоба
+    успешно отрабатывала. Теперь команда опрашивает джобу и печатает то, за чем
+    её звали: какие версии приняты, какие уже были и какие заблокированы
+    secret-scan'ом — с правилом и местом находки. ``--no-wait`` возвращает
+    прежнее поведение осознанно: печатает номер джобы, и его можно догнать
+    командой ``skill sync-status``.
     """
     cfg = ClientConfig.load()
     access = _get_access_token()
 
     async def _do() -> None:
+        import asyncio as _asyncio
+        import time as _time
+
         client = HubClient(
             base_url=cfg.base_url,
             access_token=access,
             on_token_refresh=_make_refresh_callback(cfg),
         )
         try:
-            r = await client.sync_skill(slug, channel=channel)
+            принята = await client.sync_skill(slug, channel=channel)
+            итог = dict(принята)
+            job_id = принята.get("job_id")
+            if wait and job_id is not None:
+                предел = _time.monotonic() + max(0.0, float(timeout))
+                while True:
+                    состояние = await client.get_sync_job(slug, str(job_id))
+                    итог = dict(состояние)
+                    if str(состояние.get("status") or "") in SYNC_JOB_TERMINAL:
+                        break
+                    if _time.monotonic() >= предел:
+                        # Ожидание кончилось — но джоба ЖИВА. Говорим это
+                        # словами: молчаливый выход читался бы как провал.
+                        итог["timed_out"] = True
+                        console.print(
+                            f"[yellow]Ждали {timeout:g}с — задача ещё выполняется.[/] "
+                            f"Догнать: skillery skill sync-status {slug} {job_id}"
+                        )
+                        break
+                    await _asyncio.sleep(1.0)
         finally:
             await client.close()
 
-        def _render(p: dict) -> None:
-            console.print(f"[green]✓[/] Sync {p['skill_slug']}:")
-            console.print(f"  Новые:        {p['new_versions'] or '—'}")
-            console.print(f"  Существовали: {p['existing_versions'] or '—'}")
-
-        emit_data(r, text_renderer=_render)
+        emit_data(итог, text_renderer=_render_sync_job)
 
     _run(_do())
 
