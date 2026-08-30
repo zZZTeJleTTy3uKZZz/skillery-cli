@@ -87,6 +87,12 @@ KNOWN_KEYS = frozenset(
     {
         "name",
         "entry_point",
+        # #1268: группа entry-point'ов и шаг доустановки. Бэкенд их принимает
+        # (``CapabilityDecl.entry_point_group``/``setup``), а этот гейт — нет:
+        # автор писал их в манифест, публикация падала с «неизвестные ключи», и
+        # единственным выходом было УБРАТЬ поля, которые хаб на самом деле ждёт.
+        "entry_point_group",
+        "setup",
         "kind",
         "title",
         "description",
@@ -149,7 +155,14 @@ def parse_capabilities(meta_toml: dict[str, Any]) -> list[dict[str, Any]]:
                 f"допустимо: {', '.join(ACCESS_LEVELS)}"
             )
         entry: dict[str, Any] = {"name": name}
-        for key in ("entry_point", "kind", "title", "description"):
+        for key in (
+            "entry_point",
+            "entry_point_group",
+            "setup",
+            "kind",
+            "title",
+            "description",
+        ):
             value = item.get(key)
             if value:
                 entry[key] = str(value)
@@ -158,6 +171,47 @@ def parse_capabilities(meta_toml: dict[str, Any]) -> list[dict[str, Any]]:
         entry["requires_lease"] = bool(item.get("requires_lease", False))
         out.append(entry)
     return out
+
+
+def entry_point_groups_of(
+    skill_dir: Path | str,
+) -> tuple[dict[str, dict[str, str]], Path | None]:
+    """ВСЕ группы entry-point'ов дистрибутива навыка: ``{группа: {имя: адрес}}``.
+
+    Групп стало больше одной (#1268): способность может жить в реестре
+    стороннего потребителя, и её ``entry_point_group`` указан в манифесте.
+    Чтобы сверить объявление с реальностью, надо видеть не только
+    ``skillery.plugins``, но и ту группу, которую назвал автор — иначе
+    единственным исходом сверки было бы «плагина нет», что неправда.
+
+    Читаем ``pyproject.toml``, а не импортируем пакет: публикация не исполняет
+    код публикуемого навыка (см. :func:`plugin_entry_points_of`).
+    """
+    start = Path(skill_dir).resolve()
+    chain = [start, *start.parents][: PYPROJECT_SEARCH_DEPTH + 1]
+    for directory in chain:
+        candidate = directory / "pyproject.toml"
+        if candidate.is_file():
+            try:
+                data = tomllib.loads(candidate.read_text(encoding="utf-8"))
+            except (tomllib.TOMLDecodeError, OSError, UnicodeDecodeError):
+                # Битый чужой pyproject не должен ронять публикацию навыка:
+                # групп мы из него не узнали — значит и сверять нечего.
+                return {}, None
+            raw = (data.get("project", {}) or {}).get("entry-points") or {}
+            if not isinstance(raw, dict):
+                return {}, None
+            groups: dict[str, dict[str, str]] = {}
+            for group, table in raw.items():
+                if isinstance(table, dict):
+                    groups[str(group)] = {
+                        str(name): str(value) for name, value in table.items()
+                    }
+            return groups, candidate
+        if (directory / ".git").exists():
+            # Корень репозитория без pyproject — выше уже чужая территория.
+            break
+    return {}, None
 
 
 def plugin_entry_points_of(skill_dir: Path | str) -> tuple[dict[str, str], Path | None]:
@@ -173,30 +227,8 @@ def plugin_entry_points_of(skill_dir: Path | str) -> tuple[dict[str, str], Path 
     Возвращает ещё и путь к найденному файлу: сообщение об ошибке обязано
     называть КОНКРЕТНЫЙ файл, а не «ваш pyproject».
     """
-    start = Path(skill_dir).resolve()
-    chain = [start, *start.parents][: PYPROJECT_SEARCH_DEPTH + 1]
-    for directory in chain:
-        candidate = directory / "pyproject.toml"
-        if candidate.is_file():
-            try:
-                data = tomllib.loads(candidate.read_text(encoding="utf-8"))
-            except (tomllib.TOMLDecodeError, OSError, UnicodeDecodeError):
-                # Битый чужой pyproject не должен ронять публикацию навыка:
-                # плагинов мы из него не узнали — значит и сверять нечего.
-                return {}, None
-            table = (data.get("project", {}).get("entry-points") or {}).get(
-                PLUGIN_ENTRY_POINT_GROUP
-            ) or {}
-            if not isinstance(table, dict):
-                return {}, None
-            return (
-                {str(name): str(value) for name, value in table.items()},
-                candidate,
-            )
-        if (directory / ".git").exists():
-            # Корень репозитория без pyproject — выше уже чужая территория.
-            break
-    return {}, None
+    groups, candidate = entry_point_groups_of(skill_dir)
+    return dict(groups.get(PLUGIN_ENTRY_POINT_GROUP) or {}), candidate
 
 
 def reconcile_capabilities(
@@ -205,6 +237,7 @@ def reconcile_capabilities(
     *,
     manifest_path: Path | None = None,
     pyproject_path: Path | None = None,
+    groups: dict[str, dict[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
     """Свести объявление манифеста с реальными плагинами дистрибутива (#2271).
 
@@ -220,8 +253,15 @@ def reconcile_capabilities(
       сломано: сегодня такие способности не видит никто;
     * блок непуст ⇒ множества имён обязаны совпасть. Расхождение в любую
       сторону — ошибка с именем способности и файлом.
+
+    #1268: способность может жить не в ``skillery.plugins``, а в группе
+    стороннего потребителя (``entry_point_group``). Такая строка сверяется со
+    СВОЕЙ группой, а не с дефолтной: иначе честное объявление выглядело бы как
+    «плагина нет». Расхождение группы — отдельная ошибка, потому что цена у неё
+    та же, что у отсутствующего плагина: потребитель резолвит способность по
+    паре (группа, имя) и в чужой группе её не найдёт.
     """
-    if pyproject_path is None and not entry_points:
+    if pyproject_path is None and not entry_points and not groups:
         return declared
     if not declared:
         return [
@@ -232,9 +272,51 @@ def reconcile_capabilities(
             }
             for name in sorted(entry_points)
         ]
-    declared_names = {str(item["name"]) for item in declared}
     where_manifest = str(manifest_path or "_skill_meta.toml")
     where_pyproject = str(pyproject_path or "pyproject.toml")
+    known_groups = groups or {}
+
+    # #1268: строки с ЧУЖОЙ группой проверяются отдельно и в общий
+    # symmetric-difference по ``skillery.plugins`` не входят — их там и не
+    # должно быть.
+    foreign: list[dict[str, Any]] = []
+    default_declared: list[dict[str, Any]] = []
+    for item in declared:
+        group = str(item.get("entry_point_group") or "").strip()
+        if group and group != PLUGIN_ENTRY_POINT_GROUP:
+            foreign.append(item)
+        else:
+            default_declared.append(item)
+
+    for item in foreign:
+        name = str(item["name"])
+        group = str(item["entry_point_group"])
+        table = known_groups.get(group)
+        if table is None:
+            # Группы нет в дистрибутиве вовсе. Молчать нельзя: потребитель
+            # ищет способность по паре (группа, имя) и не найдёт ничего, а
+            # автор будет уверен, что опубликовал рабочую способность.
+            available = ", ".join(sorted(known_groups)) or "ни одной"
+            raise CapabilityManifestError(
+                f"{where_manifest}: способность {name} объявлена в группе "
+                f"entry-point {group!r}, но такой группы нет в "
+                f"[project.entry-points] файла {where_pyproject} "
+                f"(там объявлены: {available}). Потребитель резолвит "
+                "способность по паре (группа, имя) и в чужой группе её не "
+                "найдёт."
+            )
+        if name not in table:
+            raise CapabilityManifestError(
+                f"{where_manifest}: способности {name} нет в "
+                f'[project.entry-points."{group}"] файла {where_pyproject}. '
+                "Способность без плагина — обещание без исполнителя."
+            )
+
+    declared_names = {str(item["name"]) for item in default_declared}
+    if not declared_names and foreign:
+        # Весь блок — чужие группы: сверять с ``skillery.plugins`` нечего,
+        # иначе каждая такая способность выглядела бы как «не объявлена».
+        return _with_entry_points(declared, entry_points, known_groups)
     missing_plugin = sorted(declared_names - set(entry_points))
     if missing_plugin:
         raise CapabilityManifestError(
@@ -254,10 +336,27 @@ def reconcile_capabilities(
             "способностей уедет в хаб, а часть останется невидимой."
         )
     # Имена сошлись — дополняем адресом плагина то, что его не указало.
+    return _with_entry_points(declared, entry_points, known_groups)
+
+
+def _with_entry_points(
+    declared: list[dict[str, Any]],
+    entry_points: dict[str, str],
+    groups: dict[str, dict[str, str]],
+) -> list[dict[str, Any]]:
+    """Дописать адрес плагина туда, где автор его не указал.
+
+    Адрес берётся из ТОЙ группы, которую назвала сама способность: подставить
+    сюда адрес из ``skillery.plugins`` значило бы подменить исполнителя.
+    """
     out: list[dict[str, Any]] = []
     for item in declared:
         entry = dict(item)
-        entry.setdefault("entry_point", entry_points[str(item["name"])])
+        group = str(entry.get("entry_point_group") or "").strip()
+        table = groups.get(group, {}) if group else entry_points
+        address = table.get(str(entry["name"]))
+        if address:
+            entry.setdefault("entry_point", address)
         out.append(entry)
     return out
 
@@ -274,10 +373,15 @@ def capabilities_of(skill_dir: Path | str) -> list[dict[str, Any]]:
     """
     skill_dir = Path(skill_dir)
     path = skill_dir / "_skill_meta.toml"
-    entry_points, pyproject_path = plugin_entry_points_of(skill_dir)
+    groups, pyproject_path = entry_point_groups_of(skill_dir)
+    entry_points = dict(groups.get(PLUGIN_ENTRY_POINT_GROUP) or {})
     if not path.is_file():
         return reconcile_capabilities(
-            [], entry_points, manifest_path=path, pyproject_path=pyproject_path
+            [],
+            entry_points,
+            manifest_path=path,
+            pyproject_path=pyproject_path,
+            groups=groups,
         )
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
@@ -288,6 +392,7 @@ def capabilities_of(skill_dir: Path | str) -> list[dict[str, Any]]:
         entry_points,
         manifest_path=path,
         pyproject_path=pyproject_path,
+        groups=groups,
     )
 
 
@@ -297,6 +402,7 @@ __all__ = [
     "PLUGIN_ENTRY_POINT_GROUP",
     "CapabilityManifestError",
     "capabilities_of",
+    "entry_point_groups_of",
     "parse_capabilities",
     "plugin_entry_points_of",
     "reconcile_capabilities",
