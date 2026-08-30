@@ -63,6 +63,7 @@ from skillery_cli.core import token_lock as _token_lock
 from skillery_cli import _branding
 from skillery_cli.commands._common import (
     hydrate_session_permissions,
+    login_device_payload,
     register_device_best_effort,
 )
 from skillery_cli.output import (
@@ -1519,12 +1520,18 @@ def _do_password_login(cfg: ClientConfig, *, email: str, password: str) -> None:
     async def _do() -> None:
         client = HubClient(base_url=cfg.base_url)
         try:
-            data = await client.login_password(email=email, password=password)
+            # #1416: устройство уходит ВМЕСТЕ с логином — один вызов вместо
+            # двух шагов на свежей машине.
+            data = await client.login_password(
+                email=email, password=password, device=login_device_payload()
+            )
             # JWT-slim: токен не несёт прав — забираем эффективные из
             # /me/permissions тем же (теперь авторизованным) клиентом.
             await hydrate_session_permissions(client, cfg, data["access_token"])
-            # E-D: регистрируем эту машину как устройство (best-effort).
-            await register_device_best_effort(client)
+            if not data.get("device"):
+                # Старый backend поле проглотил — откатываемся на отдельную
+                # регистрацию, иначе устройства в хабе не появится.
+                await register_device_best_effort(client)
         finally:
             await client.close()
         save_tokens(email, data["access_token"], data["refresh_token"])

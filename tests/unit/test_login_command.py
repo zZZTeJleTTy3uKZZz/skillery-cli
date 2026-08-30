@@ -105,10 +105,16 @@ def test_login_password_flow_calls_endpoint_and_saves_tokens(
 
     fake_client = MagicMock()
 
-    async def _fake_login_password(*, email: str, password: str) -> dict[str, Any]:
+    async def _fake_login_password(
+        *, email: str, password: str, device: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         assert email == "ivan@acme.ru"
         assert password == "supersecret"
+        # #1416: машина уходит ТЕМ ЖЕ запросом — иначе на свежем компьютере
+        # логин и привязка устройства снова становятся двумя шагами.
+        assert device and device["client_device_id"]
         return {
+            "device": {"id": "1", "name": device["name"]},
             "access_token": "fake-access",
             "refresh_token": "fake-refresh",
             "user_id": "u-1",
@@ -404,3 +410,65 @@ def test_login_browser_flow_state_mismatch_rejected() -> None:
 
     with pytest.raises(ValueError, match="state mismatch"):
         validate_callback_state(expected=expected_state, actual=actual_state)
+
+
+# ---------------------- #1416: единый /login с устройством ----------------------
+@pytest.mark.asyncio
+async def test_login_password_sends_client_and_device() -> None:
+    """Тип клиента и машина уходят в ТЕЛЕ одного /login, а не разными путями."""
+    import respx
+    from httpx import Response
+
+    from skillery_cli.core.transport import HubClient
+
+    with respx.mock(base_url="http://localhost:8000") as router:
+        route = router.post("/auth/login").mock(
+            return_value=Response(
+                200,
+                json={
+                    "access_token": "acc",
+                    "refresh_token": "ref",
+                    "user_id": "u1",
+                    "access_expires_at": "2026-05-26T12:00:00Z",
+                    "refresh_expires_at": "2026-06-26T12:00:00Z",
+                    "device": {"id": "7", "name": "laptop"},
+                },
+            )
+        )
+        client = HubClient(base_url="http://localhost:8000")
+        try:
+            result = await client.login_password(
+                email="ivan@acme.ru",
+                password="supersecret",
+                device={
+                    "name": "laptop",
+                    "platform": "windows",
+                    "client_device_id": "cdid-1",
+                },
+            )
+        finally:
+            await client.close()
+
+    import json as _json
+
+    sent = _json.loads(route.calls.last.request.content)
+    assert sent["client"] == "cli"
+    assert sent["device"]["client_device_id"] == "cdid-1"
+    assert result["device"]["id"] == "7"
+
+
+def test_login_device_payload_matches_registration_identity() -> None:
+    """Тело device и отдельная регистрация описывают ОДНУ машину.
+
+    Разъезд полей завёл бы один компьютер в хабе дважды."""
+    from skillery_cli.commands._common import (
+        local_device_identity,
+        login_device_payload,
+    )
+
+    name, plat, cdid = local_device_identity()
+    assert login_device_payload() == {
+        "name": name,
+        "platform": plat,
+        "client_device_id": cdid,
+    }

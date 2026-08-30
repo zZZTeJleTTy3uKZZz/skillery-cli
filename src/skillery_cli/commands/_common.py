@@ -115,6 +115,17 @@ def local_device_identity() -> tuple[str, str, str]:
     return name, plat, device_uid()
 
 
+def login_device_payload() -> dict[str, str]:
+    """Тело ``device`` для единого логина (#1416) — эта машина.
+
+    Отдельная функция, а не литерал по месту: имя, платформа и стабильный id
+    обязаны совпадать с тем, что шлёт ``register_device_best_effort``, иначе
+    один и тот же компьютер завёлся бы в хабе дважды.
+    """
+    name, plat, cdid = local_device_identity()
+    return {"name": name, "platform": plat, "client_device_id": cdid}
+
+
 async def register_device_best_effort(client: HubClient) -> None:
     """E-D web↔CLI-мост: зарегистрировать эту машину как устройство.
 

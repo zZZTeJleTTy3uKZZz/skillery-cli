@@ -466,19 +466,36 @@ class HubClient:
         )
 
     async def login_password(
-        self, *, email: str, password: str
+        self,
+        *,
+        email: str,
+        password: str,
+        device: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """POST /auth/login — email + password логин.
 
-        Returns: {access_token, refresh_token, user_id, access_expires_at, ...}.
+        Returns: {access_token, refresh_token, user_id, access_expires_at,
+        device?}.
         Backend кладёт refresh в cookie + body; CLI берёт из body и сохраняет
         в keyring.
+
+        #1416: тип клиента — поле ТЕЛА (``client="cli"``), а не отдельный
+        адрес, и вместе с ним уходит ``device`` — эта машина. Тогда устройство
+        привязывается тем же запросом, и отдельный ``POST /me/devices`` не
+        нужен: на свежей машине он был вторым шагом, и его провал оставлял
+        человека залогиненным без устройства.
+
+        Старый backend поля не знает и просто их игнорирует (``device`` в
+        ответе не придёт) — вызывающий откатывается на отдельную регистрацию.
         """
-        return await self._request(
-            "POST",
-            "/auth/login",
-            json={"email": email, "password": password},
-        )
+        body: dict[str, Any] = {
+            "email": email,
+            "password": password,
+            "client": "cli",
+        }
+        if device:
+            body["device"] = device
+        return await self._request("POST", "/auth/login", json=body)
 
     async def get_me_permissions(self) -> list[str]:
         """GET /me/permissions — authoritative эффективные права актора (из БД).
