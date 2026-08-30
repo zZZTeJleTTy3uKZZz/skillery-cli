@@ -1020,6 +1020,92 @@ class HubClient:
             raise self._parse_error_response(resp)
         return resp.content
 
+    # --- #2455: предложения-с-кодом (`skillery propose`) ----------------
+    #
+    # Ресурс подчинён навыку: предложения вне навыка не существует, поэтому
+    # корневой коллекции ``/proposals`` нет и адресуются они парой
+    # (навык, id предложения). Мутации требуют ЧИСЛОВОГО id навыка (роут
+    # разбирает его как int) — резолвим slug тем же ``_resolve_skill_id``,
+    # что и остальные мутирующие пути.
+
+    async def create_proposal(
+        self, skill_ref: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """POST /skills/{id}/proposals — метаданные предложения (201).
+
+        Метаданные и бандл разведены намеренно: обрыв заливки архива не должен
+        терять описание, иначе человек переписывает «зачем» из-за сети.
+        """
+        sid = await self._resolve_skill_id(skill_ref)
+        return await self._request("POST", f"/skills/{sid}/proposals", json=payload)
+
+    async def upload_proposal_bundle(
+        self, skill_ref: str, proposal_id: str, data: bytes
+    ) -> None:
+        """PUT /skills/{id}/proposals/{pid}/bundle — залить архив (204).
+
+        ``PUT``, а не ``POST``: заливка — установка состояния, и повтор после
+        таймаута обязан давать тот же результат, а не второе предложение.
+        """
+        sid = await self._resolve_skill_id(skill_ref)
+        await self._request(
+            "PUT",
+            f"/skills/{sid}/proposals/{proposal_id}/bundle",
+            files={"file": ("bundle.tar.gz", data, "application/gzip")},
+        )
+
+    async def submit_proposal(
+        self, skill_ref: str, proposal_id: str
+    ) -> dict[str, Any]:
+        """POST /skills/{id}/proposals/{pid}/submissions — подать (201).
+
+        Подача — подресурс, а не глагол в пути. Ответ приходит сразу со
+        статусом ``scanning``: secret-scan бандла идёт на хабе фоном.
+        """
+        sid = await self._resolve_skill_id(skill_ref)
+        return await self._request(
+            "POST", f"/skills/{sid}/proposals/{proposal_id}/submissions"
+        )
+
+    async def list_proposals(
+        self, skill_ref: str, *, status: str | None = None
+    ) -> dict[str, Any]:
+        """GET /skills/{id}/proposals — очередь предложений навыка."""
+        sid = await self._resolve_skill_id(skill_ref)
+        params = {"status": status} if status else None
+        return await self._request(
+            "GET", f"/skills/{sid}/proposals", params=params
+        )
+
+    async def get_proposal(
+        self, skill_ref: str, proposal_id: str
+    ) -> dict[str, Any]:
+        """GET /skills/{id}/proposals/{pid} — карточка предложения."""
+        sid = await self._resolve_skill_id(skill_ref)
+        return await self._request(
+            "GET", f"/skills/{sid}/proposals/{proposal_id}"
+        )
+
+    async def get_proposal_diff(
+        self, skill_ref: str, proposal_id: str
+    ) -> dict[str, Any]:
+        """GET /skills/{id}/proposals/{pid}/diff — разница, посчитанная ХАБОМ.
+
+        Своему локальному diff'у здесь верить нельзя: показывать надо ровно то,
+        что будет применено на той стороне.
+        """
+        sid = await self._resolve_skill_id(skill_ref)
+        return await self._request(
+            "GET", f"/skills/{sid}/proposals/{proposal_id}/diff"
+        )
+
+    async def withdraw_proposal(self, skill_ref: str, proposal_id: str) -> None:
+        """DELETE /skills/{id}/proposals/{pid} — автор забрал предложение."""
+        sid = await self._resolve_skill_id(skill_ref)
+        await self._request(
+            "DELETE", f"/skills/{sid}/proposals/{proposal_id}"
+        )
+
     async def advisor_stream(
         self, *, message: str, conversation_id: int | None = None
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:

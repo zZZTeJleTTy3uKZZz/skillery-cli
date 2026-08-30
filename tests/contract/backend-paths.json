@@ -5,6 +5,9 @@
   "/.well-known/jwks.json": [
    "GET"
   ],
+  "/access-grants/bulk/expire": [
+   "POST"
+  ],
   "/account-deletion-requests": [
    "GET",
    "POST"
@@ -40,18 +43,13 @@
    "POST"
   ],
   "/auth/mfa": [
-   "GET"
+   "GET",
+   "PUT"
   ],
   "/auth/mfa/backup-codes": [
    "POST"
   ],
-  "/auth/mfa/disable": [
-   "POST"
-  ],
-  "/auth/mfa/setup": [
-   "POST"
-  ],
-  "/auth/mfa/verify": [
+  "/auth/mfa/enrollments": [
    "POST"
   ],
   "/auth/oauth/yandex/callback": [
@@ -99,6 +97,9 @@
   ],
   "/capabilities/{id}/access-grants/{grant_id}": [
    "DELETE"
+  ],
+  "/capabilities/{id}/install-spec": [
+   "GET"
   ],
   "/capabilities/{id}/leases": [
    "POST"
@@ -443,6 +444,27 @@
    "GET",
    "POST"
   ],
+  "/skills/{id}/proposals": [
+   "GET",
+   "POST"
+  ],
+  "/skills/{id}/proposals/{proposal_id}": [
+   "DELETE",
+   "GET"
+  ],
+  "/skills/{id}/proposals/{proposal_id}/bundle": [
+   "GET",
+   "PUT"
+  ],
+  "/skills/{id}/proposals/{proposal_id}/decisions": [
+   "POST"
+  ],
+  "/skills/{id}/proposals/{proposal_id}/diff": [
+   "GET"
+  ],
+  "/skills/{id}/proposals/{proposal_id}/submissions": [
+   "POST"
+  ],
   "/skills/{id}/ratings/me": [
    "PUT"
   ],
@@ -466,6 +488,9 @@
   "/skills/{id}/reviews": [
    "GET",
    "POST"
+  ],
+  "/skills/{id}/scan-verdicts": [
+   "GET"
   ],
   "/skills/{id}/share-links": [
    "GET",

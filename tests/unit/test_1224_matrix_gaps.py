@@ -26,6 +26,7 @@ import typer
 from httpx import Response
 from typer.testing import CliRunner
 
+from skillery_cli import _grouping
 from skillery_cli.config import ClientConfig
 from skillery_cli.core.transport import HubClient
 
@@ -573,12 +574,17 @@ def test_no_new_flat_commands_added(monkeypatch: pytest.MonkeyPatch) -> None:
 
     Плоские имена остаются лишь как back-compat алиасы старых команд (#1223),
     заводить новые незачем.
+
+    Исключения перечислены в ``_grouping._KEEP_FLAT`` и обязаны иметь ПРИЧИНУ:
+    горячий путь агента (``run``) или единичное действие, имя которого
+    закреплено спекой и уехало в чужие инструкции (``propose``, #2455).
     """
     app = _admin_app(monkeypatch)
     visible_flat = {
         c.name for c in app.registered_commands if c.name and not c.hidden
     }
-    assert visible_flat == {"run", "web", "ask", "onboard"}
+    assert visible_flat == set(_grouping._KEEP_FLAT)
+    assert visible_flat == {"run", "web", "ask", "onboard", "propose"}
 
 
 def test_gating_hides_mutations_without_rights(

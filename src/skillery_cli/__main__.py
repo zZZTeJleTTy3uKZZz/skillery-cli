@@ -6842,6 +6842,11 @@ def build_app() -> typer.Typer:
     from skillery_cli.commands import lease as _lease_mod
 
     _lease_mod.register(app)
+    # #2455: предложения-с-кодом. Без гейта прав: `skill.propose` проверяет
+    # хаб, а спрятанная команда объясняла бы отсутствие права молчанием.
+    from skillery_cli.commands import propose as _propose_mod
+
+    _propose_mod.register(app)
     # Конфигурация хаба — только hub.admin.
     _system_mod.register(app, can_manage=cfg.is_hub_admin())
     # Сессии и профиль — всегда: это про СВОЙ аккаунт, прав не требует.
