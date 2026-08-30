@@ -1172,6 +1172,31 @@ class HubClient:
             "denied": list(data.get("denied") or []),
         }
 
+    async def list_my_leases(self, *, device_id: str | None = None) -> dict[str, Any]:
+        """GET /me/leases — ЖУРНАЛ действующих лизов (без токенов).
+
+        Нужен человеку, а не демону: демон и так знает, что заявил, а человек
+        со сломанным навыком видел только «нет доступа» и не мог отличить
+        «право не выдали» от «лиз не доехал на ЭТО устройство». Токенов в
+        ответе нет намеренно — понадобился сам лиз, он выписывается заново
+        через ``PUT /me/leases``.
+        """
+        params = {"device_id": device_id} if device_id else None
+        data = await self._request("GET", "/me/leases", params=params)
+        if not isinstance(data, dict):
+            return {"items": [], "total": 0}
+        items = list(data.get("items") or [])
+        return {"items": items, "total": int(data.get("total") or len(items))}
+
+    async def get_my_lease(self, jti: str) -> dict[str, Any]:
+        """GET /me/leases/{id} — одна строка журнала по ``jti``.
+
+        ``jti`` и есть идентичность лиза (REST-20), поэтому адрес из
+        ``Location`` после выдачи ведёт именно сюда. Чужой лиз хаб отдаёт как
+        404, а не 403: 403 подтвердил бы существование предъявительского id.
+        """
+        return await self._request("GET", f"/me/leases/{jti}")
+
     # --- #1489: команды `skillery capability …` ------------------------
     #
     # В отличие от трёх вызовов выше эти зовёт ЧЕЛОВЕК, а не демон: витрина,

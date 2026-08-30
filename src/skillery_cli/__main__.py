@@ -6836,6 +6836,12 @@ def build_app() -> typer.Typer:
     from skillery_cli.commands import capability as _capability_mod
 
     _capability_mod.register(app, can_manage=cfg.has_permission("skill.manage"))
+    # #2447: лизы — только чтение своего журнала (`/me/leases`). Без гейта:
+    # «что у меня сейчас действует» — диагностика ровно там, где человек
+    # застрял, и прятать её не от кого.
+    from skillery_cli.commands import lease as _lease_mod
+
+    _lease_mod.register(app)
     # Конфигурация хаба — только hub.admin.
     _system_mod.register(app, can_manage=cfg.is_hub_admin())
     # Сессии и профиль — всегда: это про СВОЙ аккаунт, прав не требует.
