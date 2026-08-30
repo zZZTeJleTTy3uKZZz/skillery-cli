@@ -2,15 +2,17 @@
 # подписанный вебхук в Skillery (авто-фан-аут cli_upgrade на все устройства, #1102).
 #
 # Секретов PyPI не храним: OIDC-обмен даёт короткоживущий токен (Trusted Publisher).
-# Вебхук подписывается HMAC-ключом, выданным хабом (Admin → POST /admin/webhook-keys),
+# Вебхук подписывается HMAC-ключом, выданным хабом (Конфиг системы → Ключи вебхуков, либо POST /webhook-keys),
 # положенным в GitHub Secrets: SKILLERY_WEBHOOK_KEY_ID, SKILLERY_WEBHOOK_SECRET.
 #
 # Настройка (разово, действия владельца — секреты НЕ через агента):
 #  1) pypi.org → проект skillery-cli → Publishing → Add trusted publisher:
 #       Owner: zZZTeJleTTy3uKZZz · Repository: skillery-cli
 #       Workflow: publish.yml · Environment: (пусто)
-#  2) Хаб-админ: POST /admin/webhook-keys {"name":"github-ci","scopes":["cli.publish"]}
-#       → взять из ответа key_id и secret (секрет виден ОДИН раз) →
+#  2) Хаб-админ: веб → «Конфиг системы» → вкладка «Ключи вебхуков» → «Выдать ключ»
+#       (то же самое ручкой: POST /webhook-keys {"name":"github-ci","scopes":["cli.publish"]};
+#       путь без префикса /admin — он снят в #1452)
+#       → взять key_id и secret (секрет виден ОДИН раз) →
 #       GitHub repo → Settings → Secrets → Actions:
 #         SKILLERY_WEBHOOK_KEY_ID = <key_id>
 #         SKILLERY_WEBHOOK_SECRET = <secret>
