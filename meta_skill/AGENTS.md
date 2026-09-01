@@ -6,9 +6,10 @@
 
 ## Глоссарий
 
-- **CLI** — команда `skills-hub`, ставится один раз через `scripts/install.py`
-  (из исходников монорепо: pipx/pip install `client/`). Пакета на PyPI/npm
-  пока НЕТ — `pip install skills-hub-cli` не сработает.
+- **CLI** — команда `skillery` (прежнее имя `skills-hub` оставлено лишь как
+  подсказка перейти на новое). Ставится один раз с PyPI:
+  `uv tool install skillery-cli` (или `install.sh` / `install.ps1` из корня
+  репозитория `skillery-cli`). Обновление — `skillery cli upgrade`.
 - **Skill** — отдельный навык (например, `bitrix24`), живёт в собственном
   GitLab-репо, ставится в `~/.claude/skills/<id-или-slug>/` или
   `<project>/.claude/skills/<id-или-slug>/` (имя папки — slug, либо числовой
@@ -22,8 +23,8 @@
 
 ```
 ┌─────────────────┐
-│ not installed   │ ─ python scripts/install.py ──▶ ┌─────────────────┐
-└─────────────────┘   (pipx/pip из client/)          │ installed       │
+│ not installed   │ ─ uv tool install skillery-cli ▶ ┌─────────────────┐
+└─────────────────┘   (пакет с PyPI)                  │ installed       │
                                                       │ logged out      │
                                                       └────────┬────────┘
                                                                │

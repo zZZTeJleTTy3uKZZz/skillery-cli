@@ -35,8 +35,8 @@ description: |
 Точка входа AI-агента (Claude Code / Codex) в систему Skills Hub. После
 установки агент умеет:
 
-1. **Поставить CLI** — `python ./scripts/install.py` (ставит из исходников
-   монорепо через pipx/pip; см. «Установка CLI» ниже).
+1. **Поставить CLI** — `uv tool install skillery-cli` (пакет на PyPI;
+   см. «Установка CLI» ниже).
 2. **Авторизовать** клиента через invite-токен, email + password ИЛИ
    самостоятельно: `register` (без инвайта, юзер без компании) / `join
    <ссылка>` (вступление в компанию по переиспользуемой пригласительной
@@ -71,30 +71,34 @@ description: |
 
 ## Установка CLI
 
-Пакет `skills-hub-cli` пока **не опубликован** в PyPI/npm (это roadmap).
-Основной путь сейчас — установка из исходников репозитория:
+Пакет опубликован на PyPI под именем `skillery-cli`, команда — `skillery`:
 
 ```bash
-# Из корня монорепо (рекомендуемый способ — изолированно через pipx):
-python ./scripts/install.py            # ставит client/ через pipx (или pip как fallback)
-
-# Эквивалент вручную:
-pipx install <repo>/client             # изолированное окружение
-pip install -e <repo>/client           # editable-режим в текущий venv
+uv tool install skillery-cli           # рекомендуемый способ (изолированно)
+pipx install skillery-cli              # если uv нет
+pip install skillery-cli               # в текущий venv
 ```
 
-`scripts/install.py` ставит CLI из соседней папки `client/` монорепо. Если
-запустить его в отрыве от репо (папки `client/` рядом нет) — он напечатает
-внятную ошибку с инструкцией, а не упадёт молча.
+Установщики репозитория (`install.sh` / `install.ps1` в корне) делают то же
+самое и доставляют `uv`, если его нет:
 
-> PyPI / npm дистрибутивы — **планируется**. До их выхода `pip install
-> skills-hub-cli` работать НЕ будет.
+```bash
+curl -fsSL <RAW_URL>/install.sh | sh   # Linux / macOS
+irm <RAW_URL>/install.ps1 | iex        # Windows
+```
+
+Обновление — `skillery cli upgrade` (сам определяет uv tool / pipx / pip).
+
+> Исходники CLI живут в репозитории `skillery-cli`
+> (`github.com/zZZTeJleTTy3uKZZz/skillery-cli`). Каталога `client/` монорепо,
+> на который ссылались прежние версии этого навыка, больше нет — модуль вынесен
+> в свой репозиторий 23.07.2026, копия удалена 01.09.2026.
 
 ## Quickstart для агента
 
 ```bash
-# 1. Один раз — установить CLI (из исходников монорепо)
-python ./scripts/install.py
+# 1. Один раз — установить CLI (с PyPI)
+uv tool install skillery-cli
 
 # 2. Авторизоваться (одно из двух)
 skills-hub login <invite-token-or-URL>          # первый вход — invite
@@ -483,7 +487,8 @@ tags = ["bitrix24", "crm"]
 ## Структура
 
 См. также:
-- [`scripts/install.py`](./scripts/install.py) — установщик CLI
+- установщики CLI — `install.sh` / `install.ps1` в корне репозитория
+  `skillery-cli` (ставят `uv` и `uv tool install skillery-cli`)
 - [`commands/`](./commands/) — slash-commands для Claude Code (опциональные)
 - [`AGENTS.md`](./AGENTS.md) — техн. инструкции для агента (что делать
   по шагам)

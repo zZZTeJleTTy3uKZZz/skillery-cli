@@ -27,7 +27,7 @@ Claude Code новее `2025-03` — положи эти файлы в
 | `/skills-hub-onboard`          | `skills-hub onboard` — детект стека проекта → подбор навыков → `--yes` |
 | `/skills-hub-company`          | `skills-hub company *` — создать компанию, invite-links, granted-каталог |
 | `/skills-hub-member`           | `skills-hub member *` / `members` / `roles` — участники компании |
-| `/skills-hub-self-update`      | Перепоставить CLI из исходников (pipx/pip из `client/`) |
+| `/skills-hub-self-update`      | Обновить CLI с PyPI (`skillery cli upgrade`)     |
 
 ## Установка
 
