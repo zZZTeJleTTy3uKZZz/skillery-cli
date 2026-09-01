@@ -726,7 +726,7 @@ wheels = [
 
 [[package]]
 name = "s-skillkit"
-version = "0.3.7"
+version = "0.4.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pathspec" },
@@ -734,9 +734,9 @@ dependencies = [
     { name = "s-telemetrykit" },
     { name = "tomli-w" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/73/1d/b2254d1ab5e93eace6def05176344bc35b9332d50519d6fa175925c1a5b4/s_skillkit-0.3.7.tar.gz", hash = "sha256:5eb98d43d0e2a322658ae3688d9b5de4babcbe83f83a6345d7dbc694cb482579", size = 215809, upload-time = "2026-08-25T08:46:31.563Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/48/7c/b7e07720551202a0de9a16d0ba4bd3e12bfea02d992c75949401866a92b0/s_skillkit-0.4.1.tar.gz", hash = "sha256:e350c26d2aad01e12c7ce9362c0c3b49572e8fa00c6eb390e0e9afb2189c4291", size = 251823, upload-time = "2026-09-01T11:38:58.082Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d2/45/d30ac1fe9c6a01016e00a6b59f16333df5f97f1533021661afcd08daafeb/s_skillkit-0.3.7-py3-none-any.whl", hash = "sha256:76e72283dde9f5d89b828f62fa14246c1c6d2c24e03c86932f01f0c1108333ec", size = 145333, upload-time = "2026-08-25T08:46:30.286Z" },
+    { url = "https://files.pythonhosted.org/packages/c7/ae/6308c3c60092a48e0122d0215c6477e9f51b50e2c351b461bb5354bbc20d/s_skillkit-0.4.1-py3-none-any.whl", hash = "sha256:9f0127dfff9906f14737178d7dee370cf2c8c4966944dffd6f2e6439899bc357", size = 168683, upload-time = "2026-09-01T11:38:59.18Z" },
 ]
 
 [[package]]
@@ -813,7 +813,7 @@ requires-dist = [
     { name = "s-leasekit", specifier = ">=0.1.0" },
     { name = "s-librarykit", specifier = ">=0.7.1" },
     { name = "s-skillgate", specifier = ">=0.1.7" },
-    { name = "s-skillkit", specifier = ">=0.3.7" },
+    { name = "s-skillkit", specifier = ">=0.4.1" },
     { name = "s-telemetrykit", specifier = ">=0.2.0" },
     { name = "tomli-w", specifier = ">=1.0" },
     { name = "typer", specifier = ">=0.15" },
