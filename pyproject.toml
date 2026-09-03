@@ -80,6 +80,20 @@ dev = [
     "ruff>=0.8",
 ]
 
+#: Инструменты прогона продублированы ГРУППОЙ (skl#2545): группу uv
+#: синхронизирует сама, а extra требует явного `--extra dev` — забыли флаг,
+#: и `uv run pytest` молча берёт СИСТЕМНЫЙ pytest с системными версиями
+#: зависимостей, то есть проверяет не то окружение, которое собирается.
+#: Extra `dev` НЕ удалён намеренно — на него ссылаются снаружи (.github/workflows/publish.yml, _worktrees/skillery-cli-wt-2282/.github/workflows/publish.yml),
+#: ломать внешнего потребителя нельзя. Состав держим одинаковым.
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "respx>=0.21",
+    "ruff>=0.8",
+]
+
 [project.scripts]
 skillery = "skillery_cli.__main__:main"
 
