@@ -23,10 +23,20 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 import httpx
+
+# Беды netkit приезжают из corekit (базовый кит), а не из librarykit: у
+# librarykit 0.7.1 своя иерархия ошибок, и её ``TransportError`` НЕ ловит обрыв
+# потока, поднятый netkit-транспортом. Ловим оба типа — см. ``except`` у SSE.
+from corekit.errors import TransportError as _CkTransportError
 from librarykit.errors import CliError as _LkCliError
 from librarykit.errors import TransportError as _LkTransportError
 from librarykit.retry import RetryPolicy, SimpleRetryPolicy
 from librarykit.transport import HttpxTransport
+from netkit.retry import RetryPolicy as _NkRetryPolicy
+from netkit.sse import aparse_frames
+from netkit.transport import HttpClient as _NkHttpClient
+from netkit.transport import HttpxTransport as _NkHttpxTransport
+from netkit.transport import NoopAuth as _NkNoopAuth
 
 from skillery_cli import __version__ as _CLI_VERSION
 from skillery_cli import _branding
@@ -142,6 +152,26 @@ class ApiError(_LkCliError):
         return f"[{self.status_code}/{self.code}] {self.message}"
 
 
+class _ApiErrorMapper:
+    """``ErrorMapper`` для netkit-клиента потоков: >=400 → наша :class:`ApiError`.
+
+    Зачем отдельный маппер, а не готовый permissive: разбор тела ошибки у CLI
+    свой (``_parse_error_response`` знает и FastAPI-``detail``, и наши коды), и
+    команды завязаны именно на ``ApiError`` со статусом — по нему демон отличает
+    «старый backend без эндпоинта» (404/405) от настоящей беды.
+    """
+
+    __slots__ = ("_parse",)
+
+    def __init__(self, parse: Callable[[httpx.Response], ApiError]) -> None:
+        self._parse = parse
+
+    def map(self, response: httpx.Response) -> Exception | None:
+        if response.status_code < 400:
+            return None
+        return self._parse(response)
+
+
 class HubClient:
     def __init__(
         self,
@@ -182,6 +212,58 @@ class HubClient:
                 timeout=timeout,
                 trust_env=trust_env,
             )
+        #: Всё, из чего поднимается ПОТОКОВЫЙ транспорт (лениво, см.
+        #: ``_stream_client``): его строим только если кто-то реально пошёл в SSE.
+        self._injected_http_client = http_client
+        self._timeout = timeout
+        self._trust_env = trust_env
+        self._stream_transport: _NkHttpxTransport | None = None
+        self._stream_http: _NkHttpClient | None = None
+
+    def _stream_client(self) -> _NkHttpClient:
+        """netkit choke-point для ПОТОКОВ (SSE) — ленивый, один на HubClient.
+
+        Раньше SSE брал у транспорта его приватный ``_client`` и звал httpx
+        напрямую — вместе с потоком забирая себе всё, ради чего choke-point и
+        стоит (разбор обрыва бедой кита, повторы установки соединения, единый
+        маппинг ошибок). ``HttpClient.stream`` из netkit — тот же вход, но
+        публичный.
+
+        ПОЧЕМУ ОТДЕЛЬНЫЙ ТРАНСПОРТ, А НЕ ``self._transport``. Обычные запросы
+        идут транспортом ``librarykit`` 0.7.1, а он — своя реализация, без
+        ``stream()``; ``HttpClient`` такой транспорт честно отвергает
+        (``StreamingTransport``). Поэтому поток получает свой netkit-транспорт с
+        теми же ``base_url``/``timeout``/``trust_env`` и тем же выключенным
+        retry. Побочно это и правильнее: сессия SSE живёт сутками и не должна
+        занимать пул обычных запросов. Когда librarykit начнёт реэкспортировать
+        netkit-транспорт, эти два схлопнутся в один.
+
+        Авторизация — ``NoopAuth``: токен и так уезжает per-request заголовком
+        из :meth:`_auth_headers`, а refresh-on-401 у CLI свой (tuple-колбэк с
+        сохранением новой пары токенов) — отдать его нижнему слою нечем.
+        Свой ``User-Agent`` в ``base_headers`` — чтобы клиент не подмешивал
+        браузерный наряд кита: backend по UA определяет ``client_type='cli'``.
+        """
+        if self._stream_http is None:
+            if self._injected_http_client is not None:
+                self._stream_transport = _NkHttpxTransport(
+                    retry=_NkRetryPolicy(total=0),
+                    http_client=self._injected_http_client,
+                )
+            else:
+                self._stream_transport = _NkHttpxTransport(
+                    base_url=self._base_url,
+                    retry=_NkRetryPolicy(total=0),
+                    timeout=self._timeout,
+                    trust_env=self._trust_env,
+                )
+            self._stream_http = _NkHttpClient(
+                self._stream_transport,
+                _NkNoopAuth(),
+                _ApiErrorMapper(self._parse_error_response),
+                base_headers={"User-Agent": USER_AGENT},
+            )
+        return self._stream_http
 
     def _auth_headers(self) -> dict[str, str]:
         # H-5: всегда шлём CLI User-Agent — backend помечает сессию client_type=
@@ -202,6 +284,9 @@ class HubClient:
 
     async def close(self) -> None:
         await self._transport.aclose()
+        # Потоковый транспорт поднимается лениво — закрываем, только если он был.
+        if self._stream_transport is not None:
+            await self._stream_transport.aclose()
 
     def _parse_error_response(self, resp: httpx.Response) -> ApiError:
         """Единый разбор ошибочного ответа (>=400) → ApiError.
@@ -787,7 +872,7 @@ class HubClient:
         path = f"/devices/{_device_id()}/tasks/stream"
         if params:
             path += "?" + urlencode(params)
-        client = self._transport._client  # httpx.AsyncClient кита (base_url задан)
+        client = self._stream_client()  # netkit choke-point (транспорт тот же)
 
         def _headers() -> dict[str, str]:
             h = self._auth_headers()
@@ -802,48 +887,35 @@ class HubClient:
         for attempt in range(2):
             try:
                 async with client.stream("GET", path, headers=_headers()) as resp:
-                    if (
-                        resp.status_code == 401
-                        and self._on_refresh is not None
-                        and attempt == 0
-                    ):
-                        await resp.aread()
-                        new_tokens = await self._on_refresh()
-                        if new_tokens is not None:
-                            self._access_token = new_tokens[0]
-                            continue  # повтор с новым токеном
-                    if resp.status_code >= 400:
-                        await resp.aread()
-                        raise self._parse_error_response(resp)
-                    event: str | None = None
-                    event_id: str | None = None
-                    data_lines: list[str] = []
-                    async for raw in resp.aiter_lines():
-                        line = raw.rstrip("\r")
-                        if not line:
-                            # Пустая строка — конец SSE-кадра: отдаём собранное.
-                            if data_lines:
-                                payload = "\n".join(data_lines)
-                                try:
-                                    data = json.loads(payload)
-                                except json.JSONDecodeError:
-                                    data = {}
-                                if not isinstance(data, dict):
-                                    data = {}
-                                yield (event or "message"), data, event_id
-                            event, data_lines = None, []
-                            continue
-                        if line.startswith(":"):
+                    # Разбор кадров — ``netkit.sse`` (одна машина состояний на
+                    # весь портфель): липкий ``id:``, многострочный ``data:``,
+                    # сброс ``event:`` на ``message`` после кадра.
+                    async for frame in aparse_frames(resp.aiter_lines()):
+                        if frame.comment:
                             continue  # SSE-комментарий (тоже keep-alive)
-                        if line.startswith("event:"):
-                            event = line[len("event:"):].strip()
-                        elif line.startswith("id:"):
-                            # Курсор «липкий» по спеке SSE — держим до смены.
-                            event_id = line[len("id:"):].strip() or event_id
-                        elif line.startswith("data:"):
-                            data_lines.append(line[len("data:"):].lstrip())
+                        try:
+                            data = json.loads(frame.data)
+                        except json.JSONDecodeError:
+                            data = {}
+                        if not isinstance(data, dict):
+                            data = {}
+                        yield frame.event, data, frame.id
                     return  # стрим закрыт сервером — читатель решит про реконнект
-            except (httpx.TransportError, _LkTransportError) as e:
+            except ApiError as e:
+                # 401 разбирает НАШ refresh (tuple-колбэк с сохранением пары
+                # токенов): маппер клиента уже свернул ответ в ApiError, тело
+                # дочитано — остаётся повторить открытие потока новым токеном.
+                if (
+                    e.status_code == 401
+                    and self._on_refresh is not None
+                    and attempt == 0
+                ):
+                    new_tokens = await self._on_refresh()
+                    if new_tokens is not None:
+                        self._access_token = new_tokens[0]
+                        continue  # повтор с новым токеном
+                raise
+            except (httpx.TransportError, _LkTransportError, _CkTransportError) as e:
                 # Обрыв/недоступность стрима — доменная ошибка (её ловит
                 # SSE-клиент демона и уходит на реконнект/fallback), а не сырой
                 # httpx-traceback.
@@ -1116,7 +1188,7 @@ class HubClient:
         (RAG по каталогу, RBAC-фильтрован). ``conversation_id=None`` ⇒ новая
         беседа (её id придёт в ``meta``)."""
         body = {"message": message, "conversation_id": conversation_id}
-        client = self._transport._client  # httpx.AsyncClient кита (base_url задан)
+        client = self._stream_client()  # netkit choke-point (транспорт тот же)
 
         def _headers() -> dict[str, str]:
             h = self._auth_headers()
@@ -1135,36 +1207,31 @@ class HubClient:
                 async with client.stream(
                     "POST", "/advisor/messages", json=body, headers=_headers()
                 ) as resp:
-                    if (
-                        resp.status_code == 401
-                        and self._on_refresh is not None
-                        and attempt == 0
-                    ):
-                        await resp.aread()
-                        new_tokens = await self._on_refresh()
-                        if new_tokens is not None:
-                            self._access_token = new_tokens[0]
-                            continue  # повтор с новым токеном
-                    if resp.status_code >= 400:
-                        await resp.aread()
-                        raise self._parse_error_response(resp)
-                    event: str | None = None
-                    async for raw in resp.aiter_lines():
-                        line = raw.rstrip("\r")
-                        if not line:
-                            event = None  # пустая строка — конец SSE-кадра
-                            continue
-                        if line.startswith("event:"):
-                            event = line[len("event:"):].strip()
-                        elif line.startswith("data:") and event:
-                            payload = line[len("data:"):].strip()
-                            try:
-                                data = json.loads(payload)
-                            except json.JSONDecodeError:
-                                continue
-                            yield event, data
+                    # Кадры разбирает ``netkit.sse`` — тот же разбор, что у
+                    # очереди устройства (раньше здесь лежала своя урезанная
+                    # копия: одна строка = кадр, многострочный ``data`` терялся).
+                    async for frame in aparse_frames(resp.aiter_lines()):
+                        if frame.comment:
+                            continue  # heartbeat-комментарий адвайзеру не событие
+                        try:
+                            data = json.loads(frame.data)
+                        except json.JSONDecodeError:
+                            continue  # мусорный кадр не должен ронять беседу
+                        yield frame.event, data
                     return  # стрим успешно дочитан
-            except (httpx.TransportError, _LkTransportError) as e:
+            except ApiError as e:
+                # 401 разбирает НАШ refresh (см. ``stream_device_queue``).
+                if (
+                    e.status_code == 401
+                    and self._on_refresh is not None
+                    and attempt == 0
+                ):
+                    new_tokens = await self._on_refresh()
+                    if new_tokens is not None:
+                        self._access_token = new_tokens[0]
+                        continue  # повтор с новым токеном
+                raise
+            except (httpx.TransportError, _LkTransportError, _CkTransportError) as e:
                 raise ApiError(
                     0, "NETWORK",
                     "Нет связи с бэкендом (адвайзер). Проверьте сеть/VPN.",
