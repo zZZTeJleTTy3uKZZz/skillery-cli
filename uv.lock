@@ -846,16 +846,16 @@ wheels = [
 
 [[package]]
 name = "s-netkit"
-version = "0.1.0"
+version = "0.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx", extra = ["brotli", "http2", "zstd"] },
     { name = "s-corekit" },
     { name = "stamina" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d8/78/859d43c0904721d5f90b6bd9b0205f767363345b671b261fdea911f6c9a9/s_netkit-0.1.0.tar.gz", hash = "sha256:9711ecbf86c7af97d070f37aadc1de1d45c417f6587b55509f65df74118dba92", size = 421833, upload-time = "2026-09-06T08:41:06.082Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/eb/62/d646157092461b663d61e2d14951e5a09a2891781729c92d2d350281be95/s_netkit-0.1.1.tar.gz", hash = "sha256:411c8bb7583d3e0f55f84710658486a7098caa523318d3abee8f220fd7b44adb", size = 425000, upload-time = "2026-09-06T09:56:12.176Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1f/e7/81041e1f21892fa87a66870169df5dd287648895246be072e250f1655e63/s_netkit-0.1.0-py3-none-any.whl", hash = "sha256:a65f7ca3f8bfbb103c4c873abdee82abf489b922bdfcb2c37ca6da55bb23141c", size = 255184, upload-time = "2026-09-06T08:41:04.991Z" },
+    { url = "https://files.pythonhosted.org/packages/ae/94/fb0244b6af0be645587ca3a542b0c919f734171d79f966c5f0f9e0e3f08a/s_netkit-0.1.1-py3-none-any.whl", hash = "sha256:3540e40b08c0b1a6f69b0f705661485b736e19f6d35b7d573b1f4bed32fc2e2c", size = 256733, upload-time = "2026-09-06T09:56:10.872Z" },
 ]
 
 [[package]]
@@ -966,7 +966,7 @@ requires-dist = [
     { name = "s-corekit", specifier = ">=0.0.13,<0.1" },
     { name = "s-leasekit", specifier = ">=0.1.0" },
     { name = "s-librarykit", specifier = ">=0.7.1" },
-    { name = "s-netkit", specifier = ">=0.1.0,<0.2" },
+    { name = "s-netkit", specifier = ">=0.1.1,<0.2" },
     { name = "s-skillgate", specifier = ">=0.1.7" },
     { name = "s-skillkit", specifier = ">=0.4.1" },
     { name = "s-telemetrykit", specifier = ">=0.2.0" },
