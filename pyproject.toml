@@ -125,3 +125,8 @@ select = ["E", "F", "I", "B", "UP", "N", "SIM", "RUF"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.ruff.lint.per-file-ignores]
+# Сторож окружения в conftest объясняет человеку по-русски, почему прогон
+# идёт не из того интерпретатора: кириллица в прозе, а не в идентификаторах.
+"tests/conftest.py" = ["RUF001"]
