@@ -16,10 +16,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import tomli_w
-from clikit.config import AppConfig, interpolate_env
+from clikit.config import AppConfig, Field, interpolate_env
 from librarykit.config_util import atomic_write_text as _atomic_write_text
 from librarykit.secret_store import SecretStore
-from pydantic import Field
 
 from skillery_cli import _branding
 
@@ -88,7 +87,8 @@ DEFAULT_BASE_URL = _default_base_url()
 class _HubAppConfig(AppConfig):
     """``clikit.config.AppConfig`` для конфиг-слоя ClientConfig (cli-kits W4).
 
-    Несёт все ПЕРСИСТИМЫЕ поля ClientConfig как typed-поля pydantic — это
+    Несёт все ПЕРСИСТИМЫЕ поля ClientConfig как typed-поля ``clikit.config``
+    (кит-волна 5, #2710: движок без pydantic — ``corekit.config.ConfigModel``) — это
     переводит конфиг-слой CLI на каноничную модель кита и даёт fail-fast
     валидацию типов из коробки (``extra='ignore'`` базового AppConfig делает
     load forward-compatible: незнакомые/legacy-ключи в TOML игнорируются, а не

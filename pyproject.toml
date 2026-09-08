@@ -26,7 +26,6 @@ dependencies = [
     "rich>=13.9",
     "tomli-w>=1.0",
     "keyring>=25.0",
-    "pydantic>=2.9",
     "pathspec>=0.12.0",
     # >=0.7.1 — модуль librarykit.proc (единая политика запуска подпроцессов:
     # на win32 ВСЕГДА CREATE_NO_WINDOW, обязательный timeout, stdin=DEVNULL).
@@ -40,8 +39,13 @@ dependencies = [
     "s-netkit>=0.1.1,<0.2",
     # Базовый кит: из него берётся тип сетевой беды netkit-потока
     # (``corekit.errors.TransportError``) — импортируем прямо, значит объявляем.
-    "s-corekit>=0.0.13,<0.1",
-    "s-clikit>=0.1.4",
+    # >=0.1.0 — `corekit.config` (кит-волна 5, #2710): движок typed-конфигов
+    # без pydantic, на нём теперь построен `clikit.config.AppConfig`.
+    "s-corekit>=0.1.0,<0.2",
+    # >=0.2.0 — `clikit.config` без pydantic/pydantic-settings (#2710); `Field`
+    # для `_HubAppConfig.permissions` теперь `clikit.config.Field`, не
+    # `pydantic.Field`.
+    "s-clikit>=0.2.0",
     # >=0.3.3 — кит переведён на librarykit.proc (свои subprocess без окон),
     # .pkgsrc не течёт в зону агента, снапшот-установка помечается source="hub"
     # (без этого навык молча выпадал из автообновления, см. миграцию меты #1145).
