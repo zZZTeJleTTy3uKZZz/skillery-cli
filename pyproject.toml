@@ -45,7 +45,7 @@ dependencies = [
     # >=0.2.0 — `clikit.config` без pydantic/pydantic-settings (#2710); `Field`
     # для `_HubAppConfig.permissions` теперь `clikit.config.Field`, не
     # `pydantic.Field`.
-    "s-clikit>=0.2.0",
+    "s-clikit>=0.2.0,<0.3",
     # >=0.3.3 — кит переведён на librarykit.proc (свои subprocess без окон),
     # .pkgsrc не течёт в зону агента, снапшот-установка помечается source="hub"
     # (без этого навык молча выпадал из автообновления, см. миграцию меты #1145).
@@ -64,14 +64,14 @@ dependencies = [
     # `skillery login` падал ImportError у всех, кто ставил свежий кит.
     # Раньше стояло >=0.3.7, и локально всё было зелено просто потому, что
     # новая версия не установлена. Поднимать границу вместе с китом.
-    "s-skillkit>=0.4.1",  # 0.3.7: владение артефактами — чужую команду/MCP не перехватить (#2272)
-    "s-skillgate>=0.1.7",  # единый secret-scan (G5): regex-fallback publish-гейта на skillgate; >=0.1.7: generic-password не блокирует код (getpass/передача переменной/JS-false)
+    "s-skillkit>=0.4.1,<0.6",  # 0.3.7: владение артефактами — чужую команду/MCP не перехватить (#2272)
+    "s-skillgate>=0.1.7,<0.2",  # единый secret-scan (G5): regex-fallback publish-гейта на skillgate; >=0.1.7: generic-password не блокирует код (getpass/передача переменной/JS-false)
     # >=0.1.2 — модуль telemetrykit.outbox: ОБЩИЙ локальный транспорт исходящих
     # сущностей (~/.skillery/outbox.jsonl). Навыки пишут туда kind="skill_run"
     # декоратором @track_skill(), CLI — kind="log"; доставку на /telemetry/batch
     # делает воркер демона (core/outbox_worker, #1174). Кит stdlib-only — веса
     # в зависимости CLI не добавляет.
-    "s-telemetrykit>=0.2.0",
+    "s-telemetrykit>=0.2.0,<0.4",
     # #1490: ЕДИНСТВЕННЫЙ верификатор лиза способности — один и тот же код на
     # CLI и на gateway (контракт лиза §3.1, инвариант §10.3). Вторую реализацию
     # проверки подписи/срока заводить нельзя: две копии разъезжаются, и
