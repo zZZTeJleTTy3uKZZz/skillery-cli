@@ -53,6 +53,8 @@ def validate_policy(data: dict, repository: str) -> dict:
     if not payload or skill_path not in payload or not licenses:
         raise ValueError('skill path and explicit license paths must be declared')
     for license_path in licenses:
+        if not license_path.startswith(skill_path + '/'):
+            raise ValueError('license attribution must be inside the installed skill path')
         if not any(license_path == item or license_path.startswith(item + '/') for item in payload):
             raise ValueError('license attribution must be included in the bounded payload')
     if (not SEMVER.fullmatch(data.get('initial_version', ''))

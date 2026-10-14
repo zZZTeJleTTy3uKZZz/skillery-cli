@@ -24,8 +24,8 @@ def release():
 def policy(**changes):
     data = {'schema': 1, 'owned': True, 'repository_role': 'skill-distribution',
             'repository': 'owner/skill', 'branch': 'main', 'slug': 'skill',
-            'skill_path': 'skills/skill', 'payload_paths': ['skills/skill', 'LICENSE'],
-            'license_paths': ['LICENSE'], 'initial_version': '0.1.0'}
+            'skill_path': 'skills/skill', 'payload_paths': ['skills/skill'],
+            'license_paths': ['skills/skill/LICENSE'], 'initial_version': '0.1.0'}
     data.update(changes)
     return data
 
@@ -79,7 +79,7 @@ def test_delivery_requires_real_nonempty_accepted_job_ack(release):
 
 
 def test_payload_refuses_extra_skills_and_secret_paths(release):
-    valid = {'skills/skill/SKILL.md': b'---\nname: skill\n---\n', 'LICENSE': b'MIT\n'}
+    valid = {'skills/skill/SKILL.md': b'---\nname: skill\n---\n', 'skills/skill/LICENSE': b'MIT\n'}
     release.validate_inventory(policy(), valid)
     for path in ['skills/skill/.env', 'skills/skill/vendor/SKILL.md', 'skills/skill/token.pem']:
         with pytest.raises(ValueError):
@@ -97,8 +97,8 @@ def test_real_git_payload_is_idempotent_under_windows_autocrlf(release, tmp_path
     (tmp_path / 'skills' / 'skill').mkdir(parents=True)
     skill = tmp_path / 'skills' / 'skill' / 'SKILL.md'
     skill.write_bytes(b'---\nname: skill\n---\nCanonical payload\n')
-    (tmp_path / 'LICENSE').write_bytes(b'MIT fixture\n')
-    git('add', 'skills', 'LICENSE')
+    (tmp_path / 'skills' / 'skill' / 'LICENSE').write_bytes(b'MIT fixture\n')
+    git('add', 'skills')
     git('-c', 'core.hooksPath=/dev/null', 'commit', '-m', 'fixture payload')
     repository = release.Repository(tmp_path)
     first = repository.plan(policy())
@@ -136,7 +136,7 @@ def test_existing_remote_tag_cannot_be_retargeted(release, tmp_path):
 
 
 def test_real_publish_gate_blocks_injected_secret_before_tag_or_hook(release, tmp_path):
-    files = {'skills/skill/SKILL.md': b'---\nname: skill\n---\n', 'LICENSE': b'MIT\n',
+    files = {'skills/skill/SKILL.md': b'---\nname: skill\n---\n', 'skills/skill/LICENSE': b'MIT\n',
              'skills/skill/config.py': b'token = "ghp_' + b'A' * 36 + b'"\n'}
     calls = []
     with pytest.raises(ValueError, match='publish gate'):
@@ -160,3 +160,11 @@ def test_unavailable_or_crashing_publish_gate_fails_closed(release, tmp_path, mo
         release.scan_then_publish({'SKILL.md': b'clean'}, tmp_path / 'scan',
                                   lambda: calls.append('tag'), lambda: calls.append('hook'))
     assert calls == []
+
+
+def test_license_attribution_must_be_inside_installed_skill_payload(release):
+    outside = policy(payload_paths=['skills/skill', 'LICENSE'], license_paths=['LICENSE'])
+    with pytest.raises(ValueError, match='installed skill path'):
+        release.validate_policy(outside, 'owner/skill')
+    nested = policy(payload_paths=['skills/skill'], license_paths=['skills/skill/LICENSE'])
+    assert release.validate_policy(nested, 'owner/skill')['license_paths'] == ['skills/skill/LICENSE']
