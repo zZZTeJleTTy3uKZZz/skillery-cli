@@ -28,6 +28,8 @@
       [(root/name).write_bytes(urllib.request.urlopen(prefix+name,timeout=20).read(131073)) for name in files];
       assert all((root/name).stat().st_size<=131072 for name in files)'
     - git remote set-url origin "https://gitlab.com/$CI_PROJECT_PATH.git"
+    # Keep the owned URL clean despite the runner's token-bearing host rewrite.
+    - git config --local url."https://gitlab.com/$CI_PROJECT_PATH.git".insteadOf "https://gitlab.com/$CI_PROJECT_PATH.git"
     - git config --local credential.helper ""
     - git config --local credential.useHttpPath true
     - git config --local --add credential.helper "!python \"$CI_PROJECT_DIR/.release-tooling/scripts/gitlab_job_credential.py\""
