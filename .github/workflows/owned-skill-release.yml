@@ -60,4 +60,6 @@ jobs:
           SOURCE_REPOSITORY: ${{ github.repository }}
           SKILLERY_SAFE_UPDATES_READY: 'true'
           SKILLERY_GIT_WEBHOOK_SECRET: ${{ secrets.SKILLERY_GIT_WEBHOOK_SECRET }}
-        run: python .release-tooling/scripts/owned_skill_release.py --policy "$POLICY_PATH" --repository "$SOURCE_REPOSITORY" --scan-root "$RUNNER_TEMP/skillery-release-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --publish
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/outputs/skillery-release"
+          python .release-tooling/scripts/owned_skill_release.py --policy "$POLICY_PATH" --repository "$SOURCE_REPOSITORY" --scan-root "$GITHUB_WORKSPACE/outputs/skillery-release/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --publish
