@@ -1,7 +1,7 @@
 ---
 name: skills-hub
 description: |
-  Bootstrap-навык Skills Hub: ставит `skills-hub` CLI у клиента, регистрирует
+  Bootstrap-навык Skillery: ставит `skillery` CLI у клиента, регистрирует
   агента по invite-токену ИЛИ самостоятельно (register без инвайта / join по
   пригласительной ссылке), устанавливает / обновляет приватные навыки команды
   Дмитрия, а также управляет оценками (E7), комментариями (E7), тикетами тех-
@@ -30,9 +30,9 @@ description: |
   телеметрию hub.
 ---
 
-# Skills Hub bootstrap-skill
+# Skillery bootstrap skill
 
-Точка входа AI-агента (Claude Code / Codex) в систему Skills Hub. После
+Точка входа AI-агента (Claude Code / Codex) в систему Skillery. Legacy catalog alias: `skills-hub`. После
 установки агент умеет:
 
 1. **Поставить CLI** — `uv tool install skillery-cli` (пакет на PyPI;
