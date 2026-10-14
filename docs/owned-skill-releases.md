@@ -17,8 +17,8 @@ Commit a policy in each verified owned distribution repository:
   "branch": "main",
   "slug": "owned-skill",
   "skill_path": "skills/owned-skill",
-  "payload_paths": ["skills/owned-skill", "LICENSE"],
-  "license_paths": ["LICENSE"],
+  "payload_paths": ["skills/owned-skill"],
+  "license_paths": ["skills/owned-skill/LICENSE"],
   "initial_version": "0.1.0"
 }
 ```
@@ -34,7 +34,7 @@ secret refuses before creating tags. This is not the `cli-published` API key.
 on:
   push:
     branches: [main]
-    paths: [skills/owned-skill/**, LICENSE, .skillery-release.json]
+    paths: [skills/owned-skill/**, .skillery-release.json]
 jobs:
   skill:
     permissions:
@@ -88,3 +88,7 @@ objects/tags and the identical historical skill path remain fetchable there.
 Otherwise use an explicit new slug migration/alias and preserve the old catalog
 source for rollback and trusted old-manifest recovery. This workflow never
 changes hub source bindings.
+
+License and notice files must physically live inside the installed skill path.
+A repository-root license does not accompany a bounded hub skill snapshot and
+is rejected even if it appears in payload_paths.
