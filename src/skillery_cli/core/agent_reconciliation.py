@@ -99,12 +99,13 @@ def reconcile_managed_scopes(cfg: ClientConfig, *, projects: tuple[Path, ...] = 
                 if linker.is_link(source) or not source.is_dir() or not is_managed_dir(source):
                     continue
                 try:
-                    before = read_meta(slot)
+                    linked_scope = linker.is_link(slot)
+                    before = None if linked_scope else read_meta(slot)
                     source_meta = read_meta(source) or {}
                     ref = source_meta.get("slug") or str(source_meta.get("skill_id") or slot.name)
                     if declared is not None and ref not in declared:
                         continue
-                    if not is_managed_dir(slot):
+                    if not linked_scope and not is_managed_dir(slot):
                         entry["reason"] = "unmanaged-scope"
                         report["refused"].append(entry)
                         continue
@@ -112,7 +113,7 @@ def reconcile_managed_scopes(cfg: ClientConfig, *, projects: tuple[Path, ...] = 
                     result = installer.link_existing(slot.name, project=project, force=False)
                     if result is None:
                         continue
-                    after = read_meta(slot)
+                    after = None if linker.is_link(slot) else read_meta(slot)
                     changed = before != after
                     report["updated" if changed else "unchanged"].append(entry)
                 except (ScopeConflict, OSError, ValueError) as exc:
