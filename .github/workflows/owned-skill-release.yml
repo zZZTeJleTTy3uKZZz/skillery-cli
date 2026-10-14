@@ -52,10 +52,12 @@ jobs:
           ref: ${{ inputs.tooling_ref }}
           path: .release-tooling
           persist-credentials: false
+      - name: Install pinned canonical content publish gate
+        run: python -m pip install --no-input 's-skillgate==0.1.7'
       - name: Release immutable raw Git payload and deliver authenticated hub event
         env:
           POLICY_PATH: ${{ inputs.policy }}
           SOURCE_REPOSITORY: ${{ github.repository }}
           SKILLERY_SAFE_UPDATES_READY: 'true'
           SKILLERY_GIT_WEBHOOK_SECRET: ${{ secrets.SKILLERY_GIT_WEBHOOK_SECRET }}
-        run: python .release-tooling/scripts/owned_skill_release.py --policy "$POLICY_PATH" --repository "$SOURCE_REPOSITORY" --publish
+        run: python .release-tooling/scripts/owned_skill_release.py --policy "$POLICY_PATH" --repository "$SOURCE_REPOSITORY" --scan-root "$RUNNER_TEMP/skillery-release-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --publish

@@ -55,6 +55,12 @@ The workflow serializes release jobs and never force-pushes refs. The helper
 loads the committed policy and hashes selected committed Git blobs with SHA256,
 including license attribution. It refuses symlinks/submodules, extra skills,
 credential/runtime paths and checkout attributes that change canonical bytes.
+Before any tag write or hook delivery, exact committed blobs are materialized
+in a new owned bounded scan directory and scanned with pinned `s-skillgate==0.1.7`
+`run_gate(path, manifest=False)`, the engine used by Skillery's publish gate.
+An unavailable runtime, exception, unverifiable verdict or blocking secret fails
+closed. Finding contents are never printed. A durable receipt records the raw
+payload SHA and sanitized outcome before removing exact owned scan data.
 It increments the largest plain SemVer tag patch when payload changes and reuses
 the exact previous tag when the payload is unchanged. It checks the current
 remote branch tip and refuses a remote tag that points to different content.
