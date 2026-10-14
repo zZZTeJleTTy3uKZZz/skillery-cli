@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import os
 import re
 import sys
@@ -484,6 +485,16 @@ def _maybe_auto_update(cfg: ClientConfig, *, project: Path | None = None) -> Non
     """
     if not cfg.auto_update or not cfg.is_logged_in():
         return
+    if cfg.sync_agents:
+        from skillery_cli.core.agent_reconciliation import reconcile_managed_scopes
+
+        scope_report = reconcile_managed_scopes(
+            cfg, projects=(project,) if project is not None else (),
+        )
+        if scope_report["refused"]:
+            Console(stderr=True).print(
+                "Managed scope update incomplete: " + json.dumps(scope_report["refused"])
+            )
     cooldown = timedelta(minutes=cfg.auto_update_cooldown_min)
     if cfg.last_auto_update_at:
         try:
@@ -577,6 +588,16 @@ def _maybe_auto_update(cfg: ClientConfig, *, project: Path | None = None) -> Non
             # Cooldown-таймстамп двигаем всегда после успешного прохода (даже
             # если ничего не обновилось) — иначе фон-проверка зациклится без
             # учёта cooldown. Раньше это маскировал мёртвый `if … or True`.
+            if cfg.sync_agents:
+                from skillery_cli.core.agent_reconciliation import reconcile_managed_scopes
+
+                scope_report = reconcile_managed_scopes(
+                    cfg, projects=(project,) if project is not None else (),
+                )
+                if scope_report["refused"]:
+                    err_console.print(
+                        "Managed scope update incomplete: " + json.dumps(scope_report["refused"])
+                    )
             cfg.last_auto_update_at = datetime.now(UTC).isoformat()
             cfg.save()
         finally:
@@ -2865,13 +2886,17 @@ async def _install_local_source(
             "skill.enable", slug=slug, version=result.version,
             scope="project", source=src_source, agent=agent_name,
         )
-    return [{
+    chain = [{
         "slug": slug, "skill_id": result.skill_id,
         "version": result.version, "is_update": result.is_update,
         "target_dir": str(result.target_dir), "scope": result.scope,
         "linked": result.linked, "link_kind": result.link_kind,
         "source": source["kind"],
     }]
+    from skillery_cli.core.agent_reconciliation import attach_scope_report
+
+    attach_scope_report(cfg, chain, project=project_path)
+    return chain
 
 
 def _extract_snapshot_subdir(
@@ -3577,6 +3602,9 @@ async def _install_chain(
                         "skill.enable", slug=ref, version=dep_version,
                         scope="project", source="hub", agent=agent_target.name,
                     )
+        from skillery_cli.core.agent_reconciliation import attach_scope_report
+
+        attach_scope_report(cfg, installed_chain, project=project_path)
         return installed_chain
     except Exception as exc:  # noqa: BLE001 — провал ОБЯЗАН оставить причину в логе
         # C2: причина, почему навык НЕ установился, — в ЛОКАЛЬНЫЙ лог (cli.log при
@@ -3725,11 +3753,27 @@ def cmd_install(
                 ref = item["slug"] or item.get("skill_id")
                 if ref:
                     project_manifest.add(project_path, str(ref))
+            if any(not item.get("skipped") for item in installed_chain):
+                from skillery_cli.core.agent_reconciliation import register_project_scope
+
+                register_project_scope(project_path)
+        if all_agents and any(not item.get("skipped") for item in installed_chain):
+            cfg.sync_agents = list(dict.fromkeys([
+                *cfg.sync_agents,
+                *(item.get("agent") for item in installed_chain if not item.get("skipped")),
+            ]))
+            cfg.save()
 
         # Фикс 5в/1: stub и skip — явные предупреждения (json-режим: stderr,
         # stdout остаётся чистым машинным каналом).
         for item in installed_chain:
             label = item.get("slug") or item.get("skill_id") or "?"
+            if item.get("partial"):
+                emit_message(
+                    f"Source updated for {label}; some managed scopes were preserved: "
+                    + json.dumps(item["scope_reconciliation"]["refused"]),
+                    level="warn",
+                )
             if item.get("skipped"):
                 emit_message(
                     f"«{label}»: установка пропущена ({item.get('skip_reason')}) — "
@@ -3856,6 +3900,9 @@ def cmd_enable(
         install_reason.stamp(store_dir, reason=install_reason.EXPLICIT)
         store_meta = read_meta(store_dir) or {}
         project_manifest.add(project_path, slug)
+        from skillery_cli.core.agent_reconciliation import register_project_scope
+
+        register_project_scope(project_path)
         # повторное включение tooling-навыка в проект → CLI/MCP/deps
         # (idempotent). Манифест из меты стора; result-подобие через legacy-link.
         _apply_tooling(
@@ -3912,9 +3959,15 @@ def cmd_enable(
             project_path=project_path, force=force, agent_target=target,
         )
         for item in installed_chain:
+            if item.get("skipped"):
+                continue
             ref = item["slug"] or item.get("skill_id")
             if ref:
                 project_manifest.add(project_path, str(ref))
+        if any(not item.get("skipped") for item in installed_chain):
+            from skillery_cli.core.agent_reconciliation import register_project_scope
+
+            register_project_scope(project_path)
 
         def _render(_: dict) -> None:
             for item in installed_chain:
@@ -4794,6 +4847,10 @@ async def _auto_update_hub_installs(
         # Автообновление выключено пользователем — оставляем device-sync как есть,
         # до latest ничего не поднимаем.
         return report
+    if cfg.sync_agents:
+        from skillery_cli.core.agent_reconciliation import reconcile_managed_scopes
+
+        report["scopes"] = reconcile_managed_scopes(cfg)
     # Cooldown (общий с _maybe_auto_update): не чаще раза в N минут.
     cooldown = timedelta(minutes=cfg.auto_update_cooldown_min)
     if cfg.last_auto_update_at:
@@ -4859,7 +4916,7 @@ async def _auto_update_hub_installs(
                 _rlog.debug("auto-update: поднимаю до latest", extra={
                     "context": {"skill": str(ref), "local": local_version,
                                 "remote": remote_version, "initiator": "daemon-auto"}})
-            await _install_chain(
+            chain = await _install_chain(
                 cfg, access, slug=str(ref), channel=channel, scope="global",
                 project_path=None, force=False, agent_target=agent_target,
                 initiator="daemon-auto",
@@ -4867,6 +4924,9 @@ async def _auto_update_hub_installs(
                 # пользователя поставить навык, причина установки сохраняется.
                 promote_root=False,
             )
+            if chain and all(item.get("skipped") for item in chain):
+                report["skipped"].append(ref)
+                continue
             report["updated"].append(ref)
         except Exception as exc:  # noqa: BLE001 — один навык не валит фон
             # Падение установки одного навыка (git/ФС) не трогает остальные, но
@@ -4885,6 +4945,16 @@ async def _auto_update_hub_installs(
     if report["updated"]:
         await _report_auto_updates(cfg, access, report["updated"])
 
+    if cfg.sync_agents:
+        from skillery_cli.core.agent_reconciliation import reconcile_managed_scopes
+
+        report["scopes"] = reconcile_managed_scopes(cfg)
+        report["partial"] = report["scopes"]["partial"]
+        if report["scopes"]["refused"]:
+            _rlog.warning("Managed scope reconciliation incomplete", extra={
+                "context": {"refused": report["scopes"]["refused"],
+                            "partial": report["partial"]},
+            })
     _touch_auto_update_cooldown(cfg)
     return report
 
@@ -6372,10 +6442,22 @@ def cmd_config(
     projection: Optional[str] = typer.Option(
         None, "--projection", help="Default skill visibility: auto | link | copy"
     ),
+    sync_agents: Optional[str] = typer.Option(
+        None, "--sync-agents", help="Comma-separated explicit agents for managed scope updates"
+    ),
 ) -> None:
     """Настройки CLI (output, auto-update, default install scope/project)."""
     cfg = ClientConfig.load()
     changes = False
+    if isinstance(sync_agents, str):
+        names = [name.strip() for name in sync_agents.split(",") if name.strip()]
+        try:
+            validated = ClientConfig(sync_agents=names)
+        except ValueError as exc:
+            emit_error("VALIDATION", str(exc))
+            raise typer.Exit(1) from exc
+        cfg.sync_agents = validated.sync_agents
+        changes = True
     if isinstance(projection, str):
         if projection not in ("auto", "link", "copy"):
             emit_error("VALIDATION", "projection must be auto, link, or copy")
@@ -6411,6 +6493,7 @@ def cmd_config(
         "default_install_scope": cfg.default_install_scope,
         "default_project_dir": cfg.default_project_dir,
         "skill_projection": cfg.skill_projection,
+        "sync_agents": cfg.sync_agents,
     }
 
     def _render(p: dict) -> None:
@@ -6420,6 +6503,7 @@ def cmd_config(
         console.print(f"  default_install_scope:    {p['default_install_scope']}")
         console.print(f"  default_project_dir:      {p['default_project_dir'] or '—'}")
         console.print(f"  skill_projection:         {p['skill_projection']}")
+        console.print(f"  sync_agents:              {p['sync_agents'] or 'primary only'}")
         if not show and changes:
             console.print("[green]✓[/] Config обновлён")
 

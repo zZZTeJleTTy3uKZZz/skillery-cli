@@ -88,7 +88,10 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("APPDATA", str(home / "AppData" / "Roaming"))
     monkeypatch.setenv("LOCALAPPDATA", str(home / "AppData" / "Local"))
     # Оверрайды каталогов снимаем: с ними ~ не при чём и тест ушёл бы в боевой путь.
-    for var in ("SKILLERY_CONFIG_DIR", "SKILLERY_STORE_DIR", "SKILLERY_PROFILE"):
+    for var in (
+        "SKILLERY_CONFIG_DIR", "SKILLERY_STORE_DIR", "SKILLERY_PROFILE",
+        "CODEX_HOME", "DSH_HOME", "DSH_AGENTS_HOME",
+    ):
         monkeypatch.delenv(var, raising=False)
     # Ядерные локи — на уникальное имя (мьютекс не живёт в HOME).
     monkeypatch.setenv(DAEMON_MUTEX_ENV, f"Local\\SkilleryDaemonTest-{_RUN_ID}")
