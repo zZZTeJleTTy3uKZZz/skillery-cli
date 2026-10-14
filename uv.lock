@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.13'",
@@ -720,7 +720,7 @@ wheels = [
 
 [[package]]
 name = "s-skillkit"
-version = "0.6.2"
+version = "0.6.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pathspec" },
@@ -729,9 +729,9 @@ dependencies = [
     { name = "tomli-w" },
     { name = "typer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ac/db/f23b2c06e0563684848d2710e3c6ec82ce0c63e71ac0cfb92f88f75db398/s_skillkit-0.6.2.tar.gz", hash = "sha256:234ba396c5bedb51333e93d2faf2bbfb3b5e593ab89ab01b4a1c051edec7f7a9", size = 374917, upload-time = "2026-10-14T02:46:06.831Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/52/76/01b9307a47225e23246c0a5df75c58bf3610989914db8cfc311558b22f80/s_skillkit-0.6.3.tar.gz", hash = "sha256:ffdab470493238e5d3a4b279147cb206199c7be9d889dfa3bfed0c8753730b96", size = 383338, upload-time = "2026-10-14T14:13:18.563Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/51/e9/d3e20fd0a1336d8a2e16ecb40a72fe40e7592f824daa4bdff7f5fa3bf021/s_skillkit-0.6.2-py3-none-any.whl", hash = "sha256:cdf0a1df558394fe1a7956184a1dd2c2e49a555deb8bf7a5dd1becff270480a8", size = 198376, upload-time = "2026-10-14T02:46:05.472Z" },
+    { url = "https://files.pythonhosted.org/packages/47/37/39ba31a569e17b2f23f800908f66fd88425bccc462820b4f4a2ad8a4cd10/s_skillkit-0.6.3-py3-none-any.whl", hash = "sha256:ae8d964043870c8a8e5069be3a6a8f4207bc0866dcaee18cbf0af1b1e7926ae7", size = 202385, upload-time = "2026-10-14T14:13:17.511Z" },
 ]
 
 [[package]]
@@ -767,7 +767,7 @@ wheels = [
 
 [[package]]
 name = "skillery-cli"
-version = "0.5.88"
+version = "0.5.89"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
@@ -818,7 +818,7 @@ requires-dist = [
     { name = "s-librarykit", specifier = ">=0.7.1,<0.9" },
     { name = "s-netkit", specifier = ">=0.1.1,<0.2" },
     { name = "s-skillgate", specifier = ">=0.1.7,<0.2" },
-    { name = "s-skillkit", specifier = ">=0.6.2,<0.7" },
+    { name = "s-skillkit", specifier = ">=0.6.3,<0.7" },
     { name = "s-telemetrykit", specifier = ">=0.2.0,<0.4" },
     { name = "tomli-w", specifier = ">=1.0" },
     { name = "typer", specifier = ">=0.15" },

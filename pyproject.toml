@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "skillery-cli"
-version = "0.5.88"
+version = "0.5.89"
 description = "Skillery CLI — клиент маркетплейса AI-навыков для агентов (Claude Code, Codex)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -64,7 +64,7 @@ dependencies = [
     # `skillery login` падал ImportError у всех, кто ставил свежий кит.
     # Раньше стояло >=0.3.7, и локально всё было зелено просто потому, что
     # новая версия не установлена. Поднимать границу вместе с китом.
-    "s-skillkit>=0.6.2,<0.7",  # Verified updates and managed copy projections.
+    "s-skillkit>=0.6.3,<0.7",  # Verified updates and managed copy projections.
     "s-skillgate>=0.1.7,<0.2",  # единый secret-scan (G5): regex-fallback publish-гейта на skillgate; >=0.1.7: generic-password не блокирует код (getpass/передача переменной/JS-false)
     # >=0.1.2 — модуль telemetrykit.outbox: ОБЩИЙ локальный транспорт исходящих
     # сущностей (~/.skillery/outbox.jsonl). Навыки пишут туда kind="skill_run"

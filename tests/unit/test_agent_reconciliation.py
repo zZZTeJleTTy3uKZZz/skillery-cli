@@ -151,6 +151,75 @@ def test_unverifiable_copy_is_refused_without_changing_its_metadata(tmp_path, mo
     assert path.read_bytes() == before
 
 
+@pytest.mark.parametrize("project_scope", [False, True])
+@pytest.mark.parametrize("dirty", [False, True])
+def test_existing_legacy_codex_copy_converges_without_moving_or_losing_edits(
+    tmp_path, monkeypatch, project_scope, dirty,
+):
+    from skillery_cli.core import agent_reconciliation as reconcile
+    from skillery_cli.core import project_manifest
+
+    claude, _owner = seed(tmp_path)
+    codex = CodexTarget(root=tmp_path / ".agents")
+    project = tmp_path / "registered" if project_scope else None
+    if project is not None:
+        project_manifest.add(project, "sample")
+    legacy_base = codex.legacy_base_dirs(project=project)[0]
+    # A custom global root models an existing installation at this exact path.
+    legacy = CodexTarget(root=legacy_base.parent)
+    SkillInstaller(legacy, tmp_path / "store", projection="copy").link_existing("sample")
+    slot = legacy_base / "sample"
+    runtime = slot / "_local" / "state.json"
+    runtime.parent.mkdir()
+    runtime.write_text("private-state", encoding="utf-8")
+    if dirty:
+        (slot / "SKILL.md").write_text("local edit", encoding="utf-8")
+    before_meta = (slot / "_skill_meta.json").read_bytes()
+    foreign = legacy_base / "foreign"
+    foreign.mkdir()
+    (foreign / "SKILL.md").write_text("foreign", encoding="utf-8")
+    monkeypatch.setattr(reconcile, "get_target", {"codex": codex}.__getitem__)
+    monkeypatch.setattr(reconcile, "registered_project_roots",
+                        lambda: [project] if project is not None else [])
+    seed(tmp_path, version="2", target=claude)
+    cfg = ClientConfig(agent="codex", sync_agents=["codex"],
+                       store_dir=str(tmp_path / "store"), skill_projection="copy")
+
+    report = reconcile.reconcile_managed_scopes(cfg)
+
+    assert read_meta(slot)["version"] == ("1" if dirty else "2")
+    assert runtime.read_text(encoding="utf-8") == "private-state"
+    assert not codex.base_dir(project=project).exists()
+    assert (foreign / "SKILL.md").read_text(encoding="utf-8") == "foreign"
+    assert not (foreign / "_skill_meta.json").exists()
+    if dirty:
+        assert report["refused"][0]["reason"] == "projection-local-modifications"
+        assert (slot / "SKILL.md").read_text(encoding="utf-8") == "local edit"
+        assert (slot / "_skill_meta.json").read_bytes() == before_meta
+    else:
+        assert len(report["updated"]) == 1 and not report["refused"]
+
+
+def test_explicit_codex_home_does_not_reconcile_sibling_legacy_root(tmp_path, monkeypatch):
+    from skillery_cli.core import agent_reconciliation as reconcile
+
+    claude, _owner = seed(tmp_path)
+    legacy = CodexTarget(root=tmp_path / ".codex")
+    SkillInstaller(legacy, tmp_path / "store", projection="copy").link_existing("sample")
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "isolated-runtime"))
+    codex = CodexTarget()
+    monkeypatch.setattr(reconcile, "get_target", {"codex": codex}.__getitem__)
+    seed(tmp_path, version="2", target=claude)
+    cfg = ClientConfig(agent="codex", sync_agents=["codex"],
+                       store_dir=str(tmp_path / "store"), skill_projection="copy")
+
+    report = reconcile.reconcile_managed_scopes(cfg)
+
+    assert not report["updated"] and not report["refused"]
+    assert read_meta(legacy.slug_dir("sample"))["version"] == "1"
+    assert not codex.base_dir().exists()
+
+
 def test_junction_scope_uses_public_copy_gate_without_reading_blocked_link(tmp_path, monkeypatch):
     from skillkit import linker
 

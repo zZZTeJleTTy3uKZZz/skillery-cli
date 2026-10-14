@@ -9,6 +9,7 @@ from librarykit.config_util import atomic_write_text
 from skillkit import linker
 from skillkit.errors import ScopeConflict
 from skillkit.installer import is_managed_dir
+from skillkit.targets.base import BaseAgentTarget
 
 from skillery_cli.config import ClientConfig, _default_config_dir
 from skillery_cli.core import project_manifest
@@ -65,6 +66,21 @@ def register_project_scope(project: Path) -> None:
     atomic_write_text(path, payload + "\n", encoding="utf-8")
 
 
+class _ExistingScopeTarget(BaseAgentTarget):
+    """Address one declared existing layout through the normal SDK copy gate."""
+
+    def __init__(self, target, base: Path) -> None:
+        super().__init__(root=base.parent)
+        self.name = target.name
+        self._preserved = target.preserved_paths()
+
+    def base_dir(self, *, project: Path | None = None) -> Path:
+        return self._root / "skills"
+
+    def preserved_paths(self) -> tuple[str, ...]:
+        return self._preserved
+
+
 def reconcile_managed_scopes(cfg: ClientConfig, *, projects: tuple[Path, ...] = ()) -> dict:
     """Never create missing scopes, claim foreign paths, or install tooling/MCP."""
     report: dict = {"updated": [], "unchanged": [], "refused": [], "partial": False}
@@ -81,45 +97,49 @@ def reconcile_managed_scopes(cfg: ClientConfig, *, projects: tuple[Path, ...] = 
     store = cfg.effective_store_dir()
     for name in names:
         target = get_target(name)
-        installer = SkillInstaller(target, store, projection=cfg.skill_projection)
         for project in scopes:
-            base = target.base_dir(project=project)
-            if not base.is_dir() or linker.is_link(base):
-                continue
-            try:
-                declared = project_manifest.load(project) if project is not None else None
-            except (OSError, ValueError):
-                report["refused"].append({"agent": name, "project": str(project),
-                                          "reason": "invalid-project-manifest"})
-                continue
-            for slot in sorted(base.iterdir(), key=lambda entry: entry.name):
-                entry = {"agent": name, "skill": slot.name,
-                         "project": str(project) if project is not None else None}
-                source = store / slot.name
-                if linker.is_link(source) or not source.is_dir() or not is_managed_dir(source):
+            bases = (target.base_dir(project=project),
+                     *target.legacy_base_dirs(project=project))
+            for base in dict.fromkeys(bases):
+                if not base.is_dir() or linker.is_link(base):
                     continue
                 try:
-                    linked_scope = linker.is_link(slot)
-                    before = None if linked_scope else read_meta(slot)
-                    source_meta = read_meta(source) or {}
-                    ref = source_meta.get("slug") or str(source_meta.get("skill_id") or slot.name)
-                    if declared is not None and ref not in declared:
+                    declared = project_manifest.load(project) if project is not None else None
+                except (OSError, ValueError):
+                    report["refused"].append({"agent": name, "project": str(project),
+                                              "reason": "invalid-project-manifest"})
+                    continue
+                installer = SkillInstaller(
+                    _ExistingScopeTarget(target, base), store, projection=cfg.skill_projection,
+                )
+                for slot in sorted(base.iterdir(), key=lambda entry: entry.name):
+                    entry = {"agent": name, "skill": slot.name, "path": str(slot),
+                             "project": str(project) if project is not None else None}
+                    source = store / slot.name
+                    if linker.is_link(source) or not source.is_dir() or not is_managed_dir(source):
                         continue
-                    if not linked_scope and not is_managed_dir(slot):
-                        entry["reason"] = "unmanaged-scope"
+                    try:
+                        linked_scope = linker.is_link(slot)
+                        before = None if linked_scope else read_meta(slot)
+                        source_meta = read_meta(source) or {}
+                        ref = source_meta.get("slug") or str(source_meta.get("skill_id") or slot.name)
+                        if declared is not None and ref not in declared:
+                            continue
+                        if not linked_scope and not is_managed_dir(slot):
+                            entry["reason"] = "unmanaged-scope"
+                            report["refused"].append(entry)
+                            continue
+                        # The SDK validates ownership, store binding, and BOTH byte baselines.
+                        result = installer.link_existing(slot.name, project=project, force=False)
+                        if result is None:
+                            continue
+                        after = None if linker.is_link(slot) else read_meta(slot)
+                        changed = before != after
+                        report["updated" if changed else "unchanged"].append(entry)
+                    except (ScopeConflict, OSError, ValueError) as exc:
+                        entry["reason"] = getattr(exc, "reason", type(exc).__name__)
+                        entry["conflict_paths"] = list(getattr(exc, "paths", ()))
                         report["refused"].append(entry)
-                        continue
-                    # The SDK validates ownership, store binding, and BOTH byte baselines.
-                    result = installer.link_existing(slot.name, project=project, force=False)
-                    if result is None:
-                        continue
-                    after = None if linker.is_link(slot) else read_meta(slot)
-                    changed = before != after
-                    report["updated" if changed else "unchanged"].append(entry)
-                except (ScopeConflict, OSError, ValueError) as exc:
-                    entry["reason"] = getattr(exc, "reason", type(exc).__name__)
-                    entry["conflict_paths"] = list(getattr(exc, "paths", ()))
-                    report["refused"].append(entry)
     # Store progress and individual scope refusals are independent transactions.
     report["partial"] = bool(report["refused"] and (report["updated"] or report["unchanged"]))
     return report
