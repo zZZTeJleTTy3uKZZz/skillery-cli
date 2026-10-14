@@ -133,3 +133,30 @@ def test_existing_remote_tag_cannot_be_retargeted(release, tmp_path):
     with pytest.raises(ValueError, match='different content'):
         Repository(tmp_path).publish(policy(), {'tag': 'v0.1.0', 'commit': 'a' * 40, 'reused': False})
     assert not any(command[0] in {'tag', 'push'} for command in calls)
+
+
+def test_real_publish_gate_blocks_injected_secret_before_tag_or_hook(release, tmp_path):
+    files = {'skills/skill/SKILL.md': b'---\nname: skill\n---\n', 'LICENSE': b'MIT\n',
+             'skills/skill/config.py': b'token = "ghp_' + b'A' * 36 + b'"\n'}
+    calls = []
+    with pytest.raises(ValueError, match='publish gate'):
+        release.scan_then_publish(files, tmp_path / 'scan', lambda: calls.append('tag'),
+                                  lambda: calls.append('hook'))
+    assert calls == []
+    assert not (tmp_path / 'scan').exists()
+    receipt = json.loads((tmp_path / 'scan.receipt.json').read_text())
+    assert receipt['state'] == 'terminal-failed'
+    assert 'ghp_' not in json.dumps(receipt)
+
+
+def test_unavailable_or_crashing_publish_gate_fails_closed(release, tmp_path, monkeypatch):
+    calls = []
+
+    def unavailable(path):
+        raise ImportError('scanner unavailable')
+
+    monkeypatch.setattr(release, '_canonical_gate', unavailable)
+    with pytest.raises(ValueError, match='publish gate'):
+        release.scan_then_publish({'SKILL.md': b'clean'}, tmp_path / 'scan',
+                                  lambda: calls.append('tag'), lambda: calls.append('hook'))
+    assert calls == []

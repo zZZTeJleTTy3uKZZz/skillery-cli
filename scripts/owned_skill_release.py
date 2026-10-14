@@ -10,9 +10,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import hmac
+import importlib.metadata
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -53,7 +55,8 @@ def validate_policy(data: dict, repository: str) -> dict:
     for license_path in licenses:
         if not any(license_path == item or license_path.startswith(item + '/') for item in payload):
             raise ValueError('license attribution must be included in the bounded payload')
-    if not SEMVER.fullmatch(data.get('initial_version', '')):
+    if (not SEMVER.fullmatch(data.get('initial_version', ''))
+            or data['initial_version'].startswith('v')):
         raise ValueError('initial version must be immutable plain SemVer')
     return {**data, 'skill_path': skill_path, 'payload_paths': payload, 'license_paths': licenses}
 
@@ -92,6 +95,57 @@ def preflight_environment(environment: dict) -> None:
         raise ValueError('devices have not been accepted on the safe update runtime')
     if not environment.get('SKILLERY_GIT_WEBHOOK_SECRET'):
         raise ValueError('registered skill git-hook secret is required before creating any tag')
+
+
+def _canonical_gate(path: Path):
+    """Use the same pinned secret/denylist engine as Skillery publish."""
+    if importlib.metadata.version('s-skillgate') != '0.1.7':
+        raise ValueError('pinned content publish gate runtime is unavailable')
+    from skillgate import run_gate
+    return run_gate(path, manifest=False)
+
+
+def scan_then_publish(files: dict[str, bytes], directory: Path, tag_write, hook_delivery):
+    """Materialize exact blobs, scan fail-closed, then allow ref/hook mutations."""
+    receipt_path = directory.with_name(directory.name + '.receipt.json')
+    if directory.exists() or receipt_path.exists() or not directory.parent.is_dir():
+        raise ValueError('publish scan needs a new owned directory and receipt')
+    receipt = {'owner': 'skillery-release', 'run': os.environ.get('GITHUB_RUN_ID', 'local'),
+               'session': os.environ.get('GITHUB_RUN_ATTEMPT', '1'),
+               'max_bytes': 64 * 1024 * 1024, 'scanner': 's-skillgate==0.1.7',
+               'payload_sha256': inventory_digest(files), 'paths': [str(directory)],
+               'expiry_epoch': int(time.time()) + 86400, 'state': 'prepared'}
+    receipt_path.write_text(json.dumps(receipt, sort_keys=True) + '\n')
+    directory.mkdir()
+    try:
+        if sum(len(body) for body in files.values()) > receipt['max_bytes']:
+            raise ValueError('payload publish gate data cap exceeded')
+        for name, body in files.items():
+            path = directory / _relative(name)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(body)
+        report = _canonical_gate(directory)
+        if report.verdict not in {'ok', 'warn', 'fail'}:
+            raise ValueError('payload publish gate returned an unverifiable verdict')
+        receipt['gate_verdict'] = report.verdict
+        if report.verdict == 'fail':
+            raise ValueError('payload publish gate blocked content')
+        # Never print finding contents; scanners may include matched secrets.
+        receipt['state'] = 'terminal-scanned'
+        receipt_path.write_text(json.dumps(receipt, sort_keys=True) + '\n')
+        tag_write()
+        result = hook_delivery()
+        receipt.update({'state': 'terminal-delivered', 'exit_status': 0})
+        return result
+    except Exception:
+        receipt.update({'state': 'terminal-failed', 'exit_status': 1})
+        raise ValueError('payload publish gate or immutable delivery failed; no findings printed') from None
+    finally:
+        receipt_path.write_text(json.dumps(receipt, sort_keys=True) + '\n')
+        if receipt['state'].startswith('terminal'):
+            shutil.rmtree(directory)
+            receipt['cleanup'] = 'exact owned blob materialization removed'
+            receipt_path.write_text(json.dumps(receipt, sort_keys=True) + '\n')
 
 
 def webhook_request(repository: str, tag: str, commit: str, secret: str) -> tuple[bytes, dict]:
@@ -221,6 +275,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument('--policy', required=True)
     parser.add_argument('--repository', required=True)
     parser.add_argument('--publish', action='store_true')
+    parser.add_argument('--scan-root', type=Path)
     args = parser.parse_args(argv)
     try:
         repository = Repository(Path.cwd())
@@ -234,10 +289,17 @@ def main(argv: list[str]) -> int:
         plan = repository.plan(policy)
         if args.publish:
             preflight_environment(os.environ)
-            repository.publish(policy, plan)
+            if args.scan_root is None:
+                raise ValueError('publish needs an explicit bounded owned scan directory')
             body, headers = webhook_request(policy['repository'], plan['tag'], plan['commit'],
                                             os.environ['SKILLERY_GIT_WEBHOOK_SECRET'])
-            plan['job_ids'] = deliver(body, headers)
+            files = repository.blobs(plan['commit'], policy['payload_paths'])
+            if inventory_digest(files) != plan['payload_sha256']:
+                raise ValueError('immutable payload changed before its publish gate')
+            plan['job_ids'] = scan_then_publish(
+                files, args.scan_root, lambda: repository.publish(policy, plan),
+                lambda: deliver(body, headers),
+            )
         print(json.dumps({'skill': policy['slug'], 'published': args.publish, **plan}, sort_keys=True))
         return 0
     except (ValueError, OSError, json.JSONDecodeError, subprocess.TimeoutExpired):
