@@ -151,6 +151,34 @@ def test_unverifiable_copy_is_refused_without_changing_its_metadata(tmp_path, mo
     assert path.read_bytes() == before
 
 
+def test_junction_scope_uses_public_copy_gate_without_reading_blocked_link(tmp_path, monkeypatch):
+    from skillkit import linker
+
+    reconcile, cfg, claude, codex, _owner = setup_copies(tmp_path, monkeypatch)
+    installer = SkillInstaller(codex, tmp_path / "store", projection="link")
+    installer.remove(slug="sample")
+    installer.link_existing("sample")
+    slot = codex.slug_dir("sample")
+    assert linker.is_link(slot)
+    seed(tmp_path, version="2", target=claude)
+    original = reconcile.read_meta
+    blocked_reads = []
+
+    def guarded_read(path):
+        if linker.is_link(path):
+            blocked_reads.append(str(path))
+            error = PermissionError("Untrusted mount point")
+            error.winerror = 448
+            raise error
+        return original(path)
+
+    monkeypatch.setattr(reconcile, "read_meta", guarded_read)
+    result = reconcile.reconcile_managed_scopes(cfg)
+    assert not result["refused"] and not blocked_reads
+    assert not linker.is_link(slot)
+    assert read_meta(slot)["version"] == "2"
+
+
 def test_registry_is_explicit_bounded_and_does_not_claim_invalid_state(tmp_path, monkeypatch):
     from skillery_cli.core import agent_reconciliation as reconcile
     from skillery_cli.core import project_manifest
