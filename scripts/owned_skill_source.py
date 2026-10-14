@@ -147,7 +147,9 @@ def render(source: dict[str, bytes], current: dict[str, bytes], provenance: dict
         if name.upper().startswith('LICENSE') or name.upper() == 'COPYING':
             result.setdefault(name, content)
     if front['name'] == 'crew' and 'references/cli.md' in result:
-        result['references/cli.md'] = result['references/cli.md'].replace(b'C:/Users/79288/bin/crew.exe', b'%USERPROFILE%/bin/crew.exe')
+        result['references/cli.md'] = re.sub(
+            rb'C:/Users/[^/\s`]+(/(?:\.local/)?bin/crew\.exe)',
+            rb'%USERPROFILE%\1', result['references/cli.md'])
     front['version'] = version
     front['files'] = sorted(result)
     result['SKILL.md'] = b'---\n' + yaml.safe_dump(front, allow_unicode=True, sort_keys=False).encode() + b'---' + body

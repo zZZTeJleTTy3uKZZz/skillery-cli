@@ -48,6 +48,15 @@ def test_changed_skill_identity_is_not_rebound():
         source.render(raw, current, origin)
 
 
+def test_new_crew_user_bin_examples_remain_portable():
+    raw, current, origin = example()
+    for files in (raw, current):
+        files['SKILL.md'] = files['SKILL.md'].replace(b'name: tool', b'name: crew')
+    raw['references/cli.md'] = b'C:/Users/testuser/.local/bin/crew.exe and C:/Users/example/.local/bin/crew.exe\n'
+    rendered = source.render(raw, current, origin)
+    assert rendered['references/cli.md'] == b'%USERPROFILE%/.local/bin/crew.exe and %USERPROFILE%/.local/bin/crew.exe\n'
+
+
 @pytest.mark.parametrize('value', ['../outside', '/outside', r'a\b', 'C:/Users/test', ''])
 def test_export_paths_remain_bounded(value):
     with pytest.raises(ValueError):
