@@ -2763,7 +2763,8 @@ async def _install_local_source(
           | {"kind":"git","slug":..,"url":str,"ref":str|None}
     Возвращает installed_chain того же формата, что и hub-режим.
     """
-    installer = SkillInstaller(agent_target, cfg.effective_store_dir())
+    installer = SkillInstaller(agent_target, cfg.effective_store_dir(),
+                               projection=cfg.skill_projection)
     slug = source["slug"]
     if source["kind"] == "path":
         skill_dir = Path(source["path"]).expanduser().resolve()
@@ -2785,7 +2786,11 @@ async def _install_local_source(
         )
 
         fm = _read_frontmatter(skill_dir / "SKILL.md")
-        manifest: dict[str, object] = {"version": version, "files": []}
+        local_manifest = build_manifest(skill_dir, version=version)
+        manifest: dict[str, object] = {
+            "version": version, "files": local_manifest.files,
+            "preserved_paths": local_manifest.preserved_paths,
+        }
         # локальный tooling-навык несёт cli/mcp/runtime_deps + kind в
         # _skill_meta.toml — прокидываем их в manifest, чтобы _apply_tooling
         # поставил CLI/MCP/зависимости (frontmatter их не содержит).
@@ -2822,6 +2827,15 @@ async def _install_local_source(
             manifest=manifest,
             project=project_path, force=force,
         )
+    if result.skipped:
+        return [{
+            "slug": slug, "skill_id": result.skill_id,
+            "version": result.version, "is_update": False,
+            "target_dir": str(result.target_dir), "scope": result.scope,
+            "linked": False, "link_kind": "none", "source": source["kind"],
+            "skipped": True, "skip_reason": result.skip_reason,
+            "conflict_paths": list(getattr(result, "conflict_paths", ())),
+        }]
     # tooling-навык (локальный источник) → CLI/MCP/runtime-deps. Декларация
     # навыка (_skill_meta.toml в сторе) — источник истины (#889, единый хелпер).
     tooling_manifest = _merge_tooling_from_store(manifest, result.store_dir)
@@ -3343,7 +3357,8 @@ async def _install_chain(
     ilog = install_logger(_log_file)
     try:
         bundle = await client.install_bundle(slug, channel=channel)
-        installer = SkillInstaller(agent_target, cfg.effective_store_dir())
+        installer = SkillInstaller(agent_target, cfg.effective_store_dir(),
+                                   projection=cfg.skill_projection)
         chain = bundle.get(
             "dependencies_chain",
             [[bundle["skill_slug"], bundle["version"], bundle.get("repo_url")]],
@@ -3412,6 +3427,30 @@ async def _install_chain(
 
                         restore_backup(_store_root, _dn, _rec.get("id"))
                 raise
+            if result.skipped:
+                # A skipped materialization cannot promote dependencies, publish
+                # success events, migrate runtime state, or change metadata.
+                for record in (replaced_scope, replaced):
+                    if record is not None:
+                        from skillery_cli.core.store_backup import restore_backup
+
+                        restore_backup(_store_root, _dn, record.get("id"))
+                current_meta = read_meta(_store_root / _dn) or {}
+                installed_chain.append({
+                    "slug": dep_slug, "skill_id": result.skill_id,
+                    "version": current_meta.get("version") or dep_version,
+                    "requested_version": dep_version, "is_update": False,
+                    "target_dir": str(result.target_dir), "scope": result.scope,
+                    "linked": False, "link_kind": "none",
+                    "store_dir": str(_store_root / _dn),
+                    "skipped": True, "skip_reason": result.skip_reason,
+                    "conflict_paths": list(getattr(result, "conflict_paths", ())),
+                })
+                ilog.warning("Skill update preserved existing files", extra={
+                    "context": {"step": "materialize", "slug": str(dep_slug or dep_id),
+                                "skipped": True, "skip_reason": result.skip_reason,
+                                "initiator": initiator}})
+                continue
             for _rec in (replaced, replaced_scope):
                 if _rec is None:
                     continue
@@ -3491,6 +3530,7 @@ async def _install_chain(
             if result.skipped:
                 entry["skipped"] = True
                 entry["skip_reason"] = result.skip_reason
+                entry["conflict_paths"] = list(getattr(result, "conflict_paths", ()))
             if replaced is not None:
                 # В JSON-ответе факт вытеснения виден явно (веб/скрипты).
                 entry["replaced"] = replaced
@@ -3566,6 +3606,7 @@ _ALL_AGENT_NAMES: tuple[str, ...] = (
     ClaudeCodeTarget.name,
     CodexTarget.name,
     AntigravityTarget.name,
+    "deepseek",
 )
 
 
@@ -3578,7 +3619,7 @@ def cmd_install(
     all_agents: bool = typer.Option(
         False, "--all-agents",
         help="Поставить навык под ВСЕ поддерживаемые агенты "
-             "(claude_code+codex+antigravity) за один вызов. "
+             "(claude_code+codex+antigravity+deepseek) за один вызов. "
              "Взаимоисключающе с --agent.",
     ),
     scope: Optional[str] = typer.Option(
@@ -3605,6 +3646,9 @@ def cmd_install(
         None, "--ref",
         help="Git-ref (ветка/тег/sha) для --from-git (default: HEAD репозитория).",
     ),
+    projection: Optional[str] = typer.Option(
+        None, "--projection", help="Skill visibility: auto | link | copy"
+    ),
 ) -> None:
     """Установить skill из хаба, локальной папки (--path) или git-url (--from-git).
 
@@ -3617,6 +3661,11 @@ def cmd_install(
     project → <project>/.claude/skills/<id-или-slug>/  (только в данном проекте)
     """
     cfg = ClientConfig.load()
+    if isinstance(projection, str):
+        if projection not in ("auto", "link", "copy"):
+            emit_error("VALIDATION", "projection must be auto, link, or copy")
+            raise typer.Exit(1)
+        cfg.skill_projection = projection
     actual_scope, project_path = _resolve_install_scope(cfg, scope, project)
 
     # При прямом вызове функции (юнит-тесты) незаданный typer.Option приходит
@@ -3671,6 +3720,8 @@ def cmd_install(
         # project scope → фиксируем набор в манифесте проекта.
         if project_path is not None:
             for item in installed_chain:
+                if item.get("skipped"):
+                    continue
                 ref = item["slug"] or item.get("skill_id")
                 if ref:
                     project_manifest.add(project_path, str(ref))
@@ -3682,7 +3733,7 @@ def cmd_install(
             if item.get("skipped"):
                 emit_message(
                     f"«{label}»: установка пропущена ({item.get('skip_reason')}) — "
-                    "stub не может заменить существующую непустую установку.",
+                    "existing files were preserved; inspect the skip reason before retrying.",
                     level="warn",
                 )
             elif item.get("content") == "stub":
@@ -5458,6 +5509,7 @@ def cmd_update(
                             "updated": False,
                             "skipped": True,
                             "skip_reason": up.skip_reason,
+                            "conflict_paths": list(getattr(up, "conflict_paths", ())),
                         }
                     )
                     continue
@@ -6317,10 +6369,19 @@ def cmd_config(
         None, "--project-dir", help="Дефолтный project root для scope=project"
     ),
     show: bool = typer.Option(False, "--show", help="Просто показать текущий config"),
+    projection: Optional[str] = typer.Option(
+        None, "--projection", help="Default skill visibility: auto | link | copy"
+    ),
 ) -> None:
     """Настройки CLI (output, auto-update, default install scope/project)."""
     cfg = ClientConfig.load()
     changes = False
+    if isinstance(projection, str):
+        if projection not in ("auto", "link", "copy"):
+            emit_error("VALIDATION", "projection must be auto, link, or copy")
+            raise typer.Exit(1)
+        cfg.skill_projection = projection
+        changes = True
     if output is not None:
         if output not in ("text", "json"):
             emit_error("VALIDATION", "output должен быть 'text' или 'json'")
@@ -6349,6 +6410,7 @@ def cmd_config(
         "auto_update_cooldown_min": cfg.auto_update_cooldown_min,
         "default_install_scope": cfg.default_install_scope,
         "default_project_dir": cfg.default_project_dir,
+        "skill_projection": cfg.skill_projection,
     }
 
     def _render(p: dict) -> None:
@@ -6357,6 +6419,7 @@ def cmd_config(
         console.print(f"  auto_update_cooldown_min: {p['auto_update_cooldown_min']}")
         console.print(f"  default_install_scope:    {p['default_install_scope']}")
         console.print(f"  default_project_dir:      {p['default_project_dir'] or '—'}")
+        console.print(f"  skill_projection:         {p['skill_projection']}")
         if not show and changes:
             console.print("[green]✓[/] Config обновлён")
 

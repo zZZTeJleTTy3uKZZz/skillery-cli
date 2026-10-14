@@ -119,6 +119,7 @@ class _HubAppConfig(AppConfig):
     default_install_scope: str = "project"
     default_project_dir: str | None = None
     store_dir: str | None = None
+    skill_projection: str = "auto"
     web_ui_url: str | None = None
     cli_update_check: bool = True
     cli_update_check_at: str | None = None
@@ -169,6 +170,8 @@ class ClientConfig:
     store_dir: str | None = None
     """Путь центрального стора навыков. None → SKILLERY_STORE_DIR / ~/.skillery/store.
     Навык материализуется в стор один раз; в scope кладётся junction/symlink на него."""
+    skill_projection: str = "auto"
+    """Agent visibility policy; copy avoids restricted Windows reparse points."""
     web_ui_url: str | None = None
     """https://hub.example — куда CLI открывает браузер для handoff в Web UI.
     None → derive из base_url (api.* → host, localhost:8000 → localhost:3000)."""
@@ -189,6 +192,8 @@ class ClientConfig:
     повторные запуски CLI/демона миграцию не гоняют."""
 
     def __post_init__(self) -> None:
+        if self.skill_projection not in ("auto", "link", "copy"):
+            raise ValueError("skill_projection must be auto, link, or copy")
         if not self.base_url:
             self.base_url = _default_base_url()
 
@@ -265,6 +270,7 @@ class ClientConfig:
             default_install_scope=str(ac.default_install_scope or "project"),
             default_project_dir=ac.default_project_dir,
             store_dir=ac.store_dir,
+            skill_projection=ac.skill_projection,
             web_ui_url=ac.web_ui_url,
             cli_update_check=bool(ac.cli_update_check),
             cli_update_check_at=ac.cli_update_check_at,
@@ -310,6 +316,8 @@ class ClientConfig:
             data["default_project_dir"] = self.default_project_dir
         if self.store_dir:
             data["store_dir"] = self.store_dir
+        if self.skill_projection != "auto":
+            data["skill_projection"] = self.skill_projection
         if self.web_ui_url:
             data["web_ui_url"] = self.web_ui_url
         data["cli_update_check"] = self.cli_update_check

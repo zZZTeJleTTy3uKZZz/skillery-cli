@@ -85,6 +85,8 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     drive, tail = os.path.splitdrive(str(home))
     monkeypatch.setenv("HOMEDRIVE", drive or "")
     monkeypatch.setenv("HOMEPATH", tail or str(home))
+    monkeypatch.setenv("APPDATA", str(home / "AppData" / "Roaming"))
+    monkeypatch.setenv("LOCALAPPDATA", str(home / "AppData" / "Local"))
     # Оверрайды каталогов снимаем: с ними ~ не при чём и тест ушёл бы в боевой путь.
     for var in ("SKILLERY_CONFIG_DIR", "SKILLERY_STORE_DIR", "SKILLERY_PROFILE"):
         monkeypatch.delenv(var, raising=False)
@@ -92,6 +94,19 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv(DAEMON_MUTEX_ENV, f"Local\\SkilleryDaemonTest-{_RUN_ID}")
     monkeypatch.setenv(UPGRADE_MUTEX_ENV, f"Local\\SkilleryUpgradeTest-{_RUN_ID}")
     return home
+
+
+@pytest.fixture(autouse=True)
+def blocked_native_daemon_operations(monkeypatch: pytest.MonkeyPatch, isolated_home):
+    """Dedicated tests must mock OS effects explicitly before exercising callers."""
+    from skillery_cli.commands import daemon
+    from skillery_cli.daemon import autostart
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Unmocked native daemon operation is forbidden in tests")
+
+    monkeypatch.setattr(autostart, "proc_run", forbidden)
+    monkeypatch.setattr(daemon, "proc_popen", forbidden)
 
 
 @pytest.fixture(autouse=True)
