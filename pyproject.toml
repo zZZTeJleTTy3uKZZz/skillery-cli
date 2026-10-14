@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "skillery-cli"
-version = "0.5.89"
+version = "0.5.90"
 description = "Skillery CLI — клиент маркетплейса AI-навыков для агентов (Claude Code, Codex)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -90,6 +90,7 @@ dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "respx>=0.21",
+    "PyYAML>=6.0.3,<7",
     "ruff>=0.8",
 ]
 
@@ -104,6 +105,7 @@ dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "respx>=0.21",
+    "PyYAML>=6.0.3,<7",
     "ruff>=0.8",
 ]
 
