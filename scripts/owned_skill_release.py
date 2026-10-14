@@ -24,6 +24,7 @@ from urllib.parse import urlparse
 from pathlib import Path, PurePosixPath
 
 HOOK_URL = 'https://api.skillery.ru/webhooks/git/github'
+GITLAB_HOOK_URL = 'https://api.skillery.ru/webhooks/git/gitlab'
 SEMVER = re.compile(r'^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$')
 
 
@@ -39,7 +40,11 @@ def validate_policy(data: dict, repository: str) -> dict:
     if (data.get('schema') != 1 or data.get('owned') is not True
             or data.get('repository_role') != 'skill-distribution'):
         raise ValueError('only explicitly owned dedicated skill repositories may auto-release')
-    if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository):
+    provider = data.get('provider', 'github')
+    parts = repository.split('/')
+    if (provider not in {'github', 'gitlab'} or len(parts) < 2
+            or (provider == 'github' and len(parts) != 2)
+            or any(part in {'.', '..'} or not re.fullmatch(r'[A-Za-z0-9_.-]+', part) for part in parts)):
         raise ValueError('invalid repository identity')
     if data.get('repository', '').lower() != repository.lower():
         raise ValueError('release policy repository identity mismatch')
@@ -60,7 +65,72 @@ def validate_policy(data: dict, repository: str) -> dict:
     if (not SEMVER.fullmatch(data.get('initial_version', ''))
             or data['initial_version'].startswith('v')):
         raise ValueError('initial version must be immutable plain SemVer')
-    return {**data, 'skill_path': skill_path, 'payload_paths': payload, 'license_paths': licenses}
+    if provider == 'gitlab' and (type(data.get('project_id')) is not int or data['project_id'] <= 0):
+        raise ValueError('owned GitLab project identity is required')
+    return {**data, 'provider': provider, 'skill_path': skill_path, 'payload_paths': payload, 'license_paths': licenses}
+
+
+def validate_remote(remote: str, policy: dict) -> None:
+    """Validate clean repository identity, including GitLab's SSH port-443 endpoint."""
+    provider = policy.get('provider', 'github')
+    host = 'gitlab.com' if provider == 'gitlab' else 'github.com'
+    if remote.startswith('git@' + host + ':'):
+        identity = remote[len('git@' + host + ':'):].removesuffix('.git')
+    else:
+        parsed = urlparse(remote)
+        ssh_host = 'altssh.gitlab.com' if provider == 'gitlab' else host
+        https = (parsed.scheme == 'https' and parsed.hostname == host
+                 and parsed.username is None and parsed.port in {None, 443})
+        ssh = (parsed.scheme == 'ssh' and parsed.username == 'git'
+               and ((parsed.hostname == host and parsed.port in {None, 22, 443})
+                    or (provider == 'gitlab' and parsed.hostname == ssh_host and parsed.port == 443)))
+        if not (https or ssh) or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError('release remote is not the clean owned provider repository')
+        identity = parsed.path.lstrip('/').removesuffix('.git')
+    if identity.lower() != policy['repository'].lower():
+        raise ValueError('release remote repository identity mismatch')
+
+
+def validate_native_readiness(data: dict, policy: dict) -> int:
+    """Check the durable accepted baseline and registered owned-hook identity.
+
+    This attests an already-tested immutable baseline, not current availability.
+    Passing time does not invalidate it; replacing its project/hook/runtime does.
+    """
+    if (data.get('schema') != 1 or data.get('provider') != 'gitlab'
+            or data.get('repository') != policy['repository']
+            or data.get('project_id') != policy['project_id']):
+        raise ValueError('native hook evidence belongs to another project')
+    hook = data.get('hook') or {}
+    if (hook.get('mode') != 'auto' or hook.get('status') != 'registered'
+            or not re.fullmatch(r'[1-9]\d*', str(hook.get('external_hook_id', '')))
+            or str(hook['external_hook_id']) != str(policy.get('native_hook_id'))
+            or hook.get('callback_url') != GITLAB_HOOK_URL):
+        raise ValueError('actual registered native hook evidence is required')
+    fleet = data.get('fleet') or {}
+    baseline = policy.get('runtime_baseline') or {'cli_version': '0.5.88', 'sdk_version': '0.6.2'}
+    for name, minimum in [('cli_version', (0, 5, 88)), ('sdk_version', (0, 6, 2))]:
+        match = SEMVER.fullmatch(baseline.get(name, ''))
+        if (not match or tuple(map(int, match.groups())) < minimum
+                or fleet.get(name) != baseline[name]):
+            raise ValueError('accepted immutable runtime baseline does not match policy')
+    devices = fleet.get('devices')
+    if (not isinstance(devices, list)
+            or any(not isinstance(device, str) or not device for device in devices)
+            or len(set(devices)) < 2
+            or fleet.get('copy_projection_accepted') is not True
+            or fleet.get('protected_native_accepted') is not True
+            or (data.get('project') or {}).get('ci_push_repository_for_job_token_allowed') is not True):
+        raise ValueError('fleet projections and scoped project push permission are not accepted')
+    return policy['project_id']
+
+
+def publish_native_tag(tag_write) -> dict:
+    """Let the provider deliver its registered token-authenticated webhook."""
+    pushed = tag_write()
+    acceptance = ('immutable-tag-already-present-provider-delivery-unverified'
+                  if pushed is False else 'tag-pushed-awaiting-provider-job')
+    return {'delivery': 'provider-native', 'acceptance': acceptance}
 
 
 def next_version(tags: list[str], initial: str) -> str:
@@ -107,7 +177,8 @@ def _canonical_gate(path: Path):
     return run_gate(path, manifest=False)
 
 
-def scan_then_publish(files: dict[str, bytes], directory: Path, tag_write, hook_delivery):
+def scan_then_publish(files: dict[str, bytes], directory: Path, tag_write, hook_delivery,
+                      *, delivery_state: str = 'terminal-delivered'):
     """Materialize exact blobs, scan fail-closed, then allow ref/hook mutations."""
     receipt_path = directory.with_name(directory.name + '.receipt.json')
     if directory.exists() or receipt_path.exists() or not directory.parent.is_dir():
@@ -137,7 +208,7 @@ def scan_then_publish(files: dict[str, bytes], directory: Path, tag_write, hook_
         receipt_path.write_text(json.dumps(receipt, sort_keys=True) + '\n')
         tag_write()
         result = hook_delivery()
-        receipt.update({'state': 'terminal-delivered', 'exit_status': 0})
+        receipt.update({'state': delivery_state, 'exit_status': 0})
         return result
     except Exception:
         receipt.update({'state': 'terminal-failed', 'exit_status': 1})
@@ -224,18 +295,9 @@ class Repository:
         return {'tag': 'v' + next_version(tags, policy['initial_version']), 'commit': commit,
                 'payload_sha256': digest, 'reused': False}
 
-    def publish(self, policy: dict, plan: dict) -> None:
+    def publish(self, policy: dict, plan: dict) -> bool:
         remote = self.git('remote', 'get-url', 'origin').decode().strip()
-        if remote.startswith('git@github.com:'):
-            identity = remote[len('git@github.com:'):].removesuffix('.git')
-        else:
-            parsed = urlparse(remote)
-            if (parsed.scheme != 'https' or parsed.hostname != 'github.com'
-                    or parsed.username or parsed.password or parsed.query or parsed.fragment):
-                raise ValueError('release remote is not the owned GitHub repository')
-            identity = parsed.path.lstrip('/').removesuffix('.git')
-        if identity.lower() != policy['repository'].lower():
-            raise ValueError('release remote repository identity mismatch')
+        validate_remote(remote, policy)
         current = self.git('ls-remote', 'origin', 'refs/heads/' + policy['branch']).decode().split()
         head = self.git('rev-parse', 'HEAD^{commit}').decode().strip()
         if not current or current[0] != head:
@@ -247,13 +309,14 @@ class Repository:
             actual = resolved.get('refs/tags/' + plan['tag'] + '^{}') or resolved['refs/tags/' + plan['tag']]
             if actual != plan['commit']:
                 raise ValueError('immutable remote tag already points to different content')
-            return
+            return False
         if not plan['reused']:
             message = json.dumps({'schema': 'skillery.release.v1', 'skill': policy['slug'], **plan},
                                  sort_keys=True)
             self.git('-c', 'user.name=Skillery release', '-c', 'user.email=skillery-release@users.noreply.github.com',
                      'tag', '-a', plan['tag'], plan['commit'], '-m', message)
         self.git('push', 'origin', 'refs/tags/' + plan['tag'] + ':refs/tags/' + plan['tag'])
+        return True
 
 
 def deliver(body: bytes, headers: dict) -> list[int]:
@@ -278,6 +341,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument('--repository', required=True)
     parser.add_argument('--publish', action='store_true')
     parser.add_argument('--scan-root', type=Path)
+    parser.add_argument('--native-readiness', type=Path)
     args = parser.parse_args(argv)
     try:
         repository = Repository(Path.cwd())
@@ -286,22 +350,41 @@ def main(argv: list[str]) -> int:
         if config is None:
             raise ValueError('release policy must be committed before use')
         policy = validate_policy(json.loads(config), args.repository)
-        if os.environ.get('GITHUB_REF_NAME', policy['branch']) != policy['branch']:
+        current_branch = os.environ.get('CI_COMMIT_BRANCH') or os.environ.get('GITHUB_REF_NAME', policy['branch'])
+        if current_branch != policy['branch']:
             raise ValueError('event is not on the declared release branch')
         plan = repository.plan(policy)
         if args.publish:
-            preflight_environment(os.environ)
             if args.scan_root is None:
                 raise ValueError('publish needs an explicit bounded owned scan directory')
-            body, headers = webhook_request(policy['repository'], plan['tag'], plan['commit'],
-                                            os.environ['SKILLERY_GIT_WEBHOOK_SECRET'])
+            native = policy['provider'] == 'gitlab'
+            if native:
+                if os.environ.get('SKILLERY_SAFE_UPDATES_READY') != 'true' or args.native_readiness is None:
+                    raise ValueError('accepted native-hook readiness evidence is required before tags')
+                if args.native_readiness.stat().st_size > 65536:
+                    raise ValueError('native-hook readiness evidence exceeds its finite cap')
+                readiness = json.loads(args.native_readiness.read_text(encoding='utf-8'))
+                project_id = validate_native_readiness(readiness, policy)
+                if os.environ.get('CI_PROJECT_ID', str(project_id)) != str(project_id):
+                    raise ValueError('job project does not match owned native-hook evidence')
+            else:
+                preflight_environment(os.environ)
+                body, headers = webhook_request(policy['repository'], plan['tag'], plan['commit'],
+                                                os.environ['SKILLERY_GIT_WEBHOOK_SECRET'])
             files = repository.blobs(plan['commit'], policy['payload_paths'])
             if inventory_digest(files) != plan['payload_sha256']:
                 raise ValueError('immutable payload changed before its publish gate')
-            plan['job_ids'] = scan_then_publish(
-                files, args.scan_root, lambda: repository.publish(policy, plan),
-                lambda: deliver(body, headers),
-            )
+            if native:
+                plan.update(scan_then_publish(
+                    files, args.scan_root, lambda: None,
+                    lambda: publish_native_tag(lambda: repository.publish(policy, plan)),
+                    delivery_state='terminal-native-tag-delivery-unverified',
+                ))
+            else:
+                plan['job_ids'] = scan_then_publish(
+                    files, args.scan_root, lambda: repository.publish(policy, plan),
+                    lambda: deliver(body, headers),
+                )
         print(json.dumps({'skill': policy['slug'], 'published': args.publish, **plan}, sort_keys=True))
         return 0
     except (ValueError, OSError, json.JSONDecodeError, subprocess.TimeoutExpired):

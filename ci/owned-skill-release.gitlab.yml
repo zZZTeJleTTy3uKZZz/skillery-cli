@@ -1,0 +1,46 @@
+# Reusable hidden job. Only an explicitly owned dedicated skill caller enables it.
+.skillery-owned-gitlab-release:
+  image: $SKILLERY_RELEASE_IMAGE
+  stage: release
+  resource_group: skillery-owned-release-$CI_PROJECT_ID
+  interruptible: false
+  timeout: 5 minutes
+  variables:
+    GIT_DEPTH: "0"
+    GIT_TERMINAL_PROMPT: "0"
+    PIP_NO_CACHE_DIR: "1"
+  before_script:
+    - >-
+      python -c 'import os,re;
+      assert os.environ.get("SKILLERY_SAFE_UPDATES_READY")=="true";
+      assert re.fullmatch(r"[a-f0-9]{40}",os.environ["SKILLERY_TOOLING_REF"]);
+      assert re.fullmatch(r"python:3[.]13-alpine@sha256:[a-f0-9]{64}",os.environ["SKILLERY_RELEASE_IMAGE"]);
+      assert os.environ["CI_SERVER_HOST"]=="gitlab.com";
+      assert os.environ["CI_PIPELINE_SOURCE"]=="push" and os.environ.get("CI_COMMIT_BRANCH");
+      assert os.path.isfile(os.environ["SKILLERY_NATIVE_RELEASE_READINESS"])'
+    - apk add --no-cache git
+    - python -m pip install --no-input 's-skillgate==0.1.7'
+    - >-
+      python -c 'import os,pathlib,urllib.request;
+      root=pathlib.Path(".release-tooling/scripts"); root.mkdir(parents=True);
+      prefix="https://raw.githubusercontent.com/zZZTeJleTTy3uKZZz/skillery-cli/"+os.environ["SKILLERY_TOOLING_REF"]+"/scripts/";
+      files=["owned_skill_release.py","gitlab_job_credential.py"];
+      [(root/name).write_bytes(urllib.request.urlopen(prefix+name,timeout=20).read(131073)) for name in files];
+      assert all((root/name).stat().st_size<=131072 for name in files)'
+    - git remote set-url origin "https://gitlab.com/$CI_PROJECT_PATH.git"
+    - git config --local credential.helper ""
+    - git config --local credential.useHttpPath true
+    - git config --local --add credential.helper "!python \"$CI_PROJECT_DIR/.release-tooling/scripts/gitlab_job_credential.py\""
+  script:
+    - mkdir -p outputs/skillery-release
+    - >-
+      python .release-tooling/scripts/owned_skill_release.py
+      --policy "$SKILLERY_RELEASE_POLICY" --repository "$CI_PROJECT_PATH"
+      --native-readiness "$SKILLERY_NATIVE_RELEASE_READINESS"
+      --scan-root "$CI_PROJECT_DIR/outputs/skillery-release/job-$CI_JOB_ID"
+      --publish
+  artifacts:
+    when: always
+    expire_in: 7 days
+    paths:
+      - outputs/skillery-release/*.receipt.json
