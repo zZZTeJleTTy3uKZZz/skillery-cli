@@ -109,6 +109,7 @@ class _HubAppConfig(AppConfig):
     user_email: str | None = None
     user_display_name: str | None = None
     agent: str | None = None
+    sync_agents: list[str] = Field(default_factory=list)
     permissions: list[str] = Field(default_factory=list)
     company_id: str | None = None
     role_id: str | None = None
@@ -138,6 +139,8 @@ class ClientConfig:
     """Уровень логов CLI (error|warning|info|debug|trace). Пишутся в
     ~/.skillery/logs/. По умолчанию error; debug/trace — для разбора."""
     agent: str | None = None
+    sync_agents: list[str] = field(default_factory=list)
+    """Explicit agents whose existing managed scopes should follow store updates."""
     permissions: list[str] = field(default_factory=list)
     """Permission keys из JWT (используется для модульной регистрации команд).
 
@@ -192,6 +195,12 @@ class ClientConfig:
     повторные запуски CLI/демона миграцию не гоняют."""
 
     def __post_init__(self) -> None:
+        allowed_agents = {"claude_code", "codex", "antigravity", "deepseek", "opencode"}
+        if not isinstance(self.sync_agents, list) or any(
+            not isinstance(name, str) or name not in allowed_agents for name in self.sync_agents
+        ):
+            raise ValueError("sync_agents must contain supported canonical agent names")
+        self.sync_agents = list(dict.fromkeys(self.sync_agents))
         if self.skill_projection not in ("auto", "link", "copy"):
             raise ValueError("skill_projection must be auto, link, or copy")
         if not self.base_url:
@@ -259,6 +268,7 @@ class ClientConfig:
             user_email=ac.user_email,
             user_display_name=ac.user_display_name,
             agent=ac.agent,
+            sync_agents=list(ac.sync_agents),
             permissions=list(ac.permissions),
             company_id=ac.company_id,
             role_id=ac.role_id,
@@ -298,6 +308,8 @@ class ClientConfig:
             data["log_level"] = self.log_level
         if self.agent:
             data["agent"] = self.agent
+        if self.sync_agents:
+            data["sync_agents"] = self.sync_agents
         if self.permissions:
             data["permissions"] = self.permissions
         if self.company_id:
