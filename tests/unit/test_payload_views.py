@@ -99,10 +99,18 @@ def test_source_update_refreshes_views_when_agent_sync_is_disabled(tmp_path, mon
     assert read_meta(view / "sample")["version"] == "2"
 
 
-def test_expose_command_is_available_without_hub_login():
+def test_expose_command_is_available_without_hub_login(monkeypatch):
     from typer.testing import CliRunner
     from skillery_cli.__main__ import build_app
+    from skillery_cli.commands import payload_views as commands
 
-    result = CliRunner().invoke(build_app(), ["store", "expose", "--help"])
+    received = []
+
+    def expose(cfg, *, collection, path):
+        received.append(collection)
+        return {"path": str(path), "skills": 1, "payload_copied": False}
+
+    monkeypatch.setattr(commands, "expose_payload_view", expose)
+    result = CliRunner().invoke(build_app(), ["store", "expose", "--collection", "private"])
     assert result.exit_code == 0
-    assert "--collection" in result.stdout
+    assert received == ["private"]
