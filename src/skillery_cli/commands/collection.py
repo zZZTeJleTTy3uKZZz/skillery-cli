@@ -24,6 +24,7 @@ from rich.table import Table
 from skillery_cli.commands import _common
 from skillery_cli.config import ClientConfig
 from skillery_cli.core import local_collections, project_manifest
+from skillery_cli.core.shared_install import link_installed_chain, resolve_agent_targets
 from skillery_cli.daemon.instrumentation import track_skill_event
 from skillery_cli.output import emit_data, emit_error, emit_message
 
@@ -332,15 +333,15 @@ def cmd_collection_show(
 # ======================================================
 def _install_server(
     ref: str, scope: str | None, project: Path | None, channel: str,
-    force: bool, agent: str | None,
+    force: bool, agent: str | None, agents: str | None = None,
+    projection: str | None = None,
 ) -> None:
-    from skillery_cli.core.agents import get_target
-
     _ensure_install_helpers()
     cfg = ClientConfig.load()
+    targets = _shared_targets(cfg, agent, agents, projection)
     actual_scope, project_path = _resolve_install_scope(cfg, scope, project)
     access = _common.get_access_token()
-    target = get_target(agent or cfg.agent)
+    target = targets[0]
 
     async def _do() -> None:
         client = _common.make_client(cfg, access)
@@ -360,7 +361,20 @@ def _install_server(
                         scope=actual_scope, project_path=project_path,
                         force=force, agent_target=target,
                     )
+                    if len(targets) > 1:
+                        chain = [{**item, "agent": target.name} for item in chain]
                     installed.extend(chain)
+                    shared, refused = link_installed_chain(
+                        cfg, chain, targets=targets[1:], project=project_path,
+                    )
+                    installed.extend(shared)
+                    failed.extend(refused)
+                    if project_path is not None:
+                        for item in chain:
+                            if not item.get("skipped") and item.get("agent_visible") is not False:
+                                installed_ref = str(item.get("slug") or item["skill_id"])
+                                if (target.slug_dir(installed_ref, project=project_path) / "SKILL.md").is_file():
+                                    project_manifest.add(project_path, installed_ref)
                 except Exception as exc:
                     failed.append({"ref": skill_ref, "error": str(exc)})
         finally:
@@ -375,6 +389,7 @@ def _install_server(
             "scope": actual_scope,
             "project": str(project_path) if project_path else None,
             "installed": installed, "failed": failed,
+            "partial": bool(failed or any(item.get("skipped") for item in installed)),
             "skills_total": len(skills),
         }
 
@@ -385,11 +400,14 @@ def _install_server(
                 f"({c.get('slug') or c.get('id')}) — навыков: {p['skills_total']}"
             )
             for item in p["installed"]:
+                if item.get("skipped"):
+                    console.print(f"  [yellow]Preserved[/] {item.get('slug')}: {item.get('skip_reason')}")
+                    continue
                 action = "Обновлён" if item.get("is_update") else "Установлен"
                 mount = "📎" if item.get("linked") else "📄"
                 label = item.get("slug") or item.get("skill_id")
                 console.print(
-                    f"  [green]✓[/] {action} ({item.get('scope')}) {mount} "
+                    f"  [green]✓[/] {action} agent={item.get('agent') or target.name} ({item.get('scope')}) {mount} "
                     f"{label}@{item.get('version')} → {item.get('target_dir')}"
                 )
             for f in p["failed"]:
@@ -404,13 +422,14 @@ def _install_server(
 
 def _install_local(
     name: str, scope: str | None, project: Path | None, channel: str,
-    force: bool, agent: str | None,
+    force: bool, agent: str | None, agents: str | None = None,
+    projection: str | None = None,
 ) -> None:
-    from skillery_cli.core.agents import get_target
     from skillery_cli.core.installer import SkillInstaller, read_meta
 
     _ensure_install_helpers()
     cfg = ClientConfig.load()
+    targets = _shared_targets(cfg, agent, agents, projection)
     try:
         coll = local_collections.get(name)
     except local_collections.LocalCollectionError as e:
@@ -419,9 +438,9 @@ def _install_local(
         emit_error("NOT_FOUND", f"Локальная коллекция «{name}» не найдена")
         raise typer.Exit(1)
     actual_scope, project_path = _resolve_install_scope(cfg, scope, project)
-    target = get_target(agent or cfg.agent)
+    target = targets[0]
     store_dir = cfg.effective_store_dir()
-    installer = SkillInstaller(target, store_dir)
+    installer = SkillInstaller(target, store_dir, projection=cfg.skill_projection)
 
     linked: list[dict[str, Any]] = []
     installed: list[dict[str, Any]] = []
@@ -456,8 +475,13 @@ def _install_local(
                     "version": meta.get("version"),
                     "target_dir": str(target.slug_dir(slug, project=project_path)),
                     "scope": actual_scope, "linked": was_linked,
-                    "link_kind": link_kind, "source": "store",
+                    "link_kind": link_kind, "source": "store", "agent": target.name,
                 })
+                shared, refused = link_installed_chain(
+                    cfg, [linked[-1]], targets=targets[1:], project=project_path,
+                )
+                linked.extend(shared)
+                skipped.extend({**entry, "slug": entry["ref"]} for entry in refused)
                 continue
 
             # 2) В сторе нет → hub-докачка (только если залогинен).
@@ -494,6 +518,11 @@ def _install_local(
                     if ref:
                         project_manifest.add(project_path, str(ref))
             installed.extend(chain)
+            shared, refused = link_installed_chain(
+                cfg, chain, targets=targets[1:], project=project_path,
+            )
+            installed.extend(shared)
+            skipped.extend({**entry, "slug": entry["ref"]} for entry in refused)
 
         payload: dict[str, Any] = {
             "event": "local_collection_installed",
@@ -540,6 +569,19 @@ def _install_local(
     _common.run(_do())
 
 
+def _shared_targets(cfg, agent, agents, projection):
+    """Validate all arguments before starting any download or scope mutation."""
+    try:
+        if projection is not None:
+            if projection not in ("auto", "link", "copy"):
+                raise ValueError("projection must be auto, link, or copy")
+            cfg.skill_projection = projection
+        return resolve_agent_targets(agents, agent, cfg.agent)
+    except ValueError as exc:
+        emit_error("VALIDATION", str(exc))
+        raise typer.Exit(1) from exc
+
+
 def cmd_collection_install(
     ref: str = typer.Argument(
         ..., metavar="ID_SLUG_ИЛИ_ИМЯ",
@@ -561,6 +603,12 @@ def cmd_collection_install(
         False, "--force", help="Перезаписать существующие папки навыков"
     ),
     agent: str | None = typer.Option(None, "--agent"),
+    agents: str | None = typer.Option(
+        None, "--agents", help="Comma-separated agents sharing one materialized store release.",
+    ),
+    projection: str | None = typer.Option(
+        None, "--projection", help="Skill visibility: auto | link | copy. Use link to require sharing.",
+    ),
 ) -> None:
     """Массово установить навыки коллекции (серверной или ``--local``).
 
@@ -568,8 +616,10 @@ def cmd_collection_install(
     каждый через общий ``_install_chain``. Локальная: для каждого слага — линк из
     стора (без сети) или докачка из хаба (если залогинен).
     """
+    agents = agents if isinstance(agents, str) else None
+    projection = projection if isinstance(projection, str) else None
     if local:
-        _install_local(ref, scope, project, channel, force, agent)
+        _install_local(ref, scope, project, channel, force, agent, agents, projection)
         return
     _require_server("install")
     if not _CAN_INSTALL:
@@ -579,7 +629,7 @@ def cmd_collection_install(
             "Для локальной коллекции добавьте --local.",
         )
         raise typer.Exit(1)
-    _install_server(ref, scope, project, channel, force, agent)
+    _install_server(ref, scope, project, channel, force, agent, agents, projection)
 
 
 # ======================================================

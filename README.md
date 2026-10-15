@@ -4,6 +4,31 @@ CLI-клиент для **Skillery** — маркетплейса AI-навык�
 (Claude Code, Codex и совместимых). Ставит навыки в центральный стор, линкует
 их в проект или глобально, синхронизирует и обновляет.
 
+## Shared collections across agents
+
+Install a collection into one central store and expose it to several agents:
+
+```bash
+skillery cli config --projection link
+skillery collection install my-stack --scope global --agents claude_code,codex,deepseek --projection link
+skillery collection install my-stack --local --scope project --agents codex,deepseek --projection link
+```
+
+Each release is downloaded once. Secondary agents receive junctions on Windows
+or symbolic links on Linux. `--projection link` fails if sharing is unavailable;
+it never silently creates a copy. Clean Skillery copies can become links, while
+edited files, private scope state and foreign directories are preserved and
+reported as refused. Dependencies hidden from the primary agent stay hidden.
+The primary installation handles tooling; secondary sharing does not register
+MCP servers, run hooks or copy account data. Inspect `failed` (server collections)
+or `skipped` (local collections) in the JSON result before claiming full coverage.
+`--agents` and `--agent` are mutually exclusive.
+
+When accessing a Windows store from WSL, point Linux skill links at the same
+physical files under `/mnt/c/...`; keep agent credentials and session directories
+outside those links. A protected container needs an explicitly approved payload
+mount. Linking host account directories into it is not part of this command.
+
 ## Установка
 
 ```bash

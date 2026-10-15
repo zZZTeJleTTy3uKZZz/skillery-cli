@@ -822,7 +822,7 @@ wheels = [
 
 [[package]]
 name = "skillery-cli"
-version = "0.5.90"
+version = "0.5.91"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },

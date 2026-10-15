@@ -39,6 +39,18 @@ skills-hub --json collection install <id-или-slug>      # массовый in
 как у `install`: `--scope global|project`, `--project P`, `--channel C`
 (default `published`), `--force`, `--agent A`.
 
+Share one materialized release across agents with `--agents`:
+
+```bash
+skillery collection install my-stack --scope global --agents claude_code,codex,deepseek --projection link
+```
+
+The collection downloads each release once and links it into secondary scopes.
+`--projection link` requires junctions/symlinks and refuses a copy fallback.
+The same flags work with `--local`. Modified copies, runtime state and foreign
+directories are preserved; report `failed`/`skipped` rows as incomplete. Secondary
+sharing does not run hooks, register MCP servers or transfer account data.
+
 Если пользователь спрашивает «что у вас есть» — предпочитай `collection list`
 перед плоским `skills-hub list`: коллекции тематически сгруппированы.
 
