@@ -1,16 +1,9 @@
-"""``skillery collection …`` — коллекции (серверные + локальные).
+"""Hub and offline collections under the resource-oriented collection sub-app.
 
-Единый sub-app ``collection`` с глаголами ``list / show / install / create /
-add / remove / delete``. Флаг **``--local``** переключает источник:
-
-- без ``--local`` — **серверная** коллекция хаба (gate ``skill.read`` /
-  ``skill.install``; CRUD серверных коллекций — через Web UI, в CLI только
-  ``list`` / ``show`` / ``install``);
-- с ``--local`` — **локальная** коллекция (``<config_dir>/collections.toml``,
-  см. ``core/local_collections.py``) — полностью оффлайн, без логина и хаба.
-
-``create / add / remove / delete`` существуют ТОЛЬКО в локальном режиме —
-требуют ``--local`` (серверный CRUD идёт через Web UI).
+Hub reads and installs require skill.read and skill.install respectively;
+mutations require catalog.manage or hub.admin. --local selects offline profiles
+in <config_dir>/collections.toml without login. edit --new-slug renames either
+kind while preserving membership; Hub writes resolve references to numeric IDs.
 """
 from __future__ import annotations
 
@@ -933,6 +926,8 @@ def cmd_collection_tags(
 
 def cmd_collection_edit(
     slug: str = typer.Argument(..., help="Slug коллекции"),
+    new_slug: str | None = typer.Option(None, "--new-slug", help="New collection slug"),
+    local: bool = typer.Option(False, "--local", help="Rename an offline collection"),
     title: str | None = typer.Option(None, "--title", help="Название"),
     description: str | None = typer.Option(None, "--description", help="Описание"),
     icon: str | None = typer.Option(None, "--icon", help="Имя иконки"),
@@ -941,11 +936,26 @@ def cmd_collection_edit(
         None, "--access-level", help="public | restricted | private"
     ),
 ) -> None:
-    """Изменить карточку коллекции (PATCH /collections/{slug}) — #1224.
+    """Edit a Hub collection, or rename an offline profile with --local.
 
-    Только серверный режим: у локальных коллекций (``--local``) нет карточки
-    в хабе, их поля живут в манифесте проекта.
+    --new-slug changes the reference while preserving membership. Local rename
+    also retargets owned payload views without moving their mounted directories.
     """
+    if local:
+        if new_slug is None or any(value is not None for value in (
+            title, description, icon, icon_color, access_level,
+        )):
+            emit_error("VALIDATION", "Local rename requires --new-slug alone")
+            raise typer.Exit(1)
+        from skillery_cli.core.payload_views import rename_local_collection
+
+        try:
+            result = rename_local_collection(ClientConfig.load(), slug, new_slug)
+        except (OSError, RuntimeError, ValueError) as exc:
+            emit_error(getattr(exc, "code", "LOCAL_RENAME_FAILED"), str(exc))
+            raise typer.Exit(1) from None
+        emit_data(result)
+        return
     _require_manage("edit")
     if (
         title is None
@@ -953,6 +963,7 @@ def cmd_collection_edit(
         and icon is None
         and icon_color is None
         and access_level is None
+        and new_slug is None
     ):
         emit_error("NOTHING_TO_DO", "Задайте хотя бы одну опцию для изменения")
         raise typer.Exit(1)
@@ -969,6 +980,7 @@ def cmd_collection_edit(
                 icon=icon,
                 icon_color=icon_color,
                 access_level=access_level,
+                new_slug=new_slug,
             )
         finally:
             await client.close()

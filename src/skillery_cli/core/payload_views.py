@@ -7,12 +7,13 @@ import os
 from pathlib import Path, PurePosixPath
 import stat
 import uuid
+import tomli_w
 
 from corekit.filelock import FileLock
 from librarykit.config_util import atomic_write_text
 from skillkit import linker
 from skillkit.installer import read_meta
-from skillkit.installer.projections import check_source
+from skillkit.installer.projections import ProjectionConflict, check_source
 
 from skillery_cli.config import ClientConfig, _default_config_dir
 from skillery_cli.core import local_collections
@@ -105,14 +106,13 @@ def _directories(files) -> set[str]:
     return result
 
 
-def _refresh(cfg: ClientConfig, entry: dict, plan=None) -> dict:
+def _validate_view(cfg: ClientConfig, entry: dict, plan: dict) -> tuple:
     root = Path(entry["path"])
     store = cfg.effective_store_dir().resolve()
     if (not root.is_absolute() or root.resolve() == store
             or root.resolve().is_relative_to(store) or store.is_relative_to(root.resolve())
             or entry["store"] != str(store) or linker.is_link(root)):
         raise ValueError("Payload view source or target binding changed")
-    plan = _plan(cfg, entry["collection"]) if plan is None else plan
     old = {"schema": 1, "identity": entry["identity"], "files": {}, "directories": []}
     marker = root / MARKER
     if root.exists():
@@ -149,6 +149,14 @@ def _refresh(cfg: ClientConfig, entry: dict, plan=None) -> dict:
                 shared_current = expected and path.samefile(expected[0]) and _digest(path) == expected[1]
                 if not shared_current and _digest(path) != old_files[relative]:
                     raise ValueError("Edited payload view was preserved")
+    return root, store, old, directories
+
+
+def _refresh(cfg: ClientConfig, entry: dict, plan=None) -> dict:
+    plan = _plan(cfg, entry["collection"]) if plan is None else plan
+    root, store, old, directories = _validate_view(cfg, entry, plan)
+    old_files = old["files"]
+    marker = root / MARKER
     root.mkdir(parents=True, exist_ok=True)
     state = {"schema": 1, "managed_by": "skillery", "identity": entry["identity"],
              "store": str(store), "collection": entry["collection"],
@@ -188,6 +196,56 @@ def _refresh(cfg: ClientConfig, entry: dict, plan=None) -> dict:
     return {"path": str(root), "collection": entry["collection"], "files": len(plan),
             "skills": len({PurePosixPath(p).parts[0] for p in plan}), "hardlinks_created": linked,
             "payload_copied": False, "runtime_files_shared": False}
+
+
+def rename_local_collection(cfg: ClientConfig, old_name: str, new_name: str) -> dict:
+    """Rename a profile and retarget owned views without replacing live directories.
+
+    Both names remain usable until all views are retargeted. A durable original
+    snapshot is kept before the first mutation, including on interruption.
+    """
+    local_collections.validate_name(old_name)
+    local_collections.validate_name(new_name)
+    config = _default_config_dir()
+    config.mkdir(parents=True, exist_ok=True)
+    with FileLock(config / "payload-views.lock", timeout=3, stale_after=None):
+        collections = local_collections.load_all()
+        if old_name not in collections:
+            raise local_collections.LocalCollectionError("NOT_FOUND", "Local collection does not exist")
+        if new_name in collections:
+            raise local_collections.LocalCollectionError("ALREADY_EXISTS", "Local collection name is occupied")
+        registry_path, registry = _registry()
+        entries = [entry for entry in registry["views"] if entry["collection"] == old_name]
+        try:
+            plan = _plan(cfg, old_name) if entries else {}
+        except ProjectionConflict as exc:
+            raise ValueError(str(exc)) from exc
+        markers = []
+        for entry in entries:
+            root, _, marker, _ = _validate_view(cfg, entry, plan)
+            if (not root.is_dir() or marker.get("collection") != old_name
+                    or marker.get("building") is not False
+                    or any(not (root / relative).is_file() for relative in marker["files"])):
+                raise ValueError("Incomplete or unknown payload view was preserved")
+            markers.append((root / MARKER, marker))
+        backup = config / "collection-renames" / (uuid.uuid4().hex + ".json")
+        backup.parent.mkdir(exist_ok=True)
+        _write(backup, {"schema": 1, "old_name": old_name, "new_name": new_name,
+                        "collections": collections, "registry": registry})
+        collections[new_name] = dict(collections[old_name])
+        collections_file = local_collections.collections_path()
+        atomic_write_text(collections_file, tomli_w.dumps({"collections": collections}), encoding="utf-8")
+        for entry in entries:
+            entry["collection"] = new_name
+        if entries:
+            _write(registry_path, registry)
+        for path, marker in markers:
+            _write(path, {**marker, "collection": new_name})
+        del collections[old_name]
+        atomic_write_text(collections_file, tomli_w.dumps({"collections": collections}), encoding="utf-8")
+        return {"event": "local_collection_renamed", "old_name": old_name,
+                "name": new_name, **collections[new_name], "views_retargeted": len(entries),
+                "backup": str(backup), "payload_moved": False}
 
 
 def expose_payload_view(cfg: ClientConfig, *, collection: str, path: Path) -> dict:

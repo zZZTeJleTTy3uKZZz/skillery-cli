@@ -18,11 +18,24 @@ add / remove / delete`. Все 7 видны в `--help` всегда. Флаг *
   (точнее `<config_dir>/collections.toml`: уважает `SKILLS_HUB_CONFIG_DIR` и
   `--profile`). Полностью оффлайн, без логина и хаба; Web UI её не видит.
 
-`create / add / remove / delete` существуют **только локально** → `--local`
-**обязателен**. Без него — ошибка `USE_LOCAL_FLAG` («серверные коллекции
-создаются/редактируются в Web UI»). Серверный CRUD в CLI не реализован.
+Server CRUD requires `catalog.manage` or `hub.admin`. Use `edit` to change
+metadata or a collection slug without changing its numeric identity or members.
+The CLI resolves the current slug and sends `PATCH /collections/{id}` with the
+new `slug` in the JSON body; it does not mutate a slug-based resource path:
 
-## Серверные коллекции (хаб) — default, read-only + install
+```bash
+skillery collection edit old-name --new-slug my-skills
+skillery collection edit old-name --local --new-slug my-skills
+skillery collection install my-skills --scope global --agents claude_code,codex,deepseek --projection link
+```
+
+Local rename preserves the title and members, retargets registered payload views
+under their existing lock, and keeps mount paths, directory identities and shared
+files unchanged. Occupied names and edited or foreign views are refused. An
+original snapshot is retained under `<config_dir>/collection-renames/` before
+mutation; interruption can leave both names available for recovery.
+
+## Hub collections — default source
 
 ```bash
 skills-hub --json collection list                      # все доступные (static + dynamic)

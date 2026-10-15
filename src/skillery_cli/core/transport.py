@@ -3169,8 +3169,12 @@ class HubClient:
         icon: str | None = None,
         icon_color: str | None = None,
         access_level: str | None = None,
+        new_slug: str | None = None,
     ) -> dict[str, Any]:
-        """PATCH /collections/{slug} — обновить карточку коллекции."""
+        """Resolve the current slug, then PATCH /collections/{id} with changed fields.
+
+        new_slug is the JSON slug field; the immutable resource ID is preserved.
+        """
         payload: dict[str, Any] = {}
         if title is not None:
             payload["title"] = title
@@ -3182,6 +3186,8 @@ class HubClient:
             payload["icon_color"] = icon_color
         if access_level is not None:
             payload["access_level"] = access_level
+        if new_slug is not None:
+            payload["slug"] = new_slug
         cid = await self._resolve_collection_id(slug)
         return await self._request("PATCH", f"/collections/{cid}", json=payload)
 
