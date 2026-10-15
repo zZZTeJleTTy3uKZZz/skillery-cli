@@ -41,7 +41,12 @@ def link_installed_chain(cfg: ClientConfig, chain: list[dict], *, targets: list,
                 if result is None:
                     raise ValueError("Materialized release is missing from the store")
                 linked, kind = result
-                installed.append({**item, "agent": target.name,
+                summary = {key: item[key] for key in (
+                    "slug", "skill_id", "version", "scope", "install_reason", "agent_visible",
+                ) if key in item}
+                installed.append({**summary, "agent": target.name, "source": "store",
+                                  "is_update": False,
+                                  "store_dir": str(cfg.effective_store_dir() / str(slug)),
                                   "target_dir": str(target.slug_dir(str(slug), project=project)),
                                   "linked": linked, "link_kind": kind})
             except (OSError, RuntimeError, ValueError) as exc:

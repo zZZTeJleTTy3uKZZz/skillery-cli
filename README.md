@@ -29,6 +29,24 @@ physical files under `/mnt/c/...`; keep agent credentials and session directorie
 outside those links. A protected container needs an explicitly approved payload
 mount. Linking host account directories into it is not part of this command.
 
+For a container, expose only the released files of a local collection:
+
+```bash
+skillery store expose --collection my-stack
+skillery store expose --collection my-stack --path /same-filesystem/skill-payloads
+```
+
+The default location is `payloads/<collection>` beside the store. Files are hard
+links to verified Hub content, so their bytes occupy one place. Unreleased state
+such as `.env`, `_local/`, browser profiles and package caches is excluded.
+Keep the destination on the same filesystem: link failures never fall back to
+copies. Mount this view read-only, using the provider's normal mount controls.
+Normal skill updates refresh registered views and preserve their directory
+identity so an existing bind mount observes updated files. Edited or unknown
+view files are preserved and reported. `skillery store refresh-views` performs
+the same checks explicitly. A daemon that predates this feature must be upgraded
+and restarted through its normal lifecycle before relying on automatic refresh.
+
 ## Установка
 
 ```bash

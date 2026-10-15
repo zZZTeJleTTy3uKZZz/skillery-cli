@@ -6705,6 +6705,10 @@ def build_app() -> typer.Typer:
     # #1405: резерв вытесненной установки и откат к ней.
     store_app.command("backups")(cmd_store_backups)
     store_app.command("restore")(cmd_store_restore)
+    from skillery_cli.commands import payload_views as _payload_views_mod
+
+    store_app.command("expose")(_payload_views_mod.expose)
+    store_app.command("refresh-views")(_payload_views_mod.refresh)
     # --- P1 local-collections ---
     # Единый collection sub-app — ALWAYS-ON: все глаголы (list/show/install/
     # create/add/remove/delete/tags) регистрируются всегда; create/add/remove/

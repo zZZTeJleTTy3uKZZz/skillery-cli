@@ -31,10 +31,12 @@ def seed(tmp_path: Path):
 def test_secondary_links_same_payload_and_sees_source_update(tmp_path):
     cfg, first, second = seed(tmp_path)
     rows, refused = link_installed_chain(
-        cfg, [{"slug": "sample", "version": "1", "agent_visible": True}],
+        cfg, [{"slug": "sample", "version": "1", "agent_visible": True,
+               "scope_reconciliation": {"large-primary-only-receipt": "x" * 100000}}],
         targets=[second], project=None,
     )
     assert not refused and rows[0]["linked"] is True
+    assert "scope_reconciliation" not in rows[0]
     assert first.slug_dir("sample").samefile(second.slug_dir("sample"))
     source = cfg.effective_store_dir() / "sample" / "SKILL.md"
     source.write_text("Updated centrally", encoding="utf-8")

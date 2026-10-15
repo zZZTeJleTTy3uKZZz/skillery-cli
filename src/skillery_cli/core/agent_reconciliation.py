@@ -140,14 +140,40 @@ def reconcile_managed_scopes(cfg: ClientConfig, *, projects: tuple[Path, ...] = 
                         entry["reason"] = getattr(exc, "reason", type(exc).__name__)
                         entry["conflict_paths"] = list(getattr(exc, "paths", ()))
                         report["refused"].append(entry)
+    from skillery_cli.core.payload_views import refresh_payload_views
+
+    try:
+        views = refresh_payload_views(cfg)
+    except (OSError, RuntimeError, ValueError, KeyError) as exc:
+        views = [{"accepted": False, "reason": str(exc), "error_type": type(exc).__name__}]
+    if views:
+        report["payload_views"] = views
+        report["refused"].extend({"reason": "payload-view-refresh", **item}
+                                 for item in views if not item["accepted"])
     # Store progress and individual scope refusals are independent transactions.
     report["partial"] = bool(report["refused"] and (report["updated"] or report["unchanged"]))
+    if any(not item["accepted"] for item in views):
+        report["partial"] = True
     return report
 
 
 def attach_scope_report(cfg: ClientConfig, chain: list[dict], *, project: Path | None) -> None:
     """Expose independent scope results without marking source updates as failures."""
-    if not cfg.sync_agents or not any(not item.get("skipped") for item in chain):
+    if not any(not item.get("skipped") for item in chain):
+        return
+    if not cfg.sync_agents:
+        from skillery_cli.core.payload_views import refresh_payload_views
+
+        try:
+            views = refresh_payload_views(cfg)
+        except (OSError, RuntimeError, ValueError, KeyError) as exc:
+            views = [{"accepted": False, "reason": str(exc), "error_type": type(exc).__name__}]
+        if views:
+            for item in chain:
+                if not item.get("skipped"):
+                    item["payload_views"] = views
+                    item["partial"] = any(not view["accepted"] for view in views)
+                    break
         return
     report = reconcile_managed_scopes(cfg, projects=(project,) if project is not None else ())
     report["partial"] = bool(report["refused"])
