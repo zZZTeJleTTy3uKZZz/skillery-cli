@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ import pytest
 from skillery_cli.core import linker
 from skillery_cli.core.agents import ClaudeCodeTarget
 from skillery_cli.core.installer import SkillInstaller, write_meta
+from skillkit.installer.meta import stamp_ownership
 
 
 def _copy_install(base: Path, name: str) -> Path:
@@ -16,7 +18,9 @@ def _copy_install(base: Path, name: str) -> Path:
     d = base / name
     d.mkdir(parents=True)
     (d / "SKILL.md").write_text("body", encoding="utf-8")
-    write_meta(d, {"slug": name, "version": "1.0.0", "manifest": {}})
+    write_meta(d, stamp_ownership({"slug": name, "source": "hub", "version": "1.0.0",
+                   "manifest": {"files": [{"path": "SKILL.md",
+                                            "sha256": hashlib.sha256(b"body").hexdigest()}]}}))
     return d
 
 

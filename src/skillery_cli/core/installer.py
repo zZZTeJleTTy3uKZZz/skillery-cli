@@ -71,9 +71,15 @@ class SkillInstaller(SkillStore):
     ``store_dir`` обязателен (все call-sites передают ``cfg.effective_store_dir()``).
     """
 
-    def __init__(self, target, store_dir: Path, *, credential_resolver=None) -> None:
+    def __init__(self, target, store_dir: Path, *, credential_resolver=None,
+                 projection: str | None = None) -> None:
+        if projection is None:
+            from skillery_cli.config import ClientConfig
+
+            projection = ClientConfig.load().skill_projection
         super().__init__(
             target,
             store_dir,
             credential_resolver=credential_resolver or _authenticated_url,
+            projection=projection,
         )

@@ -79,14 +79,14 @@ def test_all_agents_installs_under_every_target(
     )
 
     # Fan-out по всем трём агентам в каноническом порядке.
-    assert calls == ["claude_code", "codex", "antigravity"]
+    assert calls == ["claude_code", "codex", "antigravity", "deepseek"]
 
     # JSON-ответ: 3 записи, каждая помечена своим агентом.
     out = capsys.readouterr().out.strip()
     payload = json.loads(out.splitlines()[-1])
     data = payload["data"] if isinstance(payload, dict) else payload
     agents = sorted(item["agent"] for item in data)
-    assert agents == ["antigravity", "claude_code", "codex"]
+    assert agents == ["antigravity", "claude_code", "codex", "deepseek"]
     # Манифест проекта содержит навык (идемпотентно, не дублируется).
     assert pm.load(project) == {"my-skill": "*"}
 

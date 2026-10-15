@@ -25,6 +25,19 @@ from skillery_cli.core import logging_setup
 from skillery_cli.daemon import autostart
 
 
+@pytest.fixture(autouse=True)
+def isolated_logger_handlers(monkeypatch):
+    """Other tests may attach telemetry handlers to these process-global loggers."""
+    loggers = [logging.getLogger(name) for name in ("skillery", "skillery.install")]
+    for logger in loggers:
+        monkeypatch.setattr(logger, "handlers", [])
+    yield
+    for logger in loggers:
+        for handler in logger.handlers:
+            if isinstance(handler, logging_setup.SafeRotatingFileHandler):
+                handler.close()
+
+
 # ── 1. ротация лога под чужой блокировкой ───────────────────────────────────
 def _handler(tmp_path: Path, **kw) -> logging_setup.SafeRotatingFileHandler:
     h = logging_setup.SafeRotatingFileHandler(
@@ -120,12 +133,14 @@ def test_configure_logging_installs_safe_handler(
         isinstance(h, logging_setup.SafeRotatingFileHandler) for h in logger.handlers
     )
     ilog = logging_setup.install_logger("daemon.log")
-    assert all(
-        isinstance(h, logging_setup.SafeRotatingFileHandler) for h in ilog.handlers
-    )
+    # Pytest capture and telemetry handlers do not rotate files.
+    file_handlers = [h for h in ilog.handlers if isinstance(h, logging.FileHandler)]
+    assert file_handlers
+    assert all(isinstance(h, logging_setup.SafeRotatingFileHandler) for h in file_handlers)
     for h in list(logger.handlers) + list(ilog.handlers):
-        h.close()
-        (logger if h in logger.handlers else ilog).removeHandler(h)
+        if isinstance(h, logging_setup.SafeRotatingFileHandler):
+            h.close()
+            (logger if h in logger.handlers else ilog).removeHandler(h)
 
 
 # ── 2. .vbs-лаунчер под чужой блокировкой ───────────────────────────────────

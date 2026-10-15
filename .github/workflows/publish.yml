@@ -45,18 +45,18 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Sync deps
-        run: uv sync --all-extras --dev
+        run: uv sync --locked --all-extras --dev
 
       # Исключений НЕТ (#1148 закрыт: раскладка agy приведена к киту .agents/skills,
       # тест-двойник _install_chain принимает текущую сигнатуру). Гейт — весь набор.
       - name: Tests
-        run: uv run pytest tests/ -q
+        run: uv run --locked pytest tests/ -q
 
       # Только фатальные правила (синтаксис/undefined names). Полный ruff в этом
       # репозитории даёт ~2300 стилистических замечаний (кириллица в комментариях) —
       # он не годится как блокирующий гейт, а вот сломанный импорт поймать обязаны.
       - name: Lint (fatal only)
-        run: uv run ruff check src/ --select E9,F63,F7,F82
+        run: uv run --locked ruff check src/ --select E9,F63,F7,F82
 
   publish:
     needs: test

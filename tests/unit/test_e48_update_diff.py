@@ -48,7 +48,7 @@ def _make_fake_clone(file_layout: dict[str, str]):
         for rel, content in file_layout.items():
             p = target / rel
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(content, encoding="utf-8")
+            p.write_bytes(content.encode("utf-8"))
 
         class _Result:
             returncode = 0

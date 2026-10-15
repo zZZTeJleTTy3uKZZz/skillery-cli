@@ -10,6 +10,7 @@ from skillkit.targets import (
     BaseAgentTarget,
     ClaudeCodeTarget,
     CodexTarget,
+    DeepSeekTarget,
     detect_agent,
     get_target,
 )
@@ -24,6 +25,7 @@ __all__ = [
     "BaseAgentTarget",
     "ClaudeCodeTarget",
     "CodexTarget",
+    "DeepSeekTarget",
     "IAgentTarget",
     "detect_agent",
     "get_target",

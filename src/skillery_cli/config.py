@@ -109,6 +109,7 @@ class _HubAppConfig(AppConfig):
     user_email: str | None = None
     user_display_name: str | None = None
     agent: str | None = None
+    sync_agents: list[str] = Field(default_factory=list)
     permissions: list[str] = Field(default_factory=list)
     company_id: str | None = None
     role_id: str | None = None
@@ -119,6 +120,7 @@ class _HubAppConfig(AppConfig):
     default_install_scope: str = "project"
     default_project_dir: str | None = None
     store_dir: str | None = None
+    skill_projection: str = "auto"
     web_ui_url: str | None = None
     cli_update_check: bool = True
     cli_update_check_at: str | None = None
@@ -137,6 +139,8 @@ class ClientConfig:
     """Уровень логов CLI (error|warning|info|debug|trace). Пишутся в
     ~/.skillery/logs/. По умолчанию error; debug/trace — для разбора."""
     agent: str | None = None
+    sync_agents: list[str] = field(default_factory=list)
+    """Explicit agents whose existing managed scopes should follow store updates."""
     permissions: list[str] = field(default_factory=list)
     """Permission keys из JWT (используется для модульной регистрации команд).
 
@@ -169,6 +173,8 @@ class ClientConfig:
     store_dir: str | None = None
     """Путь центрального стора навыков. None → SKILLERY_STORE_DIR / ~/.skillery/store.
     Навык материализуется в стор один раз; в scope кладётся junction/symlink на него."""
+    skill_projection: str = "auto"
+    """Agent visibility policy; copy avoids restricted Windows reparse points."""
     web_ui_url: str | None = None
     """https://hub.example — куда CLI открывает браузер для handoff в Web UI.
     None → derive из base_url (api.* → host, localhost:8000 → localhost:3000)."""
@@ -189,6 +195,14 @@ class ClientConfig:
     повторные запуски CLI/демона миграцию не гоняют."""
 
     def __post_init__(self) -> None:
+        allowed_agents = {"claude_code", "codex", "antigravity", "deepseek", "opencode"}
+        if not isinstance(self.sync_agents, list) or any(
+            not isinstance(name, str) or name not in allowed_agents for name in self.sync_agents
+        ):
+            raise ValueError("sync_agents must contain supported canonical agent names")
+        self.sync_agents = list(dict.fromkeys(self.sync_agents))
+        if self.skill_projection not in ("auto", "link", "copy"):
+            raise ValueError("skill_projection must be auto, link, or copy")
         if not self.base_url:
             self.base_url = _default_base_url()
 
@@ -254,6 +268,7 @@ class ClientConfig:
             user_email=ac.user_email,
             user_display_name=ac.user_display_name,
             agent=ac.agent,
+            sync_agents=list(ac.sync_agents),
             permissions=list(ac.permissions),
             company_id=ac.company_id,
             role_id=ac.role_id,
@@ -265,6 +280,7 @@ class ClientConfig:
             default_install_scope=str(ac.default_install_scope or "project"),
             default_project_dir=ac.default_project_dir,
             store_dir=ac.store_dir,
+            skill_projection=ac.skill_projection,
             web_ui_url=ac.web_ui_url,
             cli_update_check=bool(ac.cli_update_check),
             cli_update_check_at=ac.cli_update_check_at,
@@ -292,6 +308,8 @@ class ClientConfig:
             data["log_level"] = self.log_level
         if self.agent:
             data["agent"] = self.agent
+        if self.sync_agents:
+            data["sync_agents"] = self.sync_agents
         if self.permissions:
             data["permissions"] = self.permissions
         if self.company_id:
@@ -310,6 +328,8 @@ class ClientConfig:
             data["default_project_dir"] = self.default_project_dir
         if self.store_dir:
             data["store_dir"] = self.store_dir
+        if self.skill_projection != "auto":
+            data["skill_projection"] = self.skill_projection
         if self.web_ui_url:
             data["web_ui_url"] = self.web_ui_url
         data["cli_update_check"] = self.cli_update_check

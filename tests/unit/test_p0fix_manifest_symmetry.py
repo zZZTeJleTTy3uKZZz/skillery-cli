@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import shutil
 import subprocess
 from pathlib import Path
@@ -24,6 +25,7 @@ from skillery_cli.config import ClientConfig
 from skillery_cli.core import linker, project_manifest as pm
 from skillery_cli.core.agents import ClaudeCodeTarget
 from skillery_cli.core.installer import SkillInstaller, read_meta, write_meta
+from skillkit.installer.meta import stamp_ownership
 
 _MANIFEST = {"version": "1.0.0", "description": "x", "files": []}
 
@@ -94,8 +96,10 @@ def test_migrate_project_scope_adds_migrated_to_manifest(
     # Старая copy-установка в project scope (meta есть, ссылки нет).
     slug_dir = target.slug_dir("legacy", project=project)
     slug_dir.mkdir(parents=True)
-    (slug_dir / "SKILL.md").write_text("# legacy\n", encoding="utf-8")
-    write_meta(slug_dir, {"slug": "legacy", "version": "1.0.0", "manifest": {}})
+    (slug_dir / "SKILL.md").write_bytes(b"# legacy\n")
+    write_meta(slug_dir, stamp_ownership({"slug": "legacy", "source": "hub", "version": "1.0.0",
+                          "manifest": {"files": [{"path": "SKILL.md",
+                                                   "sha256": hashlib.sha256(b"# legacy\n").hexdigest()}]}}))
 
     main_mod.cmd_migrate(scope="project", project=project, dry_run=False, agent=None)
 
@@ -113,8 +117,10 @@ def test_migrate_dry_run_does_not_touch_manifest(
     _cfg, target, _store, project = _wire(tmp_path, monkeypatch)
     slug_dir = target.slug_dir("legacy", project=project)
     slug_dir.mkdir(parents=True)
-    (slug_dir / "SKILL.md").write_text("# legacy\n", encoding="utf-8")
-    write_meta(slug_dir, {"slug": "legacy", "version": "1.0.0", "manifest": {}})
+    (slug_dir / "SKILL.md").write_bytes(b"# legacy\n")
+    write_meta(slug_dir, stamp_ownership({"slug": "legacy", "source": "hub", "version": "1.0.0",
+                          "manifest": {"files": [{"path": "SKILL.md",
+                                                   "sha256": hashlib.sha256(b"# legacy\n").hexdigest()}]}}))
 
     main_mod.cmd_migrate(scope="project", project=project, dry_run=True, agent=None)
 

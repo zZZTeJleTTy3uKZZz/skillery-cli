@@ -1,0 +1,65 @@
+name: Owned skill release
+
+on:
+  workflow_call:
+    inputs:
+      policy:
+        description: Committed bounded release policy in the caller distribution repository
+        required: true
+        type: string
+      runtime_ready:
+        description: Fleet acceptance completed on Skillkit 0.6.2 and Skillery CLI 0.5.88
+        required: true
+        type: boolean
+      tooling_ref:
+        description: Reviewed immutable commit of this reusable workflow and helper
+        required: true
+        type: string
+    secrets:
+      SKILLERY_GIT_WEBHOOK_SECRET:
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: owned-skill-release-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: inputs.runtime_ready && vars.SKILLERY_SAFE_UPDATES_READY == 'true' && github.event_name == 'push' && startsWith(github.ref, 'refs/heads/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Check registered hook secret before any tag write
+        env:
+          HOOK_SECRET: ${{ secrets.SKILLERY_GIT_WEBHOOK_SECRET }}
+          TOOLING_REF: ${{ inputs.tooling_ref }}
+        run: |
+          test -n "$HOOK_SECRET"
+          python -c 'import os,re; assert re.fullmatch(r"[a-f0-9]{40}",os.environ["TOOLING_REF"])'
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+      - name: Checkout reviewed release tooling separately from caller payload
+        uses: actions/checkout@v4
+        with:
+          repository: zZZTeJleTTy3uKZZz/skillery-cli
+          ref: ${{ inputs.tooling_ref }}
+          path: .release-tooling
+          persist-credentials: false
+      - name: Install pinned canonical content publish gate
+        run: python -m pip install --no-input 's-skillgate==0.1.7'
+      - name: Release immutable raw Git payload and deliver authenticated hub event
+        env:
+          POLICY_PATH: ${{ inputs.policy }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          SKILLERY_SAFE_UPDATES_READY: 'true'
+          SKILLERY_GIT_WEBHOOK_SECRET: ${{ secrets.SKILLERY_GIT_WEBHOOK_SECRET }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/outputs/skillery-release"
+          python .release-tooling/scripts/owned_skill_release.py --policy "$POLICY_PATH" --repository "$SOURCE_REPOSITORY" --scan-root "$GITHUB_WORKSPACE/outputs/skillery-release/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --publish
