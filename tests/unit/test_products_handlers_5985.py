@@ -493,7 +493,8 @@ class _WritingRunner(FakeRunner):
     def run(self, argv, *, timeout=None):  # noqa: ANN001, ANN201
         # Права проверяем ДО «запуска»: на POSIX файл без бита выполнения
         # subprocess отверг бы ещё до установки.
-        self.executable = os.access(argv[0], os.X_OK)
+        self.executable = bool(os.stat(argv[0]).st_mode & 0o111)
+        self.installer = Path(argv[0])
         result = super().run(argv, timeout=timeout)
         self._detect.parent.mkdir(parents=True, exist_ok=True)
         self._detect.write_text("installed", encoding="utf-8")
@@ -523,6 +524,8 @@ def test_service_marks_downloaded_installer_executable(
 
     if os.name != "nt":
         assert runner.executable is True
+    # Не системный /tmp (часто noexec), а кэш Skillery.
+    assert ctx.paths.downloads_dir in runner.installer.parents
 
 
 def test_service_runs_installer_with_args_and_checks_detect(

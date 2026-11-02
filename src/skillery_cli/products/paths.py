@@ -32,6 +32,7 @@ class HomePaths:
     dsh_profile: Path
     skill_store: Path
     products_file: Path
+    downloads_dir: Path
 
     @property
     def dsh_patch(self) -> Path:
@@ -70,6 +71,7 @@ def home_paths() -> HomePaths:
         dsh_profile=dsh_profile,
         skill_store=config_dir / "store",
         products_file=config_dir / "products.json",
+        downloads_dir=config_dir / "cache" / "installers",
     )
 
 

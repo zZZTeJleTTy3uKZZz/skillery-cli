@@ -67,7 +67,7 @@ class ServiceHandler:
                 "установку нельзя проверить"
             )
 
-        with tempfile.TemporaryDirectory(prefix="skillery-installer-") as tmp:
+        with _installer_dir(ctx) as tmp:
             installer = make_executable(
                 fetch_verified(
                     artifact.url,
@@ -110,7 +110,7 @@ class ServiceHandler:
                 status="skipped",
                 detail="нет url установщика для удаления",
             )
-        with tempfile.TemporaryDirectory(prefix="skillery-installer-") as tmp:
+        with _installer_dir(ctx) as tmp:
             installer = make_executable(
                 fetch_verified(
                     artifact.url,
@@ -125,6 +125,18 @@ class ServiceHandler:
         return ComponentResult(
             key=component.key, type=self.component_type, status="removed"
         )
+
+
+def _installer_dir(ctx: InstallContext) -> tempfile.TemporaryDirectory[str]:
+    """Временный каталог установщика — в кэше Skillery, а не в системном /tmp.
+
+    Системный /tmp часто смонтирован с ``noexec``: бит выполнения там не
+    помогает, и тихий запуск установщика падал бы с отказом в правах.
+    """
+    ctx.paths.downloads_dir.mkdir(parents=True, exist_ok=True)
+    return tempfile.TemporaryDirectory(
+        prefix="skillery-installer-", dir=ctx.paths.downloads_dir
+    )
 
 
 def make_executable(path: Path) -> Path:
