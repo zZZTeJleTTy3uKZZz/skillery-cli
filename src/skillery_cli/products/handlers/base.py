@@ -39,6 +39,7 @@ class ComponentResult:
     detail: str = ""
     path: str = ""
     actions: tuple[str, ...] = ()
+    hosts: tuple[str, ...] = ()
 
 
 class ComponentHandler(Protocol):

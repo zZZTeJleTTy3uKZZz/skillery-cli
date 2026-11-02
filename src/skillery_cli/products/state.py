@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -82,6 +82,7 @@ class InstalledState:
         status: str,
         detail: str = "",
         path: str = "",
+        hosts: Sequence[str] = (),
         artifact: Mapping[str, Any] | None = None,
     ) -> None:
         product = self.products.setdefault(
@@ -89,13 +90,18 @@ class InstalledState:
         )
         product["version"] = product_version
         components = product.setdefault("components", {})
-        components[key] = {
+        entry: dict[str, Any] = {
             "type": component_type,
             "status": status,
             "detail": detail,
             "path": path,
             "artifact": dict(artifact) if artifact else {},
         }
+        # Харнес установленного плагина — часть состояния: без него `remove`
+        # не знает, из каких харнесов вычищать, а `list` — куда он лёг.
+        if hosts:
+            entry["hosts"] = sorted({str(host) for host in hosts})
+        components[key] = entry
 
     def drop_component(self, product_slug: str, key: str) -> None:
         product = self.products.get(product_slug)

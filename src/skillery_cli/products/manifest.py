@@ -26,9 +26,19 @@ COMPONENT_TYPES: tuple[str, ...] = (
     "skill",
     "cli",
     "mcp",
-    "plugin-dsh",
-    "plugin-claude",
+    "plugin",
     "service",
+    "rules",
+    "hook",
+    "agent-profile",
+)
+HOST_VALUES: tuple[str, ...] = (
+    "claude-code",
+    "codex",
+    "dsh",
+    "alice",
+    "antigravity",
+    "opencode",
 )
 OS_VALUES: tuple[str, ...] = ("windows", "linux", "macos", "any")
 ARCH_VALUES: tuple[str, ...] = ("amd64", "arm64", "any")
@@ -43,7 +53,7 @@ ARTIFACT_KINDS: tuple[str, ...] = (
 
 _TOP_LEVEL_KEYS = frozenset({"slug", "title", "version", "components"})
 _ARTIFACT_KEYS = frozenset(
-    {"os", "arch", "kind", "url", "sha256", "skill_ref", "install"}
+    {"os", "arch", "kind", "host", "url", "sha256", "skill_ref", "install"}
 )
 _SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
@@ -94,7 +104,9 @@ def _validate_component(
         return [f"{where}: компонент должен быть таблицей"]
 
     errors: list[str] = []
-    unknown = sorted(set(component) - {"key", "type", "depends_on", "artifacts"})
+    unknown = sorted(
+        set(component) - {"key", "type", "hosts", "depends_on", "artifacts"}
+    )
     if unknown:
         errors.append(f"{where}: неизвестные поля компонента: {', '.join(unknown)}")
 
@@ -115,6 +127,10 @@ def _validate_component(
             f"разрешены {', '.join(COMPONENT_TYPES)}"
         )
 
+    hosts = component.get("hosts", [])
+    for error in validate_hosts(str(component_type), hosts):
+        errors.append(f"{where}: {error}")
+
     depends_on = component.get("depends_on", [])
     if not isinstance(depends_on, Sequence) or isinstance(depends_on, (str, bytes)):
         errors.append(f"{where}: depends_on должен быть списком строк")
@@ -130,20 +146,59 @@ def _validate_component(
     if not artifacts:
         errors.append(f"{where}: artifacts пуст — у компонента нет ни одного артефакта")
 
-    seen_artifacts: set[tuple[str, str, str]] = set()
+    component_hosts = tuple(
+        host for host in hosts if isinstance(host, str)
+    ) if isinstance(hosts, Sequence) and not isinstance(hosts, (str, bytes)) else ()
+    seen_artifacts: set[tuple[str, str, str, str]] = set()
     for artifact_index, artifact in enumerate(artifacts):
         errors.extend(
             _validate_artifact(
                 artifact,
                 f"{where}.artifacts[{artifact_index}]",
                 seen_artifacts,
+                component_hosts,
             )
         )
     return errors
 
 
+def validate_hosts(component_type: str, hosts: Any) -> list[str]:
+    """Проверить ``hosts`` компонента — единственное правило для плагина.
+
+    ``hosts`` — список харнесов, в которых компонент живёт. У ``plugin`` он
+    обязателен и непуст: плагин без харнеса некуда ставить. У остальных типов
+    пустой список означает «во все поддерживаемые харнесы устройства».
+    """
+    if not isinstance(hosts, Sequence) or isinstance(hosts, (str, bytes)):
+        return ["hosts должен быть списком харнесов"]
+
+    errors: list[str] = []
+    seen: set[str] = set()
+    for host in hosts:
+        if not isinstance(host, str) or not host.strip():
+            errors.append("в hosts пустой или нестроковый харнес")
+            continue
+        if host not in HOST_VALUES:
+            errors.append(
+                f"недопустимый host {host!r}; разрешены {', '.join(HOST_VALUES)}"
+            )
+            continue
+        if host in seen:
+            errors.append(f"повтор хоста {host!r} в hosts")
+        seen.add(host)
+
+    if component_type == "plugin" and not seen:
+        errors.append(
+            "для type=plugin обязателен непустой hosts (минимум один харнес)"
+        )
+    return errors
+
+
 def _validate_artifact(
-    artifact: Any, where: str, seen: set[tuple[str, str, str]]
+    artifact: Any,
+    where: str,
+    seen: set[tuple[str, str, str, str]],
+    component_hosts: tuple[str, ...] = (),
 ) -> list[str]:
     if not isinstance(artifact, Mapping):
         return [f"{where}: артефакт должен быть таблицей"]
@@ -156,6 +211,7 @@ def _validate_artifact(
     os_name = artifact.get("os")
     arch = artifact.get("arch")
     kind = artifact.get("kind")
+    host = artifact.get("host", "")
     if os_name not in OS_VALUES:
         errors.append(
             f"{where}: недопустимый os {os_name!r}; разрешены {', '.join(OS_VALUES)}"
@@ -170,11 +226,22 @@ def _validate_artifact(
         )
         return errors
 
-    identity = (str(os_name), str(arch), str(kind))
-    if identity in seen:
+    if host is not None and host != "" and host not in HOST_VALUES:
         errors.append(
-            f"{where}: повтор артефакта os={identity[0]} arch={identity[1]} kind={identity[2]}"
+            f"{where}: недопустимый host {host!r}; разрешены {', '.join(HOST_VALUES)}"
         )
+    elif host and component_hosts and host not in component_hosts:
+        errors.append(
+            f"{where}: host {host!r} не входит в hosts компонента "
+            f"({', '.join(component_hosts)})"
+        )
+
+    identity = (str(os_name), str(arch), str(kind), str(host or ""))
+    if identity in seen:
+        label = f"os={identity[0]} arch={identity[1]} kind={identity[2]}"
+        if identity[3]:
+            label += f" host={identity[3]}"
+        errors.append(f"{where}: повтор артефакта {label}")
     else:
         seen.add(identity)
 
@@ -233,6 +300,9 @@ def render_product(product: Mapping[str, Any]) -> str:
         lines.extend(["", "[[components]]"])
         lines.append(f"key = {_toml_value(component['key'])}")
         lines.append(f"type = {_toml_value(component['type'])}")
+        hosts = component.get("hosts") or []
+        if hosts:
+            lines.append(f"hosts = {_toml_value(list(hosts))}")
         depends_on = component.get("depends_on") or []
         if depends_on:
             lines.append(f"depends_on = {_toml_value(list(depends_on))}")
@@ -241,6 +311,8 @@ def render_product(product: Mapping[str, Any]) -> str:
             lines.append(f"os = {_toml_value(artifact['os'])}")
             lines.append(f"arch = {_toml_value(artifact['arch'])}")
             lines.append(f"kind = {_toml_value(artifact['kind'])}")
+            if artifact.get("host"):
+                lines.append(f"host = {_toml_value(artifact['host'])}")
             if "url" in artifact:
                 lines.append(f"url = {_toml_value(artifact['url'])}")
             if "sha256" in artifact:

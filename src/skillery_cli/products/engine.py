@@ -40,6 +40,7 @@ class ComponentRun:
     detail: str = ""
     path: str = ""
     actions: tuple[str, ...] = ()
+    hosts: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,7 @@ class ProductRun:
                     "type": item.type,
                     "status": item.status,
                     "detail": item.detail,
+                    "hosts": list(item.hosts),
                 }
                 for item in self.components
             ],
@@ -157,9 +159,14 @@ async def remove_component(
             status=STATUS_ABSENT,
             detail="компонента нет в состоянии",
         )
+    recorded_hosts = meta.get("hosts")
     component = Component(
         key=key,
         type=str(meta.get("type") or ""),
+        hosts=tuple(str(host) for host in recorded_hosts)
+        if isinstance(recorded_hosts, Sequence)
+        and not isinstance(recorded_hosts, (str, bytes))
+        else (),
         artifact=_artifact_from_state(meta.get("artifact")),
     )
     if component.artifact is None:
@@ -269,6 +276,7 @@ async def _install_component(
             status=STATUS_INSTALLED,
             detail=result.detail,
             path=str(result.path or ""),
+            hosts=result.hosts,
             artifact=_artifact_to_state(component.artifact),
         )
     return _run_from_result(result)
@@ -282,6 +290,7 @@ def _run_from_result(result: ComponentResult) -> ComponentRun:
         detail=result.detail,
         path=result.path,
         actions=result.actions,
+        hosts=result.hosts,
     )
 
 
@@ -325,6 +334,7 @@ def _artifact_to_state(artifact: Artifact) -> dict[str, Any]:
         "kind": artifact.kind,
         "os": artifact.os,
         "arch": artifact.arch,
+        "host": artifact.host,
         "url": artifact.url,
         "sha256": artifact.sha256,
         "size": artifact.size,
@@ -341,6 +351,7 @@ def _artifact_from_state(raw: Any) -> Artifact | None:
         kind=str(raw.get("kind") or ""),
         os=str(raw.get("os") or ""),
         arch=str(raw.get("arch") or ""),
+        host=str(raw.get("host") or ""),
         url=str(raw.get("url") or ""),
         sha256=str(raw.get("sha256") or ""),
         size=raw.get("size") if isinstance(raw.get("size"), int) else None,

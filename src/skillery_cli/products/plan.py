@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .manifest import COMPONENT_TYPES, validate_product
+from .manifest import COMPONENT_TYPES, validate_hosts, validate_product
 
 
 class PlanError(ValueError):
@@ -34,6 +34,7 @@ class Artifact:
     kind: str
     os: str
     arch: str
+    host: str = ""
     url: str = ""
     sha256: str = ""
     size: int | None = None
@@ -48,6 +49,7 @@ class Component:
     key: str
     type: str
     version: str = ""
+    hosts: tuple[str, ...] = ()
     artifact: Artifact | None = None
     depends_on: tuple[str, ...] = ()
 
@@ -152,6 +154,11 @@ def _parse_component(
     component_type = _required_str(raw, "type", where)
     version = _optional_str(raw, "version")
 
+    hosts_raw = raw.get("hosts", [])
+    if not isinstance(hosts_raw, Sequence) or isinstance(hosts_raw, (str, bytes)):
+        raise PlanError(f"{where}.hosts: ожидался список")
+    hosts = tuple(str(host) for host in hosts_raw)
+
     artifact_raw = raw.get("artifact")
     artifact = _parse_artifact(artifact_raw, f"{where}.artifact")
     _validate_against_manifest(
@@ -159,6 +166,7 @@ def _parse_component(
         product_version=product_version or "0.0.0",
         key=key,
         component_type=component_type,
+        hosts=hosts_raw,
         artifact_raw=artifact_raw,
         where=where,
     )
@@ -174,6 +182,7 @@ def _parse_component(
         key=key,
         type=component_type,
         version=version,
+        hosts=hosts,
         artifact=artifact,
         depends_on=depends_on,
     )
@@ -185,6 +194,7 @@ def _validate_against_manifest(
     product_version: str,
     key: str,
     component_type: str,
+    hosts: Any,
     artifact_raw: Any,
     where: str,
 ) -> None:
@@ -195,9 +205,15 @@ def _validate_against_manifest(
             f"разрешены {', '.join(COMPONENT_TYPES)}"
         )
 
+    # hosts проверяются и без артефакта: плагин без харнеса некуда ставить, а
+    # backend может прислать компонент с пустым artifact при известном hosts.
+    host_errors = validate_hosts(component_type, hosts)
+    if host_errors:
+        raise PlanError(f"{where}: " + "; ".join(host_errors))
+
     if artifact_raw is None:
         # Компонент без артефакта — то, что backend не смог подобрать под ОС;
-        # устанавливать нечего, но ключ/тип обязаны быть годными.
+        # устанавливать нечего, но ключ/тип/hosts обязаны быть годными.
         return
 
     artifact = dict(artifact_raw)
@@ -208,7 +224,14 @@ def _validate_against_manifest(
         "slug": slug,
         "title": slug,
         "version": product_version,
-        "components": [{"key": key, "type": component_type, "artifacts": [artifact]}],
+        "components": [
+            {
+                "key": key,
+                "type": component_type,
+                "hosts": list(hosts),
+                "artifacts": [artifact],
+            }
+        ],
     }
     errors = validate_product(wrapped)
     if errors:
@@ -238,6 +261,7 @@ def _parse_artifact(raw: Any, where: str) -> Artifact | None:
         kind=_optional_str(raw, "kind"),
         os=_optional_str(raw, "os"),
         arch=_optional_str(raw, "arch"),
+        host=_optional_str(raw, "host"),
         url=_optional_str(raw, "url"),
         sha256=_optional_str(raw, "sha256"),
         size=size,
