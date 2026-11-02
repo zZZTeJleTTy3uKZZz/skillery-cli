@@ -25,7 +25,14 @@ Product (slug, title, owner company, access_level=private по умолчани�
          └─ ReleaseArtifact (release_id, os, arch, kind, url|skill_ref, sha256, size, install_json)
 ```
 
-- `Component.type` ∈ `skill | cli | mcp | plugin-dsh | plugin-claude | service`.
+- `Component.type` ∈ `skill | cli | mcp | plugin | service | rules | hook | agent-profile`.
+- `Component.hosts` — для каких харнесов/клиентов компонент: `claude-code | codex | dsh | alice | antigravity | opencode`
+  (список). Плагин — ОДНА сущность `plugin`, а не «плагин DSH» и «плагин Claude» разными типами:
+  харнес выбирается полем `hosts` (у `plugin` обязателен ≥1). Для `skill`, `mcp`, `rules`, `hook` пустой
+  список = «во все поддерживаемые харнесы устройства». Артефакт может уточнять харнес (`host`), если байты
+  под разные харнесы разные.
+- `agent-profile` — ссылка на профиль агента Артели (#5947: файл в репозитории crew) + ссылки на
+  компоненты Skillery, которые профиль требует; профиль сам навыки/плагины не хранит.
 - `os` ∈ `windows | linux | macos | any`; `arch` ∈ `amd64 | arm64 | any`.
 - `kind` артефакта (как доставить байты):
   - `skill-ref` — ссылка на существующий `skills.id` + semver (навык ставится
@@ -78,8 +85,9 @@ remove`, идемпотентно, со своим состоянием в `~/.s
 | skill | существующий `_install_chain` (без изменений поведения) |
 | cli | `uv tool install` / распаковка `binary` в `~/.local/bin` (Windows: `%LOCALAPPDATA%\skillery\bin` + PATH) |
 | mcp | регистрация в конфиге агента (Claude: `claude mcp add --scope user`; прочие — через skillkit `mcp_config()`) |
-| plugin-claude | распаковка в `~/.claude/dsh-plugins/<name>` + `CLAUDE_CODE_PLUGIN_DIRS` в `~/.claude/settings.json` (как `dshplugins claude sync`) |
-| plugin-dsh | распаковка в `~/.dsh/plugins/<name>` + строка в `cordis.patch.yml` (логика из `dsh-plugins/install.ps1`) |
+| plugin, host=claude-code | распаковка в `~/.claude/dsh-plugins/<name>` + `CLAUDE_CODE_PLUGIN_DIRS` в `~/.claude/settings.json` (как `dshplugins claude sync`) |
+| plugin, host=dsh | распаковка в `~/.dsh/plugins/<name>` + строка в `cordis.patch.yml` (логика из `dsh-plugins/install.ps1`) |
+| plugin, host=alice | установка на колонку через харнес quasard (позже; до этого — skipped) |
 | service | скачать установщик, проверить sha256, тихо запустить, проверить `detect` |
 
 Скачанное всегда проверяется по `sha256` до распаковки/запуска.
@@ -127,7 +135,8 @@ install = { args = ["/VERYSILENT", "/SUPPRESSMSGBOXES"], detect = { file = "%LOC
 
 [[components]]
 key = "voice-input"
-type = "plugin-dsh"
+type = "plugin"
+hosts = ["dsh"]
 depends_on = ["dictation-service"]
 [[components.artifacts]]
 os = "windows"
