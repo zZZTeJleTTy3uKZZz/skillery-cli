@@ -151,11 +151,11 @@ def test_install_reports_checksum_failure_and_exits_nonzero(tmp_path: Path) -> N
     assert "sha256" in payload["products"][0]["components"][0]["detail"]
 
 
-def test_product_group_has_three_commands() -> None:
+def test_product_group_has_four_commands() -> None:
     app = _app()
     group = next(g.typer_instance for g in app.registered_groups if g.name == "product")
     names = {command.name for command in group.registered_commands}
-    assert names == {"install", "list", "remove"}
+    assert names == {"install", "sync", "list", "remove"}
 
 
 def test_list_is_empty_without_state() -> None:

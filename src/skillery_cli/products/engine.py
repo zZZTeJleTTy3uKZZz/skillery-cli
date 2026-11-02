@@ -124,39 +124,10 @@ async def remove_product(slug: str, ctx: InstallContext) -> RemoveRun:
 
     runs: list[ComponentRun] = []
     failed = False
-    for key, meta in sorted(recorded.get("components", {}).items()):
-        if not isinstance(meta, Mapping):
-            continue
-        component = Component(
-            key=key,
-            type=str(meta.get("type") or ""),
-            artifact=_artifact_from_state(meta.get("artifact")),
-        )
-        if component.artifact is None:
-            runs.append(
-                ComponentRun(
-                    key=key,
-                    type=component.type,
-                    status=STATUS_SKIPPED,
-                    detail="в состоянии нет артефакта — снимать нечем",
-                )
-            )
-            continue
-        try:
-            handler = get_handler(component.type)
-            result = await handler.remove(component, ctx)
-            runs.append(_run_from_result(result))
-            failed = failed or result.status == STATUS_FAILED
-        except _ERRORS as exc:  # noqa: PERF203 — ошибки копим, не падаем
-            failed = True
-            runs.append(
-                ComponentRun(
-                    key=key,
-                    type=component.type,
-                    status=STATUS_FAILED,
-                    detail=str(exc),
-                )
-            )
+    for key in sorted(recorded.get("components", {})):
+        result = await remove_component(slug, key, ctx)
+        runs.append(result)
+        failed = failed or result.status == STATUS_FAILED
 
     if not failed:
         ctx.state.drop_product(slug)
@@ -164,6 +135,53 @@ async def remove_product(slug: str, ctx: InstallContext) -> RemoveRun:
 
     status = STATUS_FAILED if failed else STATUS_REMOVED
     return RemoveRun(slug=slug, status=status, components=tuple(runs))
+
+
+async def remove_component(
+    product_slug: str, key: str, ctx: InstallContext
+) -> ComponentRun:
+    """Снять ОДИН записанный компонент — шаг обновления продукта (#5988).
+
+    Обновление снимает только те компоненты, которых нет в новой версии или
+    чей артефакт изменился: без точечного снятия обработчики увидели бы старое
+    на диске, сказали «уже стоит» и оставили прежнюю версию. Запись из
+    состояния убирается только после успешного снятия — иначе состояние
+    разошлось бы с диском.
+    """
+    recorded = ctx.state.get_product(product_slug)
+    meta = (recorded or {}).get("components", {}).get(key)
+    if not isinstance(meta, Mapping):
+        return ComponentRun(
+            key=key,
+            type="",
+            status=STATUS_ABSENT,
+            detail="компонента нет в состоянии",
+        )
+    component = Component(
+        key=key,
+        type=str(meta.get("type") or ""),
+        artifact=_artifact_from_state(meta.get("artifact")),
+    )
+    if component.artifact is None:
+        return ComponentRun(
+            key=key,
+            type=component.type,
+            status=STATUS_SKIPPED,
+            detail="в состоянии нет артефакта — снимать нечем",
+        )
+    try:
+        handler = get_handler(component.type)
+        result = await handler.remove(component, ctx)
+    except _ERRORS as exc:
+        return ComponentRun(
+            key=key,
+            type=component.type,
+            status=STATUS_FAILED,
+            detail=str(exc),
+        )
+    if result.status in (STATUS_REMOVED, STATUS_ABSENT):
+        ctx.state.drop_component(product_slug, key)
+    return _run_from_result(result)
 
 
 def order_components(components: Sequence[Component]) -> tuple[Component, ...]:

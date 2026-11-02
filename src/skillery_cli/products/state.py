@@ -104,5 +104,20 @@ class InstalledState:
         components = product.get("components", {})
         components.pop(key, None)
 
+    def set_version(self, product_slug: str, version: str) -> None:
+        """Записать фактическую версию продукта после обновления (#5988).
+
+        ``record_component`` делает это за установленный компонент, но при
+        обновлении часть компонентов остаётся нетронутой — без этой записи
+        products.json продолжал бы называть старую версию, и следующий sync
+        снова считал бы продукт устаревшим.
+        """
+        product = self.products.get(product_slug)
+        if product is None:
+            product = self.products.setdefault(
+                product_slug, {"version": version, "components": {}}
+            )
+        product["version"] = version
+
     def drop_product(self, slug: str) -> None:
         self.products.pop(slug, None)

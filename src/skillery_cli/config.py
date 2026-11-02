@@ -126,6 +126,7 @@ class _HubAppConfig(AppConfig):
     cli_auto_upgrade: bool = True
     log_level: str = "error"
     store_meta_migrated: bool = False
+    products_sync: bool = True
 
 
 @dataclass
@@ -187,6 +188,13 @@ class ClientConfig:
     До s-skillkit 0.3.3 снапшот-установки из хаба помечались source="local-path"
     и молча выпадали из автообновления. Флаг ставится после первого прохода —
     повторные запуски CLI/демона миграцию не гоняют."""
+    products_sync: bool = True
+    """Ставить ли назначенные продукты на `skillery sync` и в такте демона (#5988).
+
+    По умолчанию включено: продукт — это то, что человек назначил устройству, и
+    молча его не ставить значит не выполнить назначение. False оставляет прежнее
+    поведение «синхронизируются только навыки» — например, на машине без прав на
+    установку служб."""
 
     def __post_init__(self) -> None:
         if not self.base_url:
@@ -270,6 +278,7 @@ class ClientConfig:
             cli_update_check_at=ac.cli_update_check_at,
             cli_latest_version=ac.cli_latest_version,
             cli_auto_upgrade=bool(ac.cli_auto_upgrade),
+            products_sync=bool(ac.products_sync),
             log_level=str(ac.log_level or "error"),
             store_meta_migrated=bool(ac.store_meta_migrated),
         )
@@ -318,6 +327,7 @@ class ClientConfig:
         if self.cli_latest_version:
             data["cli_latest_version"] = self.cli_latest_version
         data["cli_auto_upgrade"] = self.cli_auto_upgrade
+        data["products_sync"] = self.products_sync
         if self.store_meta_migrated:
             data["store_meta_migrated"] = True
         _atomic_write_text(actual_path, tomli_w.dumps(data))

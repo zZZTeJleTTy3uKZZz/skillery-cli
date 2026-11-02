@@ -227,6 +227,17 @@ def _build_runner(
                     await main_mod._auto_update_hub_installs(
                         cfg, access, agent_target=target, channel="published",
                     )
+                    # #5988: назначенные ПРОДУКТЫ — тем же тактом после навыков.
+                    # Шаг сам best-effort (404 старого backend — предупреждение),
+                    # а флаг products_sync оставляет прежнее поведение «только
+                    # навыки» на машинах без прав на установку служб.
+                    # getattr: в тестах конфиг бывает лёгким двойником без
+                    # продуктового поля — по умолчанию шаг включён, как и в
+                    # настоящем ClientConfig.
+                    if getattr(cfg, "products_sync", True):
+                        await main_mod._reconcile_assigned_products(
+                            cfg, access, initiator="daemon",
+                        )
                     # #1490: набор лизов способностей. Здесь же, а не отдельным
                     # каденсом: это ТОТ ЖЕ фоновый ритм (второй рубеж отзыва по
                     # контракту лиза — «до 180 с»), и второй таймер означал бы
