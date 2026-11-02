@@ -13,6 +13,7 @@ from pathlib import Path
 
 from ..download import fetch_verified, is_archive, safe_extract
 from ..plan import Artifact, Component
+from ..safename import safe_join
 from .base import (
     ComponentResult,
     InstallContext,
@@ -148,8 +149,11 @@ class CliHandler:
     def _target(
         self, component: Component, artifact: Artifact, ctx: InstallContext
     ) -> Path:
+        # Имя бинаря приходит из плана (а при снятии — из products.json,
+        # общего с Go-CLI): только простым именем ложится в bin, иначе
+        # ``../`` увезёт запись и удаление за его пределы.
         bin_name = install_str(artifact, "bin") or component.key
-        return ctx.paths.bin_dir / bin_name
+        return safe_join(ctx.paths.bin_dir, bin_name, field=f"cli/{component.key}: bin")
 
     def _install_binary(self, component: Component, ctx: InstallContext) -> Path:
         artifact = require_artifact(component)
