@@ -14,7 +14,10 @@ from typing import Any
 
 _HEAD_RE = re.compile(r"^(?P<pad> *)- insert: *$")
 _ITEM_RE = re.compile(r"^(?P<pad> +)- id: *(?P<id>[^ ]+) *$")
-_SAFE_SCALAR_RE = re.compile(r"^[A-Za-z0-9_./@+-]+$")
+#: Простое значение не начинается с цифры (``1.9`` вернулось бы из YAML числом)
+#: и с ``@`` (YAML держит его за резерв под директиву, и разбор файла падает) —
+#: ровно те же два правила, что в ``dsh-plugins/install.ps1``.
+_SAFE_SCALAR_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_./@+-]*$")
 _RESERVED_SCALARS = {"true", "false", "null", "yes", "no", "on", "off", "~"}
 
 

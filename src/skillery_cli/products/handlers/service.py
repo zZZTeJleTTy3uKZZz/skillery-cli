@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import os
 import shlex
 import tempfile
 from collections.abc import Mapping
@@ -67,11 +68,13 @@ class ServiceHandler:
             )
 
         with tempfile.TemporaryDirectory(prefix="skillery-installer-") as tmp:
-            installer = fetch_verified(
-                artifact.url,
-                artifact.sha256,
-                Path(tmp),
-                downloader=ctx.downloader,
+            installer = make_executable(
+                fetch_verified(
+                    artifact.url,
+                    artifact.sha256,
+                    Path(tmp),
+                    downloader=ctx.downloader,
+                )
             )
             argv = [str(installer), *install_list(artifact, "args")]
             result = ctx.runner.run(argv, timeout=1800)
@@ -108,11 +111,13 @@ class ServiceHandler:
                 detail="нет url установщика для удаления",
             )
         with tempfile.TemporaryDirectory(prefix="skillery-installer-") as tmp:
-            installer = fetch_verified(
-                artifact.url,
-                artifact.sha256,
-                Path(tmp),
-                downloader=ctx.downloader,
+            installer = make_executable(
+                fetch_verified(
+                    artifact.url,
+                    artifact.sha256,
+                    Path(tmp),
+                    downloader=ctx.downloader,
+                )
             )
             result = ctx.runner.run([str(installer), *uninstall_args], timeout=1800)
             if not result.ok:
@@ -120,6 +125,19 @@ class ServiceHandler:
         return ComponentResult(
             key=component.key, type=self.component_type, status="removed"
         )
+
+
+def make_executable(path: Path) -> Path:
+    """Сделать скачанный установщик запускаемым.
+
+    ``download`` копирует байты, но не права файла: на POSIX установщик
+    оказался бы без бита выполнения, и «тихий запуск» падал бы на правах ещё
+    до первого шага установки. Windows держит запуск на расширении, там права
+    не трогаем.
+    """
+    if os.name != "nt":
+        path.chmod(path.stat().st_mode | 0o111)
+    return path
 
 
 def _detect(artifact: Artifact) -> str:

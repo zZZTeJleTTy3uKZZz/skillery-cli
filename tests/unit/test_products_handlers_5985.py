@@ -88,8 +88,8 @@ def test_cli_uv_tool_installs_package(ctx: InstallContext) -> None:
     ctx.runner = FakeRunner(
         results={
             ("uv", "tool", "list"): CommandResult(argv=("uv", "tool", "list"), returncode=0),
-            ("uv", "tool", "install", "--force", "skillery-cli"): CommandResult(
-                argv=("uv", "tool", "install", "--force", "skillery-cli"), returncode=0
+            ("uv", "tool", "install", "skillery-cli"): CommandResult(
+                argv=("uv", "tool", "install", "skillery-cli"), returncode=0
             ),
         }
     )
@@ -101,7 +101,7 @@ def test_cli_uv_tool_installs_package(ctx: InstallContext) -> None:
     result = _run(get_handler("cli").install(component, ctx))
 
     assert result.status == "installed"
-    assert ("uv", "tool", "install", "--force", "skillery-cli") in ctx.runner.calls
+    assert ("uv", "tool", "install", "skillery-cli") in ctx.runner.calls
 
 
 def test_cli_uv_tool_is_idempotent(ctx: InstallContext) -> None:
@@ -417,6 +417,44 @@ def test_plugin_dsh_is_idempotent_by_id(ctx: InstallContext, tmp_path: Path) -> 
     assert ctx.paths.dsh_patch.read_text(encoding="utf-8").count("id: dsh-demo") == 1
 
 
+def test_plugin_dsh_quotes_yaml_reserved_scalars(
+    ctx: InstallContext, tmp_path: Path
+) -> None:
+    """Имена пакетов начинаются с ``@`` — в YAML это резерв, значение в кавычках.
+
+    Диктовка ставит именно такие строки (``@deepseek-ai/…``): без кавычек
+    разбор раскладки падает, и плагин не поднимается.
+    """
+    plugin_json = json.dumps(
+        {
+            "id": "dsh-quoted",
+            "entry": "index.js",
+            "insert": [
+                {
+                    "id": "hooks-claude-code",
+                    "name": "@deepseek-ai/dsh-hooks-claude-code",
+                    "config": {"configPath": "${pluginDir}/hooks.json"},
+                }
+            ],
+        }
+    ).encode()
+    url, digest = _served_archive(
+        tmp_path, {"quoted/plugin.json": plugin_json, "quoted/index.js": b"code"}
+    )
+    _write_patch(ctx)
+    component = Component(
+        key="quoted",
+        type="plugin-dsh",
+        artifact=_artifact("archive", url=url, sha256=digest),
+    )
+    _run(get_handler("plugin-dsh").install(component, ctx))
+
+    text = ctx.paths.dsh_patch.read_text(encoding="utf-8")
+    assert 'name: "@deepseek-ai/dsh-hooks-claude-code"' in text
+    assert 'configPath: "' in text
+    assert "name: @deepseek-ai" not in text
+
+
 def test_plugin_dsh_remove_removes_its_rows_only(ctx: InstallContext, tmp_path: Path) -> None:
     url, digest = _served_archive(
         tmp_path, {"demo/plugin.json": PLUGIN_JSON, "demo/index.js": b"code"}
@@ -447,12 +485,41 @@ class _WritingRunner(FakeRunner):
     def __init__(self, detect: Path) -> None:
         super().__init__()
         self._detect = detect
+        self.executable: bool | None = None
 
     def run(self, argv, *, timeout=None):  # noqa: ANN001, ANN201
+        # Права проверяем ДО «запуска»: на POSIX файл без бита выполнения
+        # subprocess отверг бы ещё до установки.
+        self.executable = os.access(argv[0], os.X_OK)
         result = super().run(argv, timeout=timeout)
         self._detect.parent.mkdir(parents=True, exist_ok=True)
         self._detect.write_text("installed", encoding="utf-8")
         return result
+
+
+def test_service_marks_downloaded_installer_executable(
+    ctx: InstallContext, tmp_path: Path
+) -> None:
+    """Скачанный установщик приходит без бита выполнения — перед запуском он есть."""
+    payload = b"#!/bin/sh\nexit 0\n"
+    installer = tmp_path / "setup.sh"
+    installer.write_bytes(payload)
+    runner = _WritingRunner(Path.home() / "Dictation" / "dictation.exe")
+    ctx.runner = runner
+    component = Component(
+        key="dictation-service",
+        type="service",
+        artifact=_artifact(
+            "installer",
+            url=installer.as_uri(),
+            sha256=hashlib.sha256(payload).hexdigest(),
+            install={"args": [], "detect": {"file": "$HOME/Dictation/dictation.exe"}},
+        ),
+    )
+    _run(get_handler("service").install(component, ctx))
+
+    if os.name != "nt":
+        assert runner.executable is True
 
 
 def test_service_runs_installer_with_args_and_checks_detect(

@@ -60,7 +60,10 @@ class CliHandler:
             )
 
         if artifact.kind == "uv-tool":
-            argv = ["uv", "tool", "install", "--force"]
+            # Ровно `uv tool install`: переустановка не форсится. Проверка
+            # «уже стоит» выше отвечает на этот вопрос, а `--force` на каждой
+            # установке пересобирал бы окружение инструмента без повода.
+            argv = ["uv", "tool", "install"]
             index_url = install_str(artifact, "index_url")
             if index_url:
                 argv.extend(["--index-url", index_url])
