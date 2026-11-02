@@ -6611,6 +6611,14 @@ def build_app() -> typer.Typer:
 
     _analytics_mod.register(app)
 
+    # --- продукты (#5985) ---
+    # `skillery product install|list|remove` — файлы в HOME и install-plan.
+    # ALWAYS-ON: установка не требует хаба и логина; сами байты приходят по
+    # url плана.
+    from skillery_cli.commands import product as _product_mod
+
+    _product_mod.register(app)
+
     if not is_logged_in:
         return app
 
