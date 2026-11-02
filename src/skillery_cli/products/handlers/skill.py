@@ -7,7 +7,10 @@
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from ..plan import Component
+from ..safename import safe_join
 from .base import (
     ComponentResult,
     InstallContext,
@@ -24,14 +27,13 @@ class SkillHandler:
         return [f"skillery install {artifact.skill_ref} (существующая цепочка)"]
 
     def verify(self, component: Component, ctx: InstallContext) -> bool:
-        slug = self._skill_ref(component)
-        return (ctx.paths.skill_store / slug).is_dir()
+        return self._target(component, ctx).is_dir()
 
     async def install(
         self, component: Component, ctx: InstallContext
     ) -> ComponentResult:
         slug = self._skill_ref(component)
-        target = ctx.paths.skill_store / slug
+        target = self._target(component, ctx)
         if target.is_dir():
             return ComponentResult(
                 key=component.key,
@@ -52,7 +54,7 @@ class SkillHandler:
 
     async def remove(self, component: Component, ctx: InstallContext) -> ComponentResult:
         slug = self._skill_ref(component)
-        target = ctx.paths.skill_store / slug
+        target = self._target(component, ctx)
         if not target.is_dir():
             return ComponentResult(
                 key=component.key,
@@ -69,6 +71,17 @@ class SkillHandler:
             type=self.component_type,
             status="removed",
             path=str(target),
+        )
+
+    def _target(self, component: Component, ctx: InstallContext) -> Path:
+        """Папка навыка в сторе: только простым именем внутрь корня.
+
+        ``skill_ref`` при снятии берётся из ``products.json`` — общего файла с
+        Go-CLI, то есть имя недоверенное.
+        """
+        slug = self._skill_ref(component)
+        return safe_join(
+            ctx.paths.skill_store, slug, field=f"skill/{component.key}: skill_ref"
         )
 
     def _skill_ref(self, component: Component) -> str:

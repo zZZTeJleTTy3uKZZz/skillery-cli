@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from ...plan import Component
+from ...safename import safe_join
 from ..base import (
     ComponentResult,
     InstallContext,
@@ -120,7 +121,13 @@ class DshHost:
         )
 
     def _target(self, component: Component, ctx: InstallContext) -> Path:
-        return ctx.paths.dsh_plugins / _plugin_name(component)
+        """Папка плагина: только простым именем внутрь каталога плагинов.
+
+        ``install.name`` при снятии берётся из ``products.json`` — общего файла
+        с Go-CLI, то есть имя недоверенное (``..`` увёл бы ``rmtree`` наружу).
+        """
+        name = _plugin_name(component)
+        return safe_join(ctx.paths.dsh_plugins, name, field=f"plugin/{component.key}: name")
 
 
 def _plugin_name(component: Component) -> str:

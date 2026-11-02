@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from ...plan import Artifact, Component
+from ...safename import safe_join
 from ..base import (
     ComponentResult,
     InstallContext,
@@ -107,7 +108,13 @@ class ClaudeCodeHost:
         )
 
     def _target(self, component: Component, ctx: InstallContext) -> Path:
-        return ctx.paths.claude_plugins / self._name(component)
+        """Папка плагина: только простым именем внутрь каталога плагинов.
+
+        ``install.name`` при снятии берётся из ``products.json`` — общего файла
+        с Go-CLI, то есть имя недоверенное (``..`` увёл бы ``rmtree`` наружу).
+        """
+        name = self._name(component)
+        return safe_join(ctx.paths.claude_plugins, name, field=f"plugin/{component.key}: name")
 
     def _name(self, component: Component) -> str:
         artifact = component.artifact
