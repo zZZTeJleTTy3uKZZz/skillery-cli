@@ -451,8 +451,11 @@ def test_plugin_dsh_quotes_yaml_reserved_scalars(
 
     text = ctx.paths.dsh_patch.read_text(encoding="utf-8")
     assert 'name: "@deepseek-ai/dsh-hooks-claude-code"' in text
-    assert 'configPath: "' in text
     assert "name: @deepseek-ai" not in text
+    # config — узел записи: ``config:`` своей строкой, ключи на два пробела
+    # глубже. Без узла Harness прочитает поля как чужие для строки раскладки.
+    assert "      config:\n" in text
+    assert '        configPath: "' in text
 
 
 def test_plugin_dsh_remove_removes_its_rows_only(ctx: InstallContext, tmp_path: Path) -> None:

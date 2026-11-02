@@ -102,7 +102,11 @@ def render_row(row: Mapping[str, Any], indent: int) -> list[str]:
         out.append(f"{pad}  disabled: {'true' if disabled else 'false'}")
     config = row.get("config")
     if isinstance(config, Mapping) and config:
-        out.extend(_render_mapping(config, indent + 2))
+        # ``config:`` — это узел, а не набор полей строки: его ключи идут на
+        # два пробела глубже самого узла, иначе Harness увидит у записи чужие
+        # поля и настройки плагина не применятся (так же пишет install.ps1).
+        out.append(f"{pad}  config:")
+        out.extend(_render_mapping(config, indent + 4))
     return out
 
 
