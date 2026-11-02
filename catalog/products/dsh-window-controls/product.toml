@@ -4,12 +4,14 @@ version = "0.1.0"
 
 [[components]]
 key = "dsh-window-controls"
-type = "plugin-dsh"
+type = "plugin"
+hosts = ["dsh"]
 
 [[components.artifacts]]
 os = "windows"
 arch = "any"
 kind = "archive"
+host = "dsh"
 url = ""
 sha256 = ""
 install = { path = "plugins/dsh-window-controls" }

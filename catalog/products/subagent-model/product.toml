@@ -4,12 +4,14 @@ version = "0.3.0"
 
 [[components]]
 key = "subagent-model"
-type = "plugin-claude"
+type = "plugin"
+hosts = ["claude-code"]
 
 [[components.artifacts]]
 os = "linux"
 arch = "any"
 kind = "archive"
+host = "claude-code"
 url = ""
 sha256 = ""
 install = { path = "claude/subagent-model" }

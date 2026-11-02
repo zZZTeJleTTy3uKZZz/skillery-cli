@@ -16,13 +16,15 @@ install = { args = ["/VERYSILENT", "/SUPPRESSMSGBOXES"], detect = { file = "%LOC
 
 [[components]]
 key = "voice-input"
-type = "plugin-dsh"
+type = "plugin"
+hosts = ["dsh"]
 depends_on = ["dictation-service"]
 
 [[components.artifacts]]
 os = "windows"
 arch = "any"
 kind = "archive"
+host = "dsh"
 url = ""
 sha256 = ""
 install = { path = "plugins/voice-input", peer_range = "не объявлено — сцепка установщиком не проверяется" }

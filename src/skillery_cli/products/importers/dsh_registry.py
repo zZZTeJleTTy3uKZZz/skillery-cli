@@ -66,10 +66,10 @@ def build_plugin_products(
     claude_plugins = _objects(registry, "claudePlugins", "registry.json")
     gaps: list[Gap] = []
 
-    sources = [_plugin_source(entry, plugin_type="plugin-dsh", os_name="windows")
+    sources = [_plugin_source(entry, host="dsh", os_name="windows")
                for entry in plugins]
     sources.extend(
-        _plugin_source(entry, plugin_type="plugin-claude", os_name="linux")
+        _plugin_source(entry, host="claude-code", os_name="linux")
         for entry in claude_plugins
     )
 
@@ -103,7 +103,7 @@ def build_plugin_products(
 
 
 def _plugin_source(
-    entry: Mapping[str, Any], *, plugin_type: str, os_name: str
+    entry: Mapping[str, Any], *, host: str, os_name: str
 ) -> PluginSource:
     name = _required_str(entry, "name")
     version = _required_str(entry, "version")
@@ -132,12 +132,14 @@ def _plugin_source(
         "components": [
             {
                 "key": name,
-                "type": plugin_type,
+                "type": "plugin",
+                "hosts": [host],
                 "artifacts": [
                     {
                         "os": os_name,
                         "arch": "any",
                         "kind": "archive",
+                        "host": host,
                         "url": "",
                         "sha256": "",
                         "install": install,
