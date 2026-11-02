@@ -32,3 +32,22 @@ def test_plain_attr_mode_still_mirrored(monkeypatch) -> None:
     sk_output._sync_clikit_mode()
 
     assert fake._mode == "text"
+
+
+def test_text_flag_beats_env_and_config(monkeypatch) -> None:
+    """Явный ``--text`` команды сильнее env и конфига (продукты, #5985)."""
+    monkeypatch.setattr(sk_output, "_mode", "text")
+    monkeypatch.setenv("SKILLERY_OUTPUT", "json")
+
+    sk_output.init_output_mode(json_flag=False, config_format="json", text_flag=True)
+
+    assert sk_output.is_json() is False
+
+
+def test_json_flag_beats_text_flag(monkeypatch) -> None:
+    """Глобальный ``--json`` остаётся сильнее ``--text`` в одном вызове."""
+    monkeypatch.setattr(sk_output, "_mode", "text")
+
+    sk_output.init_output_mode(json_flag=True, config_format="text", text_flag=True)
+
+    assert sk_output.is_json() is True

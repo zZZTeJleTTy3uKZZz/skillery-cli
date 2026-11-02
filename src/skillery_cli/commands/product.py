@@ -7,8 +7,10 @@
 * ``list`` — что стоит на этой машине (из ``~/.skillery/products.json``);
 * ``remove <slug>`` — снять ровно то, что записано в состоянии.
 
-Вывод — общий контракт CLI: по умолчанию текст, ``--json`` — машинный
-результат в stdout, сообщения в stderr (см. ``skillery_cli.output``).
+Вывод — JSON по умолчанию и это осознанное исключение из общего контракта CLI:
+команды читает установщик (``skillery sync``, backend, агент), а не человек,
+и таблица в stdout ломала бы разбор. Человеку — ``--text``: таблицы, те же
+данные, читаемый вид (см. ``skillery_cli.output``).
 """
 from __future__ import annotations
 
@@ -20,7 +22,7 @@ from rich.console import Console
 from rich.table import Table
 
 from skillery_cli.commands import _common
-from skillery_cli.output import emit_data, emit_error
+from skillery_cli.output import emit_data, emit_error, init_output_mode
 from skillery_cli.products.engine import (
     STATUS_FAILED,
     PlanRun,
@@ -39,6 +41,23 @@ NOT_INSTALLED_HINT = (
     "продукт не установлен на этой машине: `skillery product list` показывает, "
     "что стоит"
 )
+
+TEXT_HELP = "Таблицы для человека вместо JSON (данные те же)."
+
+
+def _apply_output_mode(*, text: bool) -> None:
+    """JSON по умолчанию; ``--text`` переключает на таблицы.
+
+    Флаг передаётся явно (``text_flag``), а не через конфиг: у этих команд
+    машина — основной потребитель, и молчаливая подмена режима настройкой
+    человека ломала бы разбор. ``--text`` сильнее глобального ``--json``:
+    это осознанный выбор конкретной команды (см. ``output.init_output_mode``).
+    """
+    init_output_mode(
+        json_flag=not text,
+        config_format="text" if text else "json",
+        text_flag=text,
+    )
 
 
 def _context(*, dry_run: bool = False) -> InstallContext:
@@ -122,8 +141,10 @@ def cmd_product_install(
         "--dry-run",
         help="Показать шаги установки, ничего не скачивая и не запуская.",
     ),
+    text: bool = typer.Option(False, "--text", help=TEXT_HELP),
 ) -> None:
     """Поставить продукты по install-plan (идемпотентно)."""
+    _apply_output_mode(text=text)
     try:
         plan = load_install_plan(plan_file)
     except PlanError as exc:
@@ -143,8 +164,11 @@ def cmd_product_install(
         raise typer.Exit(1)
 
 
-def cmd_product_list() -> None:
+def cmd_product_list(
+    text: bool = typer.Option(False, "--text", help=TEXT_HELP),
+) -> None:
     """Показать установленные продукты и их компоненты."""
+    _apply_output_mode(text=text)
     try:
         state = InstalledState.load()
     except StateError as exc:
@@ -176,8 +200,10 @@ def cmd_product_list() -> None:
 
 def cmd_product_remove(
     slug: str = typer.Argument(..., metavar="SLUG", help="slug продукта"),
+    text: bool = typer.Option(False, "--text", help=TEXT_HELP),
 ) -> None:
     """Снять продукт: обработчики удаляют то, что сами поставили."""
+    _apply_output_mode(text=text)
     ctx = _context()
     try:
         result = _common.run(remove_product(slug, ctx))

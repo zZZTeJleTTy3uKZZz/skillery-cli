@@ -173,3 +173,35 @@ def test_product_group_is_registered_in_cli(monkeypatch: pytest.MonkeyPatch) -> 
 
     app = build_app()
     assert "product" in {group.name for group in app.registered_groups}
+
+
+def test_list_is_json_by_default_even_when_cli_mode_is_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """JSON — не «--json», а дефолт: команду читает установщик, не человек."""
+    monkeypatch.setattr(output_module, "_mode", "text")
+    result = CliRunner().invoke(_app(), ["product", "list"])
+    assert result.exit_code == 0, result.output
+    assert _json_stdout(result) == {"products": [], "count": 0}
+
+
+def test_text_flag_renders_human_table(tmp_path: Path) -> None:
+    plan_file = _plan(tmp_path)
+    runner = CliRunner()
+    assert runner.invoke(
+        _app(), ["product", "install", "--plan-file", str(plan_file)]
+    ).exit_code == 0
+
+    listed = runner.invoke(_app(), ["product", "list", "--text"])
+
+    assert listed.exit_code == 0, listed.output
+    assert "Установленные продукты" in listed.stdout
+    assert "demo" in listed.stdout
+    assert not listed.stdout.lstrip().startswith("{")
+
+
+def test_text_flag_keeps_json_channel_clean_on_error() -> None:
+    """Ошибка при ``--text`` всё равно уходит в stderr, а не в данные."""
+    result = CliRunner().invoke(_app(), ["product", "remove", "ghost", "--text"])
+    assert result.exit_code == 1
+    assert "не установлен" in result.output.lower()
