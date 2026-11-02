@@ -120,3 +120,16 @@ def test_gaps_report_names_known_blockers() -> None:
     assert "dictation-service" in text
     assert "9router" in text
     assert "sha256" in text
+
+
+def test_plugins_are_one_type_with_hosts() -> None:
+    """#6006: плагин — одна сущность; харнес выбирается полем hosts."""
+    for path in _manifest_paths():
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+        for component in data["components"]:
+            assert component["type"] not in {"plugin-dsh", "plugin-claude"}, path
+            if component["type"] != "plugin":
+                continue
+            assert component["hosts"], f"{path}: у плагина нет hosts"
+            for artifact in component["artifacts"]:
+                assert artifact["host"] in component["hosts"], path

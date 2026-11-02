@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from skillery_cli.products.download import ChecksumError
-from skillery_cli.products.handlers import get_handler
+from skillery_cli.products.handlers import get_handler, handler_types
 from skillery_cli.products.handlers.base import (
     InstallContext,
 )
@@ -66,11 +66,13 @@ def _artifact(
     sha256: str = "",
     install: dict | None = None,
     skill_ref: str = "",
+    host: str = "",
 ) -> Artifact:
     return Artifact(
         kind=kind,
         os="linux",
         arch="amd64",
+        host=host,
         url=url,
         sha256=sha256,
         skill_ref=skill_ref,
@@ -272,83 +274,7 @@ def test_mcp_verify_uses_claude_get(ctx: InstallContext) -> None:
     assert result.status == "already-installed"
 
 
-# ── plugin-claude ────────────────────────────────────────────────────────────
-
-def test_plugin_claude_preserves_settings(
-    ctx: InstallContext, tmp_path: Path
-) -> None:
-    url, digest = _served_archive(tmp_path, {"limits-cache/plugin.json": b"{}"})
-    ctx.paths.claude_dir.mkdir(parents=True, exist_ok=True)
-    ctx.paths.claude_settings.write_text(
-        json.dumps(
-            {
-                "model": "opus",
-                "env": {"OTHER": "1", "CLAUDE_CODE_PLUGIN_DIRS": "/foreign/dir"},
-            }
-        ),
-        encoding="utf-8",
-    )
-    component = Component(
-        key="limits-cache",
-        type="plugin-claude",
-        artifact=_artifact("archive", url=url, sha256=digest, install={"name": "limits-cache"}),
-    )
-    result = _run(get_handler("plugin-claude").install(component, ctx))
-
-    target = ctx.paths.claude_plugins / "limits-cache"
-    assert result.status == "installed"
-    assert (target / "plugin.json").exists()
-    settings = json.loads(ctx.paths.claude_settings.read_text(encoding="utf-8"))
-    assert settings["model"] == "opus"
-    assert settings["env"]["OTHER"] == "1"
-    dirs = settings["env"]["CLAUDE_CODE_PLUGIN_DIRS"].split(os.pathsep)
-    assert "/foreign/dir" in dirs
-    assert str(ctx.paths.claude_plugins) in dirs
-
-
-def test_plugin_claude_is_idempotent(ctx: InstallContext, tmp_path: Path) -> None:
-    url, digest = _served_archive(tmp_path, {"limits-cache/plugin.json": b"{}"})
-    component = Component(
-        key="limits-cache",
-        type="plugin-claude",
-        artifact=_artifact("archive", url=url, sha256=digest),
-    )
-    handler = get_handler("plugin-claude")
-    _run(handler.install(component, ctx))
-    settings_before = ctx.paths.claude_settings.read_bytes()
-
-    calls = {"n": 0}
-
-    def _counting(url: str, dest: Path, **kwargs) -> Path:  # noqa: ANN001
-        calls["n"] += 1
-        return ctx.downloader(url, dest, **kwargs)
-
-    ctx.downloader = _counting
-    result = _run(handler.install(component, ctx))
-
-    assert result.status == "already-installed"
-    assert calls["n"] == 0
-    assert ctx.paths.claude_settings.read_bytes() == settings_before
-
-
-def test_plugin_claude_remove_drops_dir_and_setting(ctx: InstallContext, tmp_path: Path) -> None:
-    url, digest = _served_archive(tmp_path, {"limits-cache/plugin.json": b"{}"})
-    component = Component(
-        key="limits-cache",
-        type="plugin-claude",
-        artifact=_artifact("archive", url=url, sha256=digest),
-    )
-    handler = get_handler("plugin-claude")
-    _run(handler.install(component, ctx))
-    result = _run(handler.remove(component, ctx))
-
-    assert result.status == "removed"
-    assert not (ctx.paths.claude_plugins / "limits-cache").exists()
-    settings = json.loads(ctx.paths.claude_settings.read_text(encoding="utf-8"))
-    assert str(ctx.paths.claude_plugins) not in settings["env"]["CLAUDE_CODE_PLUGIN_DIRS"]
-
-
-# ── plugin-dsh ───────────────────────────────────────────────────────────────
+# ── plugin: один тип, диспетчеризация по hosts ──────────────────────────────
 
 PLUGIN_JSON = json.dumps(
     {
@@ -376,20 +302,116 @@ def _write_patch(ctx: InstallContext) -> None:
     )
 
 
+def _plugin(
+    key: str, hosts: tuple[str, ...], artifact: Artifact | None
+) -> Component:
+    return Component(key=key, type="plugin", hosts=hosts, artifact=artifact)
+
+
+def test_handler_registry_has_one_plugin_type_and_new_types() -> None:
+    types = handler_types()
+    assert "plugin" in types
+    assert "plugin-dsh" not in types
+    assert "plugin-claude" not in types
+    for component_type in ("rules", "hook", "agent-profile"):
+        assert component_type in types
+
+
+def test_plugin_claude_code_preserves_settings(
+    ctx: InstallContext, tmp_path: Path
+) -> None:
+    url, digest = _served_archive(tmp_path, {"limits-cache/plugin.json": b"{}"})
+    ctx.paths.claude_dir.mkdir(parents=True, exist_ok=True)
+    ctx.paths.claude_settings.write_text(
+        json.dumps(
+            {
+                "model": "opus",
+                "env": {"OTHER": "1", "CLAUDE_CODE_PLUGIN_DIRS": "/foreign/dir"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    component = _plugin(
+        "limits-cache",
+        ("claude-code",),
+        _artifact("archive", url=url, sha256=digest, install={"name": "limits-cache"}),
+    )
+    result = _run(get_handler("plugin").install(component, ctx))
+
+    target = ctx.paths.claude_plugins / "limits-cache"
+    assert result.status == "installed"
+    assert result.type == "plugin"
+    assert result.hosts == ("claude-code",)
+    assert (target / "plugin.json").exists()
+    settings = json.loads(ctx.paths.claude_settings.read_text(encoding="utf-8"))
+    assert settings["model"] == "opus"
+    assert settings["env"]["OTHER"] == "1"
+    dirs = settings["env"]["CLAUDE_CODE_PLUGIN_DIRS"].split(os.pathsep)
+    assert "/foreign/dir" in dirs
+    assert str(ctx.paths.claude_plugins) in dirs
+
+
+def test_plugin_claude_code_is_idempotent(ctx: InstallContext, tmp_path: Path) -> None:
+    url, digest = _served_archive(tmp_path, {"limits-cache/plugin.json": b"{}"})
+    ctx.paths.claude_dir.mkdir(parents=True, exist_ok=True)
+    component = _plugin(
+        "limits-cache",
+        ("claude-code",),
+        _artifact("archive", url=url, sha256=digest),
+    )
+    handler = get_handler("plugin")
+    _run(handler.install(component, ctx))
+    settings_before = ctx.paths.claude_settings.read_bytes()
+
+    calls = {"n": 0}
+
+    def _counting(url: str, dest: Path, **kwargs) -> Path:  # noqa: ANN001
+        calls["n"] += 1
+        return ctx.downloader(url, dest, **kwargs)
+
+    ctx.downloader = _counting
+    result = _run(handler.install(component, ctx))
+
+    assert result.status == "already-installed"
+    assert result.hosts == ("claude-code",)
+    assert calls["n"] == 0
+    assert ctx.paths.claude_settings.read_bytes() == settings_before
+
+
+def test_plugin_claude_code_remove_drops_dir_and_setting(
+    ctx: InstallContext, tmp_path: Path
+) -> None:
+    url, digest = _served_archive(tmp_path, {"limits-cache/plugin.json": b"{}"})
+    ctx.paths.claude_dir.mkdir(parents=True, exist_ok=True)
+    component = _plugin(
+        "limits-cache",
+        ("claude-code",),
+        _artifact("archive", url=url, sha256=digest),
+    )
+    handler = get_handler("plugin")
+    _run(handler.install(component, ctx))
+    result = _run(handler.remove(component, ctx))
+
+    assert result.status == "removed"
+    assert result.hosts == ("claude-code",)
+    assert not (ctx.paths.claude_plugins / "limits-cache").exists()
+    settings = json.loads(ctx.paths.claude_settings.read_text(encoding="utf-8"))
+    assert str(ctx.paths.claude_plugins) not in settings["env"]["CLAUDE_CODE_PLUGIN_DIRS"]
+
+
 def test_plugin_dsh_adds_rows_and_keeps_foreign(ctx: InstallContext, tmp_path: Path) -> None:
     url, digest = _served_archive(
         tmp_path, {"demo/plugin.json": PLUGIN_JSON, "demo/index.js": b"code"}
     )
     _write_patch(ctx)
-    component = Component(
-        key="demo",
-        type="plugin-dsh",
-        artifact=_artifact("archive", url=url, sha256=digest),
+    component = _plugin(
+        "demo", ("dsh",), _artifact("archive", url=url, sha256=digest)
     )
-    result = _run(get_handler("plugin-dsh").install(component, ctx))
+    result = _run(get_handler("plugin").install(component, ctx))
 
     text = ctx.paths.dsh_patch.read_text(encoding="utf-8")
     assert result.status == "installed"
+    assert result.hosts == ("dsh",)
     assert (ctx.paths.dsh_plugins / "demo" / "index.js").exists()
     assert "id: dsh-demo" in text
     assert "id: speech-to-text" in text
@@ -402,12 +424,10 @@ def test_plugin_dsh_is_idempotent_by_id(ctx: InstallContext, tmp_path: Path) -> 
         tmp_path, {"demo/plugin.json": PLUGIN_JSON, "demo/index.js": b"code"}
     )
     _write_patch(ctx)
-    component = Component(
-        key="demo",
-        type="plugin-dsh",
-        artifact=_artifact("archive", url=url, sha256=digest),
+    component = _plugin(
+        "demo", ("dsh",), _artifact("archive", url=url, sha256=digest)
     )
-    handler = get_handler("plugin-dsh")
+    handler = get_handler("plugin")
     _run(handler.install(component, ctx))
     first = ctx.paths.dsh_patch.read_bytes()
     result = _run(handler.install(component, ctx))
@@ -442,12 +462,10 @@ def test_plugin_dsh_quotes_yaml_reserved_scalars(
         tmp_path, {"quoted/plugin.json": plugin_json, "quoted/index.js": b"code"}
     )
     _write_patch(ctx)
-    component = Component(
-        key="quoted",
-        type="plugin-dsh",
-        artifact=_artifact("archive", url=url, sha256=digest),
+    component = _plugin(
+        "quoted", ("dsh",), _artifact("archive", url=url, sha256=digest)
     )
-    _run(get_handler("plugin-dsh").install(component, ctx))
+    _run(get_handler("plugin").install(component, ctx))
 
     text = ctx.paths.dsh_patch.read_text(encoding="utf-8")
     assert 'name: "@deepseek-ai/dsh-hooks-claude-code"' in text
@@ -458,17 +476,17 @@ def test_plugin_dsh_quotes_yaml_reserved_scalars(
     assert '        configPath: "' in text
 
 
-def test_plugin_dsh_remove_removes_its_rows_only(ctx: InstallContext, tmp_path: Path) -> None:
+def test_plugin_dsh_remove_removes_its_rows_only(
+    ctx: InstallContext, tmp_path: Path
+) -> None:
     url, digest = _served_archive(
         tmp_path, {"demo/plugin.json": PLUGIN_JSON, "demo/index.js": b"code"}
     )
     _write_patch(ctx)
-    component = Component(
-        key="demo",
-        type="plugin-dsh",
-        artifact=_artifact("archive", url=url, sha256=digest),
+    component = _plugin(
+        "demo", ("dsh",), _artifact("archive", url=url, sha256=digest)
     )
-    handler = get_handler("plugin-dsh")
+    handler = get_handler("plugin")
     _run(handler.install(component, ctx))
     result = _run(handler.remove(component, ctx))
 
@@ -478,6 +496,146 @@ def test_plugin_dsh_remove_removes_its_rows_only(ctx: InstallContext, tmp_path: 
     assert "id: speech-to-text" not in text
     assert "id: other" in text
     assert not (ctx.paths.dsh_plugins / "demo").exists()
+
+
+def test_plugin_with_two_hosts_installs_into_each_present_harness(
+    ctx: InstallContext, tmp_path: Path
+) -> None:
+    url, digest = _served_archive(
+        tmp_path, {"demo/plugin.json": PLUGIN_JSON, "demo/index.js": b"code"}
+    )
+    _write_patch(ctx)
+    ctx.paths.claude_dir.mkdir(parents=True, exist_ok=True)
+    component = _plugin(
+        "demo",
+        ("dsh", "claude-code"),
+        _artifact("archive", url=url, sha256=digest),
+    )
+    result = _run(get_handler("plugin").install(component, ctx))
+
+    assert result.status == "installed"
+    assert set(result.hosts) == {"dsh", "claude-code"}
+    assert (ctx.paths.dsh_plugins / "demo" / "index.js").exists()
+    assert (ctx.paths.claude_plugins / "demo" / "plugin.json").exists()
+    text = ctx.paths.dsh_patch.read_text(encoding="utf-8")
+    assert "id: dsh-demo" in text
+    settings = json.loads(ctx.paths.claude_settings.read_text(encoding="utf-8"))
+    assert str(ctx.paths.claude_plugins) in settings["env"]["CLAUDE_CODE_PLUGIN_DIRS"]
+
+
+def test_plugin_skips_absent_harness_with_reason(
+    ctx: InstallContext, tmp_path: Path
+) -> None:
+    url, digest = _served_archive(
+        tmp_path, {"demo/plugin.json": PLUGIN_JSON, "demo/index.js": b"code"}
+    )
+    _write_patch(ctx)  # есть только dsh, каталога ~/.claude нет
+    component = _plugin(
+        "demo",
+        ("dsh", "claude-code"),
+        _artifact("archive", url=url, sha256=digest),
+    )
+    result = _run(get_handler("plugin").install(component, ctx))
+
+    assert result.status == "installed"
+    assert result.hosts == ("dsh",)
+    assert "claude-code" in result.detail
+    assert "не найден" in result.detail
+    assert not ctx.paths.claude_plugins.exists()
+
+
+def test_plugin_without_any_present_harness_is_skipped(
+    ctx: InstallContext, tmp_path: Path
+) -> None:
+    url, digest = _served_archive(
+        tmp_path, {"demo/plugin.json": PLUGIN_JSON, "demo/index.js": b"code"}
+    )
+    component = _plugin(
+        "demo", ("claude-code",), _artifact("archive", url=url, sha256=digest)
+    )
+
+    calls = {"n": 0}
+
+    def _counting(url: str, dest: Path, **kwargs) -> Path:  # noqa: ANN001
+        calls["n"] += 1
+        return ctx.downloader(url, dest, **kwargs)
+
+    ctx.downloader = _counting
+    result = _run(get_handler("plugin").install(component, ctx))
+
+    assert result.status == "skipped"
+    assert result.hosts == ()
+    assert "claude-code" in result.detail
+    assert "не найден" in result.detail
+    assert calls["n"] == 0
+
+
+def test_plugin_for_unsupported_host_is_skipped(ctx: InstallContext) -> None:
+    component = _plugin("demo", ("alice",), None)
+    result = _run(get_handler("plugin").install(component, ctx))
+
+    assert result.status == "skipped"
+    assert result.hosts == ()
+    assert "alice" in result.detail
+    assert "пока не поддерживается" in result.detail
+
+
+def test_plugin_artifact_host_limits_installable_harnesses(
+    ctx: InstallContext, tmp_path: Path
+) -> None:
+    url, digest = _served_archive(
+        tmp_path, {"demo/plugin.json": PLUGIN_JSON, "demo/index.js": b"code"}
+    )
+    _write_patch(ctx)
+    ctx.paths.claude_dir.mkdir(parents=True, exist_ok=True)
+    component = _plugin(
+        "demo",
+        ("dsh", "claude-code"),
+        _artifact("archive", url=url, sha256=digest, host="dsh"),
+    )
+    result = _run(get_handler("plugin").install(component, ctx))
+
+    assert result.status == "installed"
+    assert result.hosts == ("dsh",)
+    assert "claude-code" in result.detail
+    assert "нет артефакта" in result.detail
+    assert not (ctx.paths.claude_plugins / "demo").exists()
+
+
+def test_plugin_remove_sweeps_every_recorded_host(
+    ctx: InstallContext, tmp_path: Path
+) -> None:
+    url, digest = _served_archive(
+        tmp_path, {"demo/plugin.json": PLUGIN_JSON, "demo/index.js": b"code"}
+    )
+    _write_patch(ctx)
+    ctx.paths.claude_dir.mkdir(parents=True, exist_ok=True)
+    component = _plugin(
+        "demo",
+        ("dsh", "claude-code"),
+        _artifact("archive", url=url, sha256=digest),
+    )
+    handler = get_handler("plugin")
+    _run(handler.install(component, ctx))
+    result = _run(handler.remove(component, ctx))
+
+    assert result.status == "removed"
+    assert set(result.hosts) == {"dsh", "claude-code"}
+    assert not (ctx.paths.dsh_plugins / "demo").exists()
+    assert not (ctx.paths.claude_plugins / "demo").exists()
+    assert "id: dsh-demo" not in ctx.paths.dsh_patch.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("component_type", ["rules", "hook", "agent-profile"])
+def test_unsupported_component_types_are_skipped_not_failed(
+    ctx: InstallContext, component_type: str
+) -> None:
+    component = Component(key=component_type, type=component_type)
+    result = _run(get_handler(component_type).install(component, ctx))
+
+    assert result.status == "skipped"
+    assert "не поддерживается в этой версии CLI" in result.detail
+    assert result.type == component_type
 
 
 # ── service ─────────────────────────────────────────────────────────────────

@@ -135,8 +135,10 @@ def test_plugin_products_carry_type_os_and_install_metadata() -> None:
     assert limits["title"]
     assert limits["version"] == "0.5.0"
     component = limits["components"][0]
-    assert component["type"] == "plugin-dsh"
+    assert component["type"] == "plugin"
+    assert component["hosts"] == ["dsh"]
     artifact = component["artifacts"][0]
+    assert artifact["host"] == "dsh"
     assert artifact["os"] == "windows"
     assert artifact["arch"] == "any"
     assert artifact["kind"] == "archive"
@@ -150,8 +152,10 @@ def test_claude_plugin_products_are_linux_any_and_claude_type() -> None:
     limits_cache = _by_slug(catalog)["limits-cache"]
     component = limits_cache["components"][0]
 
-    assert component["type"] == "plugin-claude"
+    assert component["type"] == "plugin"
+    assert component["hosts"] == ["claude-code"]
     artifact = component["artifacts"][0]
+    assert artifact["host"] == "claude-code"
     assert artifact["os"] == "linux"
     assert artifact["arch"] == "any"
     assert artifact["kind"] == "archive"
@@ -178,7 +182,8 @@ def test_voice_input_merges_into_dictation_and_depends_on_service() -> None:
 
     assert components["dictation-service"]["type"] == "service"
     voice = components["voice-input"]
-    assert voice["type"] == "plugin-dsh"
+    assert voice["type"] == "plugin"
+    assert voice["hosts"] == ["dsh"]
     assert voice["depends_on"] == ["dictation-service"]
 
 
@@ -407,3 +412,17 @@ def test_gap_dataclass_is_orderable() -> None:
     first = Gap(section="artifact", product="a", component="a-cli", detail="x", reason="r")
     second = Gap(section="artifact", product="b", component="b-cli", detail="x", reason="r")
     assert sorted([second, first]) == [first, second]
+
+
+def test_every_imported_plugin_has_a_harness_and_no_legacy_types() -> None:
+    catalog = build_catalog(REGISTRY, MARKETPLACE, cli_products=CLI_PRODUCTS)
+    plugin_hosts: dict[str, list[str]] = {}
+    for product in catalog.products:
+        for component in product["components"]:
+            assert component["type"] not in {"plugin-dsh", "plugin-claude"}
+            if component["type"] != "plugin":
+                continue
+            assert component["hosts"], f"{product['slug']}/{component['key']}"
+            plugin_hosts[component["key"]] = component["hosts"]
+    assert plugin_hosts["voice-input"] == ["dsh"]
+    assert plugin_hosts["limits-cache"] == ["claude-code"]

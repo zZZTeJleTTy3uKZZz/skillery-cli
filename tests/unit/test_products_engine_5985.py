@@ -199,22 +199,36 @@ def test_remove_unknown_product_is_reported(ctx: InstallContext) -> None:
     assert result.status == "absent"
 
 
-def test_plugin_dsh_state_records_artifact_for_removal(ctx: InstallContext, tmp_path: Path) -> None:
+def test_plugin_state_records_harness_and_artifact_for_removal(
+    ctx: InstallContext, tmp_path: Path
+) -> None:
     plugin_json = b'{"id": "dsh-demo", "entry": "index.js"}'
     url, digest = _archive(
         tmp_path, {"demo/plugin.json": plugin_json, "demo/index.js": b"code"}
     )
+    ctx.paths.dsh_profile.mkdir(parents=True, exist_ok=True)
     component = Component(
         key="demo",
-        type="plugin-dsh",
-        artifact=Artifact(kind="archive", os="linux", arch="any", url=url, sha256=digest),
+        type="plugin",
+        hosts=("dsh",),
+        artifact=Artifact(
+            kind="archive",
+            os="linux",
+            arch="any",
+            host="dsh",
+            url=url,
+            sha256=digest,
+        ),
     )
     plan = InstallPlan(products=(Product(slug="demo", version="1.0.0", components=(component,)),))
     _run(install_plan(plan, ctx))
 
-    recorded = ctx.state.get_product("demo")["components"]["demo"]["artifact"]
+    recorded_component = ctx.state.get_product("demo")["components"]["demo"]
+    assert recorded_component["hosts"] == ["dsh"]
+    recorded = recorded_component["artifact"]
     assert recorded["kind"] == "archive"
     assert recorded["url"] == url
+    assert recorded["host"] == "dsh"
 
     _run(remove_product("demo", ctx))
     assert not (ctx.paths.dsh_plugins / "demo").exists()

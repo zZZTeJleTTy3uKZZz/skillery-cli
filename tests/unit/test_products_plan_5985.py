@@ -65,7 +65,8 @@ PLAN: dict = {
                 },
                 {
                     "key": "voice-input",
-                    "type": "plugin-dsh",
+                    "type": "plugin",
+                    "hosts": ["dsh"],
                     "version": "1.4.1",
                     "artifact": {
                         "kind": "archive",
@@ -307,3 +308,133 @@ def test_home_paths_windows_bin_dir(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("skillery_cli.products.paths._is_windows", lambda: True)
     paths = home_paths()
     assert paths.bin_dir == local / "skillery" / "bin"
+
+
+# ── #6006: плагин — один тип, харнес — hosts ────────────────────────────────
+
+def _plugin_plan(component: dict) -> dict:
+    return {
+        "products": [
+            {
+                "slug": "demo",
+                "version": "1.0.0",
+                "components": [component],
+            }
+        ]
+    }
+
+
+def test_plan_parses_plugin_hosts_and_artifact_host() -> None:
+    plan = parse_install_plan(
+        _plugin_plan(
+            {
+                "key": "demo-plugin",
+                "type": "plugin",
+                "hosts": ["dsh", "claude-code"],
+                "artifact": {
+                    "kind": "archive",
+                    "os": "windows",
+                    "arch": "any",
+                    "host": "claude-code",
+                    "url": "https://example.test/demo.zip",
+                    "sha256": "c" * 64,
+                },
+            }
+        )
+    )
+    component = plan.products[0].components[0]
+    assert component.type == "plugin"
+    assert component.hosts == ("dsh", "claude-code")
+    assert component.artifact is not None
+    assert component.artifact.host == "claude-code"
+
+
+def test_plan_rejects_plugin_without_hosts() -> None:
+    with pytest.raises(PlanError, match="hosts"):
+        parse_install_plan(
+            _plugin_plan(
+                {
+                    "key": "demo-plugin",
+                    "type": "plugin",
+                    "artifact": {
+                        "kind": "archive",
+                        "os": "windows",
+                        "arch": "any",
+                        "url": "https://example.test/demo.zip",
+                        "sha256": "c" * 64,
+                    },
+                }
+            )
+        )
+
+
+def test_plan_rejects_plugin_without_hosts_even_without_artifact() -> None:
+    with pytest.raises(PlanError, match="hosts"):
+        parse_install_plan(
+            _plugin_plan({"key": "demo-plugin", "type": "plugin"})
+        )
+
+
+def test_plan_rejects_unknown_host() -> None:
+    with pytest.raises(PlanError, match="vim"):
+        parse_install_plan(
+            _plugin_plan(
+                {
+                    "key": "demo-plugin",
+                    "type": "plugin",
+                    "hosts": ["vim"],
+                    "artifact": {
+                        "kind": "archive",
+                        "os": "windows",
+                        "arch": "any",
+                        "url": "https://example.test/demo.zip",
+                        "sha256": "c" * 64,
+                    },
+                }
+            )
+        )
+
+
+def test_plan_rejects_legacy_plugin_type() -> None:
+    with pytest.raises(PlanError, match="plugin-dsh"):
+        parse_install_plan(
+            _plugin_plan(
+                {
+                    "key": "demo-plugin",
+                    "type": "plugin-dsh",
+                    "artifact": {
+                        "kind": "archive",
+                        "os": "windows",
+                        "arch": "any",
+                        "url": "https://example.test/demo.zip",
+                        "sha256": "c" * 64,
+                    },
+                }
+            )
+        )
+
+
+def test_plan_accepts_new_types_without_artifact() -> None:
+    for component_type in ("rules", "hook", "agent-profile"):
+        plan = parse_install_plan(
+            _plugin_plan({"key": component_type, "type": component_type})
+        )
+        assert plan.products[0].components[0].type == component_type
+        assert plan.products[0].components[0].artifact is None
+
+
+def test_state_records_hosts_only_when_given() -> None:
+    state = InstalledState.load()
+    state.record_component(
+        "plain", "1.0.0", key="plain-cli", component_type="cli", status="installed"
+    )
+    state.record_component(
+        "plugin",
+        "1.0.0",
+        key="plugin",
+        component_type="plugin",
+        status="installed",
+        hosts=["dsh"],
+    )
+    assert "hosts" not in state.products["plain"]["components"]["plain-cli"]
+    assert state.products["plugin"]["components"]["plugin"]["hosts"] == ["dsh"]

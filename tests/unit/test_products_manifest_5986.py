@@ -199,3 +199,132 @@ def test_render_empty_install_table_stays_valid_toml() -> None:
     text = render_product(product)
     assert "install = {}" in text
     assert tomllib.loads(text) == product
+
+
+# ── #6006: плагин — одна сущность, харнес — поле hosts ───────────────────────
+
+def _plugin(**overrides: Any) -> dict[str, Any]:
+    """Продукт с одним plugin-компонентом: харнес задаётся полем hosts."""
+    component: dict[str, Any] = {
+        "key": "demo-plugin",
+        "type": "plugin",
+        "hosts": ["dsh"],
+        "artifacts": [
+            {
+                "os": "windows",
+                "arch": "any",
+                "kind": "archive",
+                "host": "dsh",
+                "url": "",
+                "sha256": "",
+            }
+        ],
+    }
+    component.update(overrides.pop("component", {}))
+    return {
+        "slug": "demo",
+        "title": "Демо",
+        "version": "1.0.0",
+        "components": [component],
+        **overrides,
+    }
+
+
+def test_plugin_requires_at_least_one_host() -> None:
+    product = _plugin()
+    product["components"][0].pop("hosts")
+    errors = validate_product(product)
+    assert any("hosts" in error and "plugin" in error for error in errors)
+
+
+def test_plugin_rejects_empty_hosts() -> None:
+    errors = validate_product(_plugin(component={"hosts": []}))
+    assert any("hosts" in error for error in errors)
+
+
+def test_plugin_with_known_hosts_is_valid() -> None:
+    product = _plugin(component={"hosts": ["dsh", "claude-code"]})
+    assert validate_product(product) == []
+
+
+def test_unknown_host_is_rejected() -> None:
+    errors = validate_product(_plugin(component={"hosts": ["vim"]}))
+    assert any("vim" in error for error in errors)
+
+
+def test_duplicate_hosts_are_rejected() -> None:
+    errors = validate_product(_plugin(component={"hosts": ["dsh", "dsh"]}))
+    assert any("повтор" in error.lower() for error in errors)
+
+
+def test_hosts_must_be_list_of_strings() -> None:
+    errors = validate_product(_plugin(component={"hosts": "dsh"}))
+    assert any("hosts" in error for error in errors)
+
+
+def test_skill_may_limit_hosts() -> None:
+    product = _product()
+    product["components"][0]["hosts"] = ["claude-code"]
+    assert validate_product(product) == []
+
+
+def test_old_plugin_types_are_rejected() -> None:
+    for legacy in ("plugin-dsh", "plugin-claude"):
+        errors = validate_product(
+            _plugin(component={"type": legacy})
+        )
+        assert any("type" in error and legacy in error for error in errors), legacy
+
+
+def test_new_component_types_are_valid() -> None:
+    for component_type in ("rules", "hook", "agent-profile"):
+        product = _product()
+        component = product["components"][0]
+        component["type"] = component_type
+        component["key"] = component_type
+        assert validate_product(product) == [], component_type
+
+
+def test_artifacts_may_target_different_hosts() -> None:
+    product = _plugin(component={"hosts": ["dsh", "claude-code"]})
+    component = product["components"][0]
+    component["artifacts"].append(
+        {
+            "os": "windows",
+            "arch": "any",
+            "kind": "archive",
+            "host": "claude-code",
+            "url": "",
+            "sha256": "",
+        }
+    )
+    assert validate_product(product) == []
+
+
+def test_unknown_artifact_host_is_rejected() -> None:
+    product = _plugin()
+    product["components"][0]["artifacts"][0]["host"] = "vim"
+    errors = validate_product(product)
+    assert any("host" in error and "vim" in error for error in errors)
+
+
+def test_artifact_host_must_belong_to_component_hosts() -> None:
+    product = _plugin(component={"hosts": ["dsh"]})
+    product["components"][0]["artifacts"][0]["host"] = "claude-code"
+    errors = validate_product(product)
+    assert any("hosts" in error for error in errors)
+
+
+def test_render_keeps_hosts_and_artifact_host() -> None:
+    product = _plugin(component={"hosts": ["dsh", "claude-code"]})
+    product["components"][0]["artifacts"][0]["host"] = "claude-code"
+    text = render_product(product)
+    assert 'hosts = ["dsh", "claude-code"]' in text
+    assert 'host = "claude-code"' in text
+    assert tomllib.loads(text) == product
+
+
+def test_render_omits_empty_hosts_for_non_plugin() -> None:
+    text = render_product(_product())
+    assert "hosts =" not in text
+    assert "host =" not in text
