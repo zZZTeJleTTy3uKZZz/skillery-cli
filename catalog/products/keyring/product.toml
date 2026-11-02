@@ -1,0 +1,15 @@
+slug = "keyring"
+title = "keyring — SSH-доступ к серверам"
+version = "0.0.0"
+
+[[components]]
+key = "keyring-cli"
+type = "cli"
+
+[[components.artifacts]]
+os = "any"
+arch = "any"
+kind = "binary"
+url = ""
+sha256 = ""
+install = { bin = "keyring" }

@@ -277,6 +277,7 @@ async def test_daemon_started_before_login_reconciles_after_it(
 
     monkeypatch.setattr(main_mod, "_reconcile_hub_installs", _noop)
     monkeypatch.setattr(main_mod, "_auto_update_hub_installs", _noop)
+    monkeypatch.setattr(main_mod, "_reconcile_assigned_products", _noop)
     monkeypatch.setattr(main_mod, "_daemon_cli_self_upgrade", _noop)
     await runner._reconcile()
     assert polled == ["T1"], "после login живой демон обязан взяться за очередь"

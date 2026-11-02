@@ -103,6 +103,7 @@ def test_save_writes_expected_toml(tmp_path: Path) -> None:
         "web_ui_url": "https://hub",
         "cli_update_check": True,
         "cli_auto_upgrade": True,
+        "products_sync": True,
     }
 
 
@@ -134,9 +135,11 @@ def test_save_omits_empty_optionals(tmp_path: Path) -> None:
         "cli_latest_version",
     ):
         assert absent not in data, absent
-    # cli_update_check / cli_auto_upgrade — булевы флаги, пишутся всегда (дефолт True)
+    # cli_update_check / cli_auto_upgrade / products_sync — булевы флаги,
+    # пишутся всегда (дефолт True), иначе выключение не переживёт load.
     assert data["cli_update_check"] is True
     assert data["cli_auto_upgrade"] is True
+    assert data["products_sync"] is True
 
 
 # --------------------------------------------------------------------------

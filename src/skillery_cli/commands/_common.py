@@ -21,18 +21,22 @@ from skillery_cli.output import emit_error
 console = Console()
 
 
-def run(coro) -> None:  # noqa: ANN001
+def run(coro) -> Any:  # noqa: ANN001
     """asyncio.run + канон ошибок (зеркало ``__main__._run``).
 
     В json-режиме ApiError/RuntimeError уходят единым событием
     ``{"event":"error",...}`` в stderr (stdout остаётся машинным каналом);
     в text-режиме — прежнее читабельное сообщение. ``typer.Exit``/``Abort``
     наследуют RuntimeError через click — пропускаем их наверх как есть.
+
+    Возвращает результат корутины: командам, которые строят ответ (например,
+    ``product install``), он нужен, а прежним вызывающим возврат значения
+    ничего не меняет.
     """
     from skillery_cli.output import is_json
 
     try:
-        asyncio.run(coro)
+        return asyncio.run(coro)
     except ApiError as e:
         if is_json():
             emit_error(e.code or "API", e.message, status_code=e.status_code)

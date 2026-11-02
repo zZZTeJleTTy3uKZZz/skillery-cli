@@ -1,0 +1,23 @@
+slug = "skillery"
+title = "Skillery CLI"
+version = "0.5.94"
+
+[[components]]
+key = "skillery-cli"
+type = "cli"
+
+[[components.artifacts]]
+os = "any"
+arch = "any"
+kind = "uv-tool"
+install = { package = "skillery-cli" }
+
+[[components]]
+key = "skillery-skill"
+type = "skill"
+
+[[components.artifacts]]
+os = "any"
+arch = "any"
+kind = "skill-ref"
+skill_ref = "skillery"

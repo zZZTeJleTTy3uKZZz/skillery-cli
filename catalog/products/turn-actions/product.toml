@@ -1,0 +1,17 @@
+slug = "turn-actions"
+title = "turn-actions"
+version = "0.4.0"
+
+[[components]]
+key = "turn-actions"
+type = "plugin"
+hosts = ["claude-code"]
+
+[[components.artifacts]]
+os = "linux"
+arch = "any"
+kind = "archive"
+host = "claude-code"
+url = ""
+sha256 = ""
+install = { path = "claude/turn-actions" }

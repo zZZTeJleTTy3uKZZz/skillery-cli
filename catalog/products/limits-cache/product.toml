@@ -1,0 +1,17 @@
+slug = "limits-cache"
+title = "limits-cache"
+version = "1.0.0"
+
+[[components]]
+key = "limits-cache"
+type = "plugin"
+hosts = ["claude-code"]
+
+[[components.artifacts]]
+os = "linux"
+arch = "any"
+kind = "archive"
+host = "claude-code"
+url = ""
+sha256 = ""
+install = { path = "claude/limits-cache" }

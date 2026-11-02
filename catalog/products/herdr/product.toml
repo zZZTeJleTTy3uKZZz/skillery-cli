@@ -1,0 +1,15 @@
+slug = "herdr"
+title = "herdr — терминальные пространства"
+version = "0.9.5"
+
+[[components]]
+key = "herdr-cli"
+type = "cli"
+
+[[components.artifacts]]
+os = "any"
+arch = "any"
+kind = "binary"
+url = ""
+sha256 = ""
+install = { bin = "herdr" }

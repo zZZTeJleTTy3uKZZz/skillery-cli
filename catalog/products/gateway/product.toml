@@ -1,0 +1,23 @@
+slug = "gateway"
+title = "gateway — оркестратор ИИ"
+version = "0.2.0"
+
+[[components]]
+key = "gateway-cli"
+type = "cli"
+
+[[components.artifacts]]
+os = "any"
+arch = "any"
+kind = "uv-tool"
+install = { package = "gateway" }
+
+[[components]]
+key = "gateway-skill"
+type = "skill"
+
+[[components.artifacts]]
+os = "any"
+arch = "any"
+kind = "skill-ref"
+skill_ref = "gateway"

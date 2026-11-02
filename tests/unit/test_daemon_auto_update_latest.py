@@ -313,8 +313,13 @@ async def test_daemon_reconcile_runs_both_passes(
         calls.append("auto-update-latest")
         return {"updated": [], "skipped": [], "failed": []}
 
+    async def _fake_products(cfg, access, **kwargs):  # noqa: ANN001
+        calls.append("products-sync")
+        return {"installed": [], "updated": [], "already": []}
+
     monkeypatch.setattr(main_mod, "_reconcile_hub_installs", _fake_reconcile)
     monkeypatch.setattr(main_mod, "_auto_update_hub_installs", _fake_auto_update)
+    monkeypatch.setattr(main_mod, "_reconcile_assigned_products", _fake_products)
     # #1102: каденс self-upgrade не должен ходить в PyPI в этом тесте — глушим.
     async def _no_self_upgrade(cfg, *, force):  # noqa: ANN001
         return False
@@ -331,4 +336,9 @@ async def test_daemon_reconcile_runs_both_passes(
     assert runner._reconcile is not None
     await runner._reconcile()
 
-    assert calls == ["device-sync", "auto-update-latest", "capability-leases"]
+    assert calls == [
+        "device-sync",
+        "auto-update-latest",
+        "products-sync",
+        "capability-leases",
+    ]

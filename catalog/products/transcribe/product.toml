@@ -1,0 +1,23 @@
+slug = "transcribe"
+title = "transcribe — транскрибация"
+version = "0.1.5"
+
+[[components]]
+key = "transcribe-cli"
+type = "cli"
+
+[[components.artifacts]]
+os = "any"
+arch = "any"
+kind = "uv-tool"
+install = { package = "s-transcribe" }
+
+[[components]]
+key = "transcribe-skill"
+type = "skill"
+
+[[components.artifacts]]
+os = "any"
+arch = "any"
+kind = "skill-ref"
+skill_ref = "transcribe"

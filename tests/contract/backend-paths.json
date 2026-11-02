@@ -310,6 +310,9 @@
    "GET",
    "PUT"
   ],
+  "/me/products/install-plan": [
+   "GET"
+  ],
   "/me/sessions": [
    "DELETE",
    "GET"
@@ -349,6 +352,24 @@
   "/permissions/{id}": [
    "DELETE",
    "PATCH"
+  ],
+  "/products": [
+   "GET",
+   "POST"
+  ],
+  "/products/{id}": [
+   "DELETE",
+   "GET",
+   "PATCH"
+  ],
+  "/products/{id}/assignments": [
+   "POST"
+  ],
+  "/products/{id}/assignments/{assignment_id}": [
+   "DELETE"
+  ],
+  "/products/{id}/install-plan": [
+   "GET"
   ],
   "/readyz": [
    "GET"

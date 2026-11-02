@@ -56,8 +56,14 @@ def _sync_clikit_mode() -> None:
         _clikit._mode = _mode
 
 
-def init_output_mode(*, json_flag: bool, config_format: str) -> None:
-    """Приоритет: --json > env SKILLERY_OUTPUT > config.output_format > text.
+def init_output_mode(
+    *, json_flag: bool, config_format: str, text_flag: bool = False
+) -> None:
+    """Приоритет: --json > --text > env SKILLERY_OUTPUT > config > text.
+
+    ``text_flag`` — явный запрос таблиц у команды, где машинный вывод стоит по
+    умолчанию (``skillery product …``): он перебивает env и конфиг, но не
+    ``--json`` — флаг машины остаётся самым сильным словом человека.
 
     Сигнатура сохранена исторической (keyword-only ``json_flag`` /
     ``config_format``) — ``__main__`` зовёт её именно так. Дефолт — text
@@ -68,6 +74,8 @@ def init_output_mode(*, json_flag: bool, config_format: str) -> None:
     env_mode = os.environ.get(f"{_BRAND}_OUTPUT", "").strip().lower()
     if json_flag:
         _mode = "json"
+    elif text_flag:
+        _mode = "text"
     elif env_mode in ("json", "text"):
         _mode = env_mode
     elif config_format in ("json", "text"):
