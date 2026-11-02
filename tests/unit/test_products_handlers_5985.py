@@ -636,6 +636,73 @@ def test_skill_is_idempotent_when_already_in_store(ctx: InstallContext) -> None:
     assert called == []
 
 
+def test_skill_default_install_calls_existing_chain(
+    ctx: InstallContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Без инъекции навык ставит ровно ``_install_chain`` из ``skillery install``."""
+    import skillery_cli.__main__ as main_mod
+    from skillery_cli.commands import _common
+    from skillery_cli.config import ClientConfig
+
+    calls: dict = {}
+
+    async def _fake_chain(cfg, access, **kwargs):  # noqa: ANN001, ANN003, ANN202
+        calls["access"] = access
+        calls.update(kwargs)
+        (ctx.paths.skill_store / kwargs["slug"]).mkdir(parents=True, exist_ok=True)
+        return []
+
+    monkeypatch.setattr(main_mod, "_install_chain", _fake_chain)
+    monkeypatch.setattr(_common, "get_access_token", lambda: "access-token")
+    monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: ClientConfig()))
+    component = Component(
+        key="atlas-skill",
+        type="skill",
+        artifact=_artifact("skill-ref", skill_ref="atlas"),
+    )
+
+    result = _run(get_handler("skill").install(component, ctx))
+
+    assert result.status == "installed"
+    assert calls["slug"] == "atlas"
+    assert calls["channel"] == "published"
+    assert calls["scope"] == "global"
+    assert calls["access"] == "access-token"
+
+
+def test_skill_default_remove_calls_existing_installer(
+    ctx: InstallContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Снятие идёт через ``SkillInstaller.remove``, а не удалением папки."""
+    from skillery_cli.config import ClientConfig
+    from skillery_cli.core import installer as installer_mod
+
+    seen: dict = {}
+
+    class _FakeInstaller:
+        def __init__(self, target, store_dir) -> None:  # noqa: ANN001
+            seen["target"] = target
+            seen["store_dir"] = store_dir
+
+        def remove(self, *, slug, purge=False):  # noqa: ANN001, ANN201
+            seen["remove"] = (slug, purge)
+            return None
+
+    monkeypatch.setattr(installer_mod, "SkillInstaller", _FakeInstaller)
+    monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: ClientConfig()))
+    (ctx.paths.skill_store / "atlas").mkdir(parents=True)
+    component = Component(
+        key="atlas-skill",
+        type="skill",
+        artifact=_artifact("skill-ref", skill_ref="atlas"),
+    )
+
+    result = _run(get_handler("skill").remove(component, ctx))
+
+    assert result.status == "removed"
+    assert seen["remove"] == ("atlas", True)
+
+
 def test_unknown_type_has_no_handler() -> None:
     with pytest.raises(LookupError):
         get_handler("daemon")
