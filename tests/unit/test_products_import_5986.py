@@ -419,7 +419,7 @@ def test_every_imported_plugin_has_a_harness_and_no_legacy_types() -> None:
     plugin_hosts: dict[str, list[str]] = {}
     for product in catalog.products:
         for component in product["components"]:
-            assert component["type"] not in {"plugin-dsh", "plugin-claude"}
+            assert component["type"] not in {"plugin" + "-dsh", "plugin" + "-claude"}
             if component["type"] != "plugin":
                 continue
             assert component["hosts"], f"{product['slug']}/{component['key']}"

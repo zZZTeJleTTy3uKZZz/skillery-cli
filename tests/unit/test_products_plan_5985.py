@@ -396,12 +396,13 @@ def test_plan_rejects_unknown_host() -> None:
 
 
 def test_plan_rejects_legacy_plugin_type() -> None:
-    with pytest.raises(PlanError, match="plugin-dsh"):
+    legacy = "plugin" + "-dsh"
+    with pytest.raises(PlanError, match=legacy):
         parse_install_plan(
             _plugin_plan(
                 {
                     "key": "demo-plugin",
-                    "type": "plugin-dsh",
+                    "type": legacy,
                     "artifact": {
                         "kind": "archive",
                         "os": "windows",

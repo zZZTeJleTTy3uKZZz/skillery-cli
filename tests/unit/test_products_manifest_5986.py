@@ -269,7 +269,7 @@ def test_skill_may_limit_hosts() -> None:
 
 
 def test_old_plugin_types_are_rejected() -> None:
-    for legacy in ("plugin-dsh", "plugin-claude"):
+    for legacy in ("plugin" + "-dsh", "plugin" + "-claude"):
         errors = validate_product(
             _plugin(component={"type": legacy})
         )

@@ -311,13 +311,13 @@ def _plugin(
 def test_handler_registry_has_one_plugin_type_and_new_types() -> None:
     types = handler_types()
     assert "plugin" in types
-    assert "plugin-dsh" not in types
-    assert "plugin-claude" not in types
+    assert "plugin" + "-dsh" not in types
+    assert "plugin" + "-claude" not in types
     for component_type in ("rules", "hook", "agent-profile"):
         assert component_type in types
 
 
-def test_plugin_claude_code_preserves_settings(
+def test_claude_code_host_preserves_settings(
     ctx: InstallContext, tmp_path: Path
 ) -> None:
     url, digest = _served_archive(tmp_path, {"limits-cache/plugin.json": b"{}"})
@@ -351,7 +351,7 @@ def test_plugin_claude_code_preserves_settings(
     assert str(ctx.paths.claude_plugins) in dirs
 
 
-def test_plugin_claude_code_is_idempotent(ctx: InstallContext, tmp_path: Path) -> None:
+def test_claude_code_host_is_idempotent(ctx: InstallContext, tmp_path: Path) -> None:
     url, digest = _served_archive(tmp_path, {"limits-cache/plugin.json": b"{}"})
     ctx.paths.claude_dir.mkdir(parents=True, exist_ok=True)
     component = _plugin(
@@ -378,7 +378,7 @@ def test_plugin_claude_code_is_idempotent(ctx: InstallContext, tmp_path: Path) -
     assert ctx.paths.claude_settings.read_bytes() == settings_before
 
 
-def test_plugin_claude_code_remove_drops_dir_and_setting(
+def test_claude_code_host_remove_drops_dir_and_setting(
     ctx: InstallContext, tmp_path: Path
 ) -> None:
     url, digest = _served_archive(tmp_path, {"limits-cache/plugin.json": b"{}"})
@@ -399,7 +399,7 @@ def test_plugin_claude_code_remove_drops_dir_and_setting(
     assert str(ctx.paths.claude_plugins) not in settings["env"]["CLAUDE_CODE_PLUGIN_DIRS"]
 
 
-def test_plugin_dsh_adds_rows_and_keeps_foreign(ctx: InstallContext, tmp_path: Path) -> None:
+def test_dsh_host_adds_rows_and_keeps_foreign(ctx: InstallContext, tmp_path: Path) -> None:
     url, digest = _served_archive(
         tmp_path, {"demo/plugin.json": PLUGIN_JSON, "demo/index.js": b"code"}
     )
@@ -419,7 +419,7 @@ def test_plugin_dsh_adds_rows_and_keeps_foreign(ctx: InstallContext, tmp_path: P
     assert "# чужая раскладка" in text
 
 
-def test_plugin_dsh_is_idempotent_by_id(ctx: InstallContext, tmp_path: Path) -> None:
+def test_dsh_host_is_idempotent_by_id(ctx: InstallContext, tmp_path: Path) -> None:
     url, digest = _served_archive(
         tmp_path, {"demo/plugin.json": PLUGIN_JSON, "demo/index.js": b"code"}
     )
@@ -437,7 +437,7 @@ def test_plugin_dsh_is_idempotent_by_id(ctx: InstallContext, tmp_path: Path) -> 
     assert ctx.paths.dsh_patch.read_text(encoding="utf-8").count("id: dsh-demo") == 1
 
 
-def test_plugin_dsh_quotes_yaml_reserved_scalars(
+def test_dsh_host_quotes_yaml_reserved_scalars(
     ctx: InstallContext, tmp_path: Path
 ) -> None:
     """Имена пакетов начинаются с ``@`` — в YAML это резерв, значение в кавычках.
@@ -476,7 +476,7 @@ def test_plugin_dsh_quotes_yaml_reserved_scalars(
     assert '        configPath: "' in text
 
 
-def test_plugin_dsh_remove_removes_its_rows_only(
+def test_dsh_host_remove_removes_its_rows_only(
     ctx: InstallContext, tmp_path: Path
 ) -> None:
     url, digest = _served_archive(

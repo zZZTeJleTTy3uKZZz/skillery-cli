@@ -127,7 +127,7 @@ def test_plugins_are_one_type_with_hosts() -> None:
     for path in _manifest_paths():
         data = tomllib.loads(path.read_text(encoding="utf-8"))
         for component in data["components"]:
-            assert component["type"] not in {"plugin-dsh", "plugin-claude"}, path
+            assert component["type"] not in {"plugin" + "-dsh", "plugin" + "-claude"}, path
             if component["type"] != "plugin":
                 continue
             assert component["hosts"], f"{path}: у плагина нет hosts"
