@@ -1,0 +1,25 @@
+slug = "crew"
+title = "crew — агенты и устройства"
+version = "0.1.24"
+
+[[components]]
+key = "crew-cli"
+type = "cli"
+
+[[components.artifacts]]
+os = "any"
+arch = "any"
+kind = "binary"
+url = ""
+sha256 = ""
+install = { bin = "crew" }
+
+[[components]]
+key = "crew-skill"
+type = "skill"
+
+[[components.artifacts]]
+os = "any"
+arch = "any"
+kind = "skill-ref"
+skill_ref = "crew"

@@ -1,0 +1,15 @@
+slug = "subagent-model"
+title = "subagent-model"
+version = "0.3.0"
+
+[[components]]
+key = "subagent-model"
+type = "plugin-claude"
+
+[[components.artifacts]]
+os = "linux"
+arch = "any"
+kind = "archive"
+url = ""
+sha256 = ""
+install = { path = "claude/subagent-model" }

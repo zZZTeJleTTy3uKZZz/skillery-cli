@@ -1,0 +1,15 @@
+slug = "limits"
+title = "limits"
+version = "0.5.0"
+
+[[components]]
+key = "limits"
+type = "plugin-dsh"
+
+[[components.artifacts]]
+os = "windows"
+arch = "any"
+kind = "archive"
+url = ""
+sha256 = ""
+install = { path = "plugins/limits", peer_range = "@deepseek-ai/dsh-tools 0.2.0-rc.2 || ^0.2.0" }

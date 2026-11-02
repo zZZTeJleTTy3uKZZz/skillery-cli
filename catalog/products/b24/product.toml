@@ -1,0 +1,13 @@
+slug = "b24"
+title = "b24 — Битрикс24"
+version = "0.5.10"
+
+[[components]]
+key = "b24-cli"
+type = "cli"
+
+[[components.artifacts]]
+os = "any"
+arch = "any"
+kind = "uv-tool"
+install = { package = "bitrix24-content-cli" }

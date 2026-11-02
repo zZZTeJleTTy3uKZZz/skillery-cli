@@ -1,0 +1,15 @@
+slug = "job-wait"
+title = "job-wait"
+version = "0.3.0"
+
+[[components]]
+key = "job-wait"
+type = "plugin-dsh"
+
+[[components.artifacts]]
+os = "windows"
+arch = "any"
+kind = "archive"
+url = ""
+sha256 = ""
+install = { path = "plugins/job-wait" }

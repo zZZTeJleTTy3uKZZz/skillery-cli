@@ -1,0 +1,15 @@
+slug = "crew-devices"
+title = "crew-devices"
+version = "0.2.0"
+
+[[components]]
+key = "crew-devices"
+type = "plugin-dsh"
+
+[[components.artifacts]]
+os = "windows"
+arch = "any"
+kind = "archive"
+url = ""
+sha256 = ""
+install = { path = "plugins/crew-devices" }

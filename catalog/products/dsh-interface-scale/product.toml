@@ -1,0 +1,15 @@
+slug = "dsh-interface-scale"
+title = "dsh-interface-scale"
+version = "0.1.0"
+
+[[components]]
+key = "dsh-interface-scale"
+type = "plugin-dsh"
+
+[[components.artifacts]]
+os = "windows"
+arch = "any"
+kind = "archive"
+url = ""
+sha256 = ""
+install = { path = "plugins/dsh-interface-scale" }

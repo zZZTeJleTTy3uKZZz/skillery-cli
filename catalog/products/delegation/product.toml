@@ -1,0 +1,15 @@
+slug = "delegation"
+title = "delegation"
+version = "0.7.0"
+
+[[components]]
+key = "delegation"
+type = "plugin-claude"
+
+[[components.artifacts]]
+os = "linux"
+arch = "any"
+kind = "archive"
+url = ""
+sha256 = ""
+install = { path = "claude/delegation" }
