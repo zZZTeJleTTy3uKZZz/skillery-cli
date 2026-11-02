@@ -1,0 +1,13 @@
+slug = "gws"
+title = "gws — Google Workspace"
+version = "0.1.0"
+
+[[components]]
+key = "gws-cli"
+type = "cli"
+
+[[components.artifacts]]
+os = "any"
+arch = "any"
+kind = "uv-tool"
+install = { package = "gws" }

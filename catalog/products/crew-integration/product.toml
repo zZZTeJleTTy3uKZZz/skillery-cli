@@ -1,0 +1,15 @@
+slug = "crew-integration"
+title = "crew-integration"
+version = "0.4.0"
+
+[[components]]
+key = "crew-integration"
+type = "plugin-dsh"
+
+[[components.artifacts]]
+os = "windows"
+arch = "any"
+kind = "archive"
+url = ""
+sha256 = ""
+install = { path = "plugins/crew-integration" }

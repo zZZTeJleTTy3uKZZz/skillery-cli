@@ -1,0 +1,13 @@
+slug = "max"
+title = "max — мессенджер MAX"
+version = "0.2.0"
+
+[[components]]
+key = "max-cli"
+type = "cli"
+
+[[components.artifacts]]
+os = "any"
+arch = "any"
+kind = "uv-tool"
+install = { package = "max-cli" }

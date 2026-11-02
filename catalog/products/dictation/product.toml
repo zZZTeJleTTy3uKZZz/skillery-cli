@@ -1,0 +1,28 @@
+slug = "dictation"
+title = "Диктовка"
+version = "1.10.0"
+
+[[components]]
+key = "dictation-service"
+type = "service"
+
+[[components.artifacts]]
+os = "windows"
+arch = "amd64"
+kind = "installer"
+url = ""
+sha256 = ""
+install = { args = ["/VERYSILENT", "/SUPPRESSMSGBOXES"], detect = { file = "%LOCALAPPDATA%\\Programs\\Dictation\\dictation.exe" } }
+
+[[components]]
+key = "voice-input"
+type = "plugin-dsh"
+depends_on = ["dictation-service"]
+
+[[components.artifacts]]
+os = "windows"
+arch = "any"
+kind = "archive"
+url = ""
+sha256 = ""
+install = { path = "plugins/voice-input", peer_range = "не объявлено — сцепка установщиком не проверяется" }

@@ -1,0 +1,15 @@
+slug = "dsh-window-controls"
+title = "dsh-window-controls"
+version = "0.1.0"
+
+[[components]]
+key = "dsh-window-controls"
+type = "plugin-dsh"
+
+[[components.artifacts]]
+os = "windows"
+arch = "any"
+kind = "archive"
+url = ""
+sha256 = ""
+install = { path = "plugins/dsh-window-controls" }

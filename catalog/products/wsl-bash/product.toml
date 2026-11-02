@@ -1,0 +1,15 @@
+slug = "wsl-bash"
+title = "wsl-bash"
+version = "0.3.0"
+
+[[components]]
+key = "wsl-bash"
+type = "plugin-dsh"
+
+[[components.artifacts]]
+os = "windows"
+arch = "any"
+kind = "archive"
+url = ""
+sha256 = ""
+install = { path = "plugins/wsl-bash" }

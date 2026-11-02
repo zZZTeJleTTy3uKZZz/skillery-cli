@@ -1,0 +1,57 @@
+slug = "line"
+title = "line — канал мессенджеров"
+version = "0.1.5"
+
+[[components]]
+key = "line-cli"
+type = "cli"
+
+[[components.artifacts]]
+os = "linux"
+arch = "amd64"
+kind = "binary"
+url = "https://github.com/zZZTeJleTTy3uKZZz/line-cli/releases/download/v0.1.5/line_linux_amd64.tar.gz"
+sha256 = "d6ae7fb5c9d05f3de54accbe9c21a568c2b9978ed36904d1baa6a033890872b7"
+install = { bin = "line" }
+
+[[components.artifacts]]
+os = "linux"
+arch = "arm64"
+kind = "binary"
+url = "https://github.com/zZZTeJleTTy3uKZZz/line-cli/releases/download/v0.1.5/line_linux_arm64.tar.gz"
+sha256 = "037d69c54ae0cd2211b7e3936c0ec3382c94d4a0af9a3519968c97226695b03d"
+install = { bin = "line" }
+
+[[components.artifacts]]
+os = "macos"
+arch = "amd64"
+kind = "binary"
+url = "https://github.com/zZZTeJleTTy3uKZZz/line-cli/releases/download/v0.1.5/line_darwin_amd64.tar.gz"
+sha256 = "edfc3fefa9356ced93d01ecca20fadca846faa7dd1556450478710c09e930afe"
+install = { bin = "line" }
+
+[[components.artifacts]]
+os = "macos"
+arch = "arm64"
+kind = "binary"
+url = "https://github.com/zZZTeJleTTy3uKZZz/line-cli/releases/download/v0.1.5/line_darwin_arm64.tar.gz"
+sha256 = "a10a4f1583972231b0227dc5c0f4e5196941ae1432e3cf88cc4026dfb923eaeb"
+install = { bin = "line" }
+
+[[components.artifacts]]
+os = "windows"
+arch = "amd64"
+kind = "binary"
+url = "https://github.com/zZZTeJleTTy3uKZZz/line-cli/releases/download/v0.1.5/line_windows_amd64.zip"
+sha256 = "dff959286b48afd034e8c808557f59241071ab4eb159086d7c2d3a273ed18911"
+install = { bin = "line.exe" }
+
+[[components]]
+key = "line-skill"
+type = "skill"
+
+[[components.artifacts]]
+os = "any"
+arch = "any"
+kind = "skill-ref"
+skill_ref = "line"

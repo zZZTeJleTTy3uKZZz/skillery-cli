@@ -1,0 +1,15 @@
+slug = "win-clipboard"
+title = "win-clipboard"
+version = "0.6.0"
+
+[[components]]
+key = "win-clipboard"
+type = "plugin-claude"
+
+[[components.artifacts]]
+os = "linux"
+arch = "any"
+kind = "archive"
+url = ""
+sha256 = ""
+install = { path = "claude/win-clipboard" }

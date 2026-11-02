@@ -1,0 +1,15 @@
+slug = "scratchpad"
+title = "scratchpad"
+version = "0.2.0"
+
+[[components]]
+key = "scratchpad"
+type = "plugin-dsh"
+
+[[components.artifacts]]
+os = "windows"
+arch = "any"
+kind = "archive"
+url = ""
+sha256 = ""
+install = { path = "plugins/scratchpad", peer_range = "@deepseek-ai/dsh-tools ^0.2.0" }

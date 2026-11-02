@@ -1,0 +1,15 @@
+slug = "background-habits"
+title = "background-habits"
+version = "0.1.0"
+
+[[components]]
+key = "background-habits"
+type = "plugin-dsh"
+
+[[components.artifacts]]
+os = "windows"
+arch = "any"
+kind = "archive"
+url = ""
+sha256 = ""
+install = { path = "plugins/background-habits" }

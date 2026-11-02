@@ -1,0 +1,15 @@
+slug = "sleep-to-background"
+title = "sleep-to-background"
+version = "0.1.0"
+
+[[components]]
+key = "sleep-to-background"
+type = "plugin-claude"
+
+[[components.artifacts]]
+os = "linux"
+arch = "any"
+kind = "archive"
+url = ""
+sha256 = ""
+install = { path = "claude/sleep-to-background" }

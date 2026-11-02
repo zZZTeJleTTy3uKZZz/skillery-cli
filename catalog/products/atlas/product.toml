@@ -1,0 +1,69 @@
+slug = "atlas"
+title = "Atlas — портфель и задачи"
+version = "0.7.8"
+
+[[components]]
+key = "atlas"
+type = "plugin-dsh"
+
+[[components.artifacts]]
+os = "windows"
+arch = "any"
+kind = "archive"
+url = ""
+sha256 = ""
+install = { path = "plugins/atlas", peer_range = "@deepseek-ai/dsh-tools 0.2.0-rc.2 || ^0.2.0" }
+
+[[components]]
+key = "atlas-cli"
+type = "cli"
+
+[[components.artifacts]]
+os = "linux"
+arch = "amd64"
+kind = "binary"
+url = "https://api.atlas.pragmati.ru/dl/atlas-linux-amd64"
+sha256 = ""
+install = { bin = "atlas" }
+
+[[components.artifacts]]
+os = "linux"
+arch = "arm64"
+kind = "binary"
+url = "https://api.atlas.pragmati.ru/dl/atlas-linux-arm64"
+sha256 = ""
+install = { bin = "atlas" }
+
+[[components.artifacts]]
+os = "macos"
+arch = "amd64"
+kind = "binary"
+url = "https://api.atlas.pragmati.ru/dl/atlas-darwin-amd64"
+sha256 = ""
+install = { bin = "atlas" }
+
+[[components.artifacts]]
+os = "macos"
+arch = "arm64"
+kind = "binary"
+url = "https://api.atlas.pragmati.ru/dl/atlas-darwin-arm64"
+sha256 = ""
+install = { bin = "atlas" }
+
+[[components.artifacts]]
+os = "windows"
+arch = "amd64"
+kind = "binary"
+url = "https://api.atlas.pragmati.ru/dl/atlas-windows-amd64.exe"
+sha256 = ""
+install = { bin = "atlas.exe" }
+
+[[components]]
+key = "atlas-skill"
+type = "skill"
+
+[[components.artifacts]]
+os = "any"
+arch = "any"
+kind = "skill-ref"
+skill_ref = "atlas"
