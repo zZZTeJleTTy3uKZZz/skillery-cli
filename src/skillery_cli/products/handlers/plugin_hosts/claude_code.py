@@ -14,8 +14,8 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from ..plan import Artifact, Component
-from .base import (
+from ...plan import Artifact, Component
+from ..base import (
     ComponentResult,
     InstallContext,
     ProductError,
@@ -27,8 +27,15 @@ from .base import (
 PLUGIN_DIRS_VAR = "CLAUDE_CODE_PLUGIN_DIRS"
 
 
-class ClaudePluginHandler:
-    component_type = "plugin-claude"
+class ClaudeCodeHost:
+    """Плагин Claude Code — один из харнесов ``Component.hosts``."""
+
+    host = "claude-code"
+    component_type = "plugin"
+
+    def available(self, ctx: InstallContext) -> bool:
+        """Харнес есть на устройстве? Нет каталога ``~/.claude`` — его нет."""
+        return ctx.paths.claude_dir.is_dir()
 
     def plan(self, component: Component, ctx: InstallContext) -> list[str]:
         return [

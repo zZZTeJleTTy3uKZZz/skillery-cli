@@ -17,19 +17,26 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from ..plan import Component
-from .base import (
+from ...plan import Component
+from ..base import (
     ComponentResult,
     InstallContext,
     ProductError,
     install_archive,
     install_str,
 )
-from .insert_block import insert_block_ids, update_insert_block
+from ..insert_block import insert_block_ids, update_insert_block
 
 
-class DshPluginHandler:
-    component_type = "plugin-dsh"
+class DshHost:
+    """Плагин DeepSeek Harness — один из харнесов ``Component.hosts``."""
+
+    host = "dsh"
+    component_type = "plugin"
+
+    def available(self, ctx: InstallContext) -> bool:
+        """Харнес есть на устройстве? Нет каталога ``~/.dsh`` — его нет."""
+        return ctx.paths.dsh_home.is_dir()
 
     def plan(self, component: Component, ctx: InstallContext) -> list[str]:
         target = self._target(component, ctx)

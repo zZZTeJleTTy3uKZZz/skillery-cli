@@ -9,18 +9,20 @@ from __future__ import annotations
 from .base import ComponentHandler
 from .cli import CliHandler
 from .mcp import McpHandler
-from .plugin_claude import ClaudePluginHandler
-from .plugin_dsh import DshPluginHandler
+from .plugin import PluginHandler
 from .service import ServiceHandler
 from .skill import SkillHandler
+from .unsupported import UnsupportedHandler
 
 _HANDLERS: dict[str, ComponentHandler] = {
     "skill": SkillHandler(),
     "cli": CliHandler(),
     "mcp": McpHandler(),
-    "plugin-claude": ClaudePluginHandler(),
-    "plugin-dsh": DshPluginHandler(),
+    "plugin": PluginHandler(),
     "service": ServiceHandler(),
+    "rules": UnsupportedHandler("rules"),
+    "hook": UnsupportedHandler("hook"),
+    "agent-profile": UnsupportedHandler("agent-profile"),
 }
 
 
