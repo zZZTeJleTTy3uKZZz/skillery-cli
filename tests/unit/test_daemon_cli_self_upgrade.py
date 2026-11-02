@@ -130,6 +130,7 @@ async def test_daemon_loop_startup_then_hourly_cadence(monkeypatch) -> None:
     monkeypatch.setattr(m, "_reconcile_device_queue", _noop)
     monkeypatch.setattr(m, "_reconcile_hub_installs", _noop)
     monkeypatch.setattr(m, "_auto_update_hub_installs", _noop)
+    monkeypatch.setattr(m, "_reconcile_assigned_products", _noop)
 
     forces: list[bool] = []
 

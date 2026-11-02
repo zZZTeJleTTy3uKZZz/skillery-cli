@@ -1250,6 +1250,33 @@ class HubClient:
         items = data.get("items") if isinstance(data, dict) else None
         return list(items) if items else []
 
+    async def get_my_products_install_plan(
+        self,
+        *,
+        os: str,
+        arch: str,
+        device_id: str | None = None,
+        channel: str = "",
+    ) -> dict[str, Any]:
+        """GET /me/products/install-plan — назначенные продукты под платформу.
+
+        Контракт (ADR-0001, backend ``routes/products.py::my_install_plan``):
+        ответ ``{"products": [{slug, version, components, skipped}]}``, компоненты
+        уже отобраны по ОС/архитектуре и упорядочены топологически.
+
+        ``channel`` не отправляется, если пуст: у продуктов канал назначения по
+        умолчанию свой (``stable`` у backend), и подставлять сюда канал навыков
+        (``published``) значило бы молча не найти ни одного назначения. Явный
+        ``channel`` — для будущих каналов вроде beta.
+        """
+        params: dict[str, str] = {"os": os, "arch": arch}
+        if device_id:
+            params["device_id"] = device_id
+        if channel:
+            params["channel"] = channel
+        data = await self._request("GET", "/me/products/install-plan", params=params)
+        return data if isinstance(data, dict) else {"products": []}
+
     # --- #1490: способности и лизы ------------------------------------
     #
     # Три вызова, и ни один из них не делается на запуске навыка: их зовёт

@@ -1,9 +1,11 @@
 """``skillery product …`` — установка продуктов по install-plan (ADR-0001).
 
-Три глагола и ни одного лишнего:
+Четыре глагола и ни одного лишнего:
 
 * ``install --plan-file`` — исполнить план backend'а; ``--dry-run`` показывает
   шаги, ничего не трогая;
+* ``sync`` — поставить всё назначенное устройству и подтянуть новые версии
+  (``--dry-run``, ``--prune`` — снять не назначенное);
 * ``list`` — что стоит на этой машине (из ``~/.skillery/products.json``);
 * ``remove <slug>`` — снять ровно то, что записано в состоянии.
 
@@ -22,6 +24,8 @@ from rich.console import Console
 from rich.table import Table
 
 from skillery_cli.commands import _common
+from skillery_cli.config import ClientConfig, load_tokens
+from skillery_cli.core.transport import HubClient
 from skillery_cli.output import emit_data, emit_error, init_output_mode
 from skillery_cli.products.engine import (
     STATUS_FAILED,
@@ -30,10 +34,14 @@ from skillery_cli.products.engine import (
     remove_product,
 )
 from skillery_cli.products.handlers.base import InstallContext
-from skillery_cli.products.paths import home_paths
 from skillery_cli.products.plan import PlanError, load_install_plan
-from skillery_cli.products.runner import SubprocessRunner
 from skillery_cli.products.state import InstalledState, StateError
+from skillery_cli.products.sync import (
+    InstallPlanUnavailableError,
+    ProductSyncError,
+    build_install_context,
+    sync_products,
+)
 
 console = Console()
 
@@ -61,12 +69,7 @@ def _apply_output_mode(*, text: bool) -> None:
 
 
 def _context(*, dry_run: bool = False) -> InstallContext:
-    return InstallContext(
-        paths=home_paths(),
-        runner=SubprocessRunner(),
-        state=InstalledState.load(),
-        dry_run=dry_run,
-    )
+    return build_install_context(dry_run=dry_run)
 
 
 def _render_plan(payload: dict[str, Any]) -> None:
@@ -221,13 +224,95 @@ def cmd_product_remove(
         raise typer.Exit(1)
 
 
+def _render_sync(payload: dict[str, Any]) -> None:
+    console.print(
+        "[green]product sync[/]: "
+        f"+установлено {len(payload.get('installed', []))}  "
+        f"↑обновлено {len(payload.get('updated', []))}  "
+        f"=уже стоит {len(payload.get('already', []))}  "
+        f"?пропущено {len(payload.get('skipped', []))}  "
+        f"×оставлено {len(payload.get('kept', []))}  "
+        f"-снято {len(payload.get('pruned', []))}  "
+        f"✗ошибок {len(payload.get('failed', []))}"
+    )
+    for slug in payload.get("kept", []):
+        console.print(f"  [dim]{slug}: не назначен — оставлен (снять: --prune)[/]")
+    for warning in payload.get("warnings", []):
+        console.print(f"  [yellow]![/] {warning}")
+    if payload.get("dry_run"):
+        console.print("[dim]dry-run: ничего не изменено[/]")
+
+
+def cmd_product_sync(
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Показать, что будет поставлено, ничего не меняя."
+    ),
+    prune: bool = typer.Option(
+        False,
+        "--prune",
+        help="Снять установленные продукты, которых нет в назначении.",
+    ),
+    channel: str = typer.Option(
+        "",
+        "--channel",
+        help="Канал релизов (пусто — канал backend'а, stable).",
+    ),
+    text: bool = typer.Option(False, "--text", help=TEXT_HELP),
+) -> None:
+    """Поставить назначенное устройству и подтянуть новые версии продуктов."""
+    _apply_output_mode(text=text)
+    cfg = ClientConfig.load()
+    if not cfg.is_logged_in():
+        emit_error("NOT_LOGGED_IN", "Сначала: skillery login <invite>")
+        raise typer.Exit(1)
+    access, _refresh = load_tokens(cfg.user_email or "")
+    if not access:
+        emit_error("NO_TOKEN", "Локальный access-токен не найден. Сделайте login заново.")
+        raise typer.Exit(1)
+
+    # Ленивый импорт: commands.product не должен тянуть __main__ на импорте.
+    from skillery_cli.__main__ import _make_refresh_callback
+
+    ctx = _context(dry_run=dry_run)
+    client = HubClient(
+        base_url=cfg.base_url,
+        access_token=access,
+        on_token_refresh=_make_refresh_callback(cfg),
+    )
+
+    async def _do() -> Any:
+        try:
+            return await sync_products(
+                client,
+                ctx,
+                dry_run=dry_run,
+                prune=prune,
+                channel=channel,
+            )
+        except (InstallPlanUnavailableError, ProductSyncError) as exc:
+            # ``_common.run`` переводит RuntimeError в общий RUNTIME; здесь
+            # нужен свой код — человеку важен не «сбой», а «backend старый».
+            emit_error("PRODUCT_SYNC", str(exc))
+            raise typer.Exit(1) from exc
+        finally:
+            await client.close()
+
+    report = _common.run(_do())
+
+    payload = report.to_dict()
+    emit_data(payload, text_renderer=_render_sync)
+    if report.failed:
+        raise typer.Exit(1)
+
+
 def register(app: typer.Typer) -> None:
     """Регистрирует группу ``product`` (установка продуктов)."""
     product_app = typer.Typer(
         no_args_is_help=True,
-        help="Продукты: поставить по install-plan, список, снять.",
+        help="Продукты: поставить по install-plan/назначению, список, снять.",
     )
     product_app.command("install")(cmd_product_install)
+    product_app.command("sync")(cmd_product_sync)
     product_app.command("list")(cmd_product_list)
     product_app.command("remove")(cmd_product_remove)
     app.add_typer(product_app, name="product")

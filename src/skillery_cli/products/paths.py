@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import os
+import platform
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -82,3 +83,48 @@ def path_bin_dir(home: Path) -> Path:
         base = Path(local) if local else home / "AppData" / "Local"
         return base / _branding.APP_NAME / "bin"
     return home / ".local" / "bin"
+
+
+# ── платформа клиента: ровно те значения, что ждёт install-plan ──────────────
+#
+# Backend фильтрует артефакты по ``ArtifactOS``/``ArtifactArch`` (ADR-0001):
+# ``windows|linux|macos`` и ``amd64|arm64``. Держим это перечисление в одном
+# месте: план запрашивает движок синхронизации, а второй такой же маппинг в
+# команде разъехался бы с ним на первой новой архитектуре.
+_OS_NAMES: dict[str, str] = {"win32": "windows", "linux": "linux", "darwin": "macos"}
+_ARCH_NAMES: dict[str, str] = {
+    "x86_64": "amd64",
+    "amd64": "amd64",
+    "aarch64": "arm64",
+    "arm64": "arm64",
+}
+
+
+def current_os() -> str:
+    """Имя ОС для install-plan; неизвестная — внятная ошибка, а не «any»."""
+    platform_name = sys.platform
+    for prefix, name in _OS_NAMES.items():
+        if platform_name == prefix or platform_name.startswith(prefix):
+            return name
+    raise ValueError(
+        f"неизвестная ОС {platform_name!r}: install-plan поддерживает "
+        f"{', '.join(sorted(set(_OS_NAMES.values())))}"
+    )
+
+
+def current_arch() -> str:
+    """Архитектура для install-plan (``amd64``/``arm64``)."""
+    machine = platform.machine().strip().lower()
+    try:
+        return _ARCH_NAMES[machine]
+    except KeyError as exc:
+        raise ValueError(
+            f"неизвестная архитектура {machine!r}: install-plan поддерживает "
+            f"{', '.join(sorted(set(_ARCH_NAMES.values())))}"
+        ) from exc
+
+
+def current_platform() -> tuple[str, str]:
+    """``(os, arch)`` текущей машины — одна пара для запроса плана."""
+    return current_os(), current_arch()
+

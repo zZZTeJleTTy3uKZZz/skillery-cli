@@ -3900,12 +3900,22 @@ def cmd_sync(
                                help="Удалять наши ссылки, которых нет в манифесте"),
     agent: Optional[str] = typer.Option(None),
     channel: str = typer.Option("published"),
+    products: Optional[bool] = typer.Option(
+        None, "--products/--no-products",
+        help="Ставить назначенные продукты (по умолчанию — из products_sync)",
+    ),
 ) -> None:
-    """Привести project scope в соответствие .skillery/skills.toml.
+    """Свести устройство с хабом: навыки проекта, затем назначенные продукты.
 
     Линкует навыки из стора; отсутствующие в сторе — докачивает; --prune убирает
     наши (на стор) ссылки, которых нет в манифесте. Чужие папки и внешние ссылки
     не трогаются.
+
+    После навыков — шаг продуктов (#5988): назначенное пользователю/устройству
+    ставится, новые версии подтягиваются. Шаг best-effort: старый backend без
+    ``/me/products/install-plan`` оставляет предупреждение, но не отменяет уже
+    сделанную синхронизацию навыков. ``--no-products`` (или ``products_sync =
+    false`` в конфиге) выключает его целиком.
     """
     cfg = ClientConfig.load()
     project_path = _resolve_project(cfg, project)
@@ -3913,7 +3923,7 @@ def cmd_sync(
     installer = SkillInstaller(target, cfg.effective_store_dir())
     manifest = project_manifest.load(project_path)
     store_root = cfg.effective_store_dir()
-    report: dict[str, list] = {
+    report: dict[str, Any] = {
         "linked": [], "downloaded": [], "pruned": [], "missing": [],
     }
     access_holder: dict[str, str] = {}
@@ -3969,6 +3979,21 @@ def cmd_sync(
                         linker.remove_link(d)  # только НАШИ (на стор) ссылки
                         report["pruned"].append(d.name)
 
+        # ШАГ ПРОДУКТОВ (#5988): после навыков — назначенные продукты и их
+        # версии. Best-effort: старый backend без маршрута плана даёт warning,
+        # а не отменяет уже сделанную синхронизацию навыков. Токен берём из
+        # хранилища напрямую (без typer.Exit): «залогинен по конфигу, а токена
+        # нет» — это пропуск шага, а не падение `skillery sync`.
+        products_report: dict | None = None
+        enabled = cfg.products_sync if products is None else products
+        if enabled and cfg.is_logged_in():
+            access, _refresh = load_tokens(cfg.user_email or "")
+            if access:
+                products_report = await _reconcile_assigned_products(
+                    cfg, access, initiator="sync"
+                )
+                report["products"] = products_report
+
         payload: dict = {**report}
         if report["missing"] and not cfg.is_logged_in():
             payload["hint"] = (
@@ -3984,6 +4009,21 @@ def cmd_sync(
             )
             for s in r["missing"]:
                 console.print(f"  [yellow]✗ не удалось получить:[/] {s}")
+            products_report = r.get("products") or {}
+            if products_report.get("warning"):
+                console.print(
+                    f"  [yellow]! продукты:[/] {products_report['warning']}"
+                )
+            elif products_report and not products_report.get("disabled"):
+                console.print(
+                    f"  [green]products[/]: "
+                    f"+{len(products_report.get('installed', []))} "
+                    f"↑{len(products_report.get('updated', []))} "
+                    f"={len(products_report.get('already', []))} "
+                    f"×{len(products_report.get('kept', []))}"
+                )
+            for slug in products_report.get("kept", []):
+                console.print(f"  [dim]{slug}: не назначен — оставлен[/]")
             if r.get("hint"):
                 console.print(f"  [dim]{r['hint']}[/]")
 
@@ -4120,6 +4160,72 @@ async def _reconcile_hub_installs(
                                     "error": str(exc)}})
             report["failed"].append(ref)
     return report
+
+
+def _empty_products_report(*, warning: str = "") -> dict:
+    """Пустой отчёт шага продуктов: те же ведра, что у полного (#5988)."""
+    report: dict = {
+        "installed": [], "updated": [], "already": [], "skipped": [],
+        "kept": [], "pruned": [], "failed": [], "warnings": [],
+    }
+    if warning:
+        report["warning"] = warning
+    return report
+
+
+async def _reconcile_assigned_products(
+    cfg: ClientConfig,
+    access: str,
+    *,
+    prune: bool = False,
+    initiator: str = "cli",
+) -> dict:
+    """#5988: поставить на устройство назначенные продукты и подтянуть версии.
+
+    Шаг идёт ПОСЛЕ навыков и best-effort — по тем же причинам, что и сверка
+    лизов: он едет в одном такте с очередью устройства, и падение установки
+    одного продукта не имеет права лишить машину связи с хабом. Старый backend
+    не знает ``/me/products/install-plan`` (404/405): это ПРЕДУПРЕЖДЕНИЕ в
+    отчёте, а не провал — навыки синхронизируются как прежде.
+
+    ``products_sync=False`` в конфиге выключает шаг целиком (машины без прав на
+    установку служб) — тогда отчёт помечен ``disabled``.
+    """
+    if not getattr(cfg, "products_sync", True):
+        return {"disabled": True}
+
+    from skillery_cli.core.logging_setup import install_logger
+    from skillery_cli.products.sync import (
+        ProductSyncError,
+        InstallPlanUnavailableError,
+        build_install_context,
+        sync_products,
+    )
+
+    client = HubClient(
+        base_url=cfg.base_url, access_token=access,
+        on_token_refresh=_make_refresh_callback(cfg),
+    )
+    try:
+        report = await sync_products(client, build_install_context(), prune=prune)
+    except (InstallPlanUnavailableError, ProductSyncError) as exc:
+        warning = str(exc)
+    except Exception as exc:  # noqa: BLE001 — такт демона не умирает из-за продуктов
+        warning = f"шаг продуктов пропущен: {exc or type(exc).__name__}"
+    else:
+        return report.to_dict()
+    finally:
+        await client.close()
+
+    # Причина обязана остаться следом: иначе «продукты не встали» выглядит как
+    # «их не назначали». WARNING в daemon.log видно и на стандартном ERROR.
+    with suppress(Exception):
+        install_logger("daemon.log").warning(
+            "продукты не синхронизированы",
+            extra={"context": {"step": "products-sync", "initiator": initiator,
+                               "error": warning}},
+        )
+    return _empty_products_report(warning=warning)
 
 
 _MAX_INSTALL_ATTEMPTS = 3
