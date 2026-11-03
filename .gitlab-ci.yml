@@ -1,0 +1,7 @@
+# CI skillery-cli — общий Python-шаблон ci-platform: ruff только по новым замечаниям (py-lint)
+# и pytest на образе ci-python (py-test). Переменные проекта не нужны: базы у CLI нет,
+# своих гейтов сверх ruff нет. Документация — ci-platform/docs/PYTHON.md.
+include:
+  - project: cifropro1/ci-platform
+    ref: v1
+    file: /templates/python-service.yml

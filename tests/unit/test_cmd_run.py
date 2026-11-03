@@ -347,7 +347,12 @@ class TestRecursionSafety:
         Оба режима ``shlex`` поодиночке здесь врут: posix съедает слэши пути,
         non-posix оставляет кавычки ВНУТРИ токена — и ``CreateProcess``
         получает аргумент вместе с ними.
+
+        Entrypoint здесь WINDOWS-ный, а режим разбора ``_split_entrypoint``
+        выбирает по ``sys.platform``: без подмены POSIX-хост разбирал бы его
+        posix-режимом и тест проверял бы не ту ветку.
         """
+        monkeypatch.setattr(run_mod.sys, "platform", "win32")
         _make_skill(store, with_cli=True)
         code = "import sys; from atlas.cli import app; sys.exit(app())"
         entrypoint = f'C:\\venv\\Scripts\\python.exe -c "{code}"'
