@@ -97,20 +97,29 @@ def test_add_cli_posix_writes_executable_shebang(
         assert mode & stat.S_IXUSR
 
 
-def test_add_cli_posix_symlinks_existing_executable(
+def test_add_cli_posix_existing_executable_is_called_directly(
     bin_dir: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """POSIX: если энтрипоинт — существующий исполняемый файл, ставим symlink."""
+    """POSIX: путь к существующему исполняемому файлу попадает в прямой вызов.
+
+    Symlink'а на entrypoint здесь нет ПРИНЦИПИАЛЬНО (кит >= 0.3.5, #1221):
+    symlink не носит логики и потому не может ни позвать раннер учёта вызова,
+    ни проверить маркер антирекурсии. Shim — настоящий скрипт, а путь к
+    исполняемому файлу — его fallback-ветка. Проверяем именно то, ради чего
+    раньше ставился symlink: вызов доходит до того самого файла.
+    """
     if sys.platform == "win32":
-        pytest.skip("symlink-ветка проверяется на POSIX-хосте")
+        pytest.skip("POSIX-ветка проверяется на POSIX-хосте")
     monkeypatch.setattr(path_store, "IS_WINDOWS", False)
     real = tmp_path / "bin-real" / "mytool"
     real.parent.mkdir(parents=True)
     real.write_text("#!/bin/sh\necho hi\n", encoding="utf-8")
     real.chmod(0o755)
     shim = path_store.add_cli("mytool", str(real), skill_slug="demo")
-    assert shim.is_symlink()
-    assert Path(os.readlink(shim)) == real
+    assert not shim.is_symlink(), "symlink не может звать раннер учёта (#1221)"
+    body = shim.read_text(encoding="utf-8")
+    assert f'exec "{real}" "$@"' in body
+    assert shim.stat().st_mode & stat.S_IXUSR
 
 
 def test_add_cli_idempotent_overwrite(

@@ -407,6 +407,11 @@ class TestNoVisibleConsoleWindows:
         (``detached=True``), а раскладку флагов держит кит одним местом.
         """
         cap = _capture_spawn(monkeypatch)
+        # Подмена sys.platform уводит stdlib в win32-ветку, а она зовёт `_winapi`
+        # (Python 3.14, shutil.which): на POSIX-хосте модуль пуст — AttributeError.
+        # Поиск менеджера установки к инварианту этого теста отношения не имеет,
+        # поэтому фиксируем его явно.
+        monkeypatch.setattr("shutil.which", lambda name: None)
         monkeypatch.setattr(main_mod.sys, "platform", "win32")
         monkeypatch.setattr(main_mod.Path, "exists", lambda self: True)
 
@@ -443,6 +448,9 @@ def test_cmd_upgrade_windows_spawns_background(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(main_mod, "_fetch_latest_pypi_version", lambda pkg, **k: "2.0.0")
     monkeypatch.setattr(ClientConfig, "load", classmethod(lambda cls: ClientConfig(base_url="x")))
     monkeypatch.setattr(ClientConfig, "save", lambda self: None)
+    # Как в соседних тестах: поиск uv/pipx задаём явно. Без этого win32-подмена
+    # sys.platform доходит до shutil.which и падает на пустом `_winapi` (3.14).
+    monkeypatch.setattr("shutil.which", lambda name: None)
     monkeypatch.setattr(main_mod.sys, "platform", "win32")
     spawned = {"n": 0}
     monkeypatch.setattr(
